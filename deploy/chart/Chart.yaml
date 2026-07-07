@@ -6,7 +6,8 @@ description: >-
   and optionally bundles PostgreSQL, RabbitMQ and Keycloak.
 type: application
 version: 0.1.0
-appVersion: "0.1.0"
+# appVersion carries the v prefix — it doubles as the default image tag (see the docker workflow).
+appVersion: "v0.1.0"
 kubeVersion: ">=1.25.0-0"
 keywords:
   - stratos

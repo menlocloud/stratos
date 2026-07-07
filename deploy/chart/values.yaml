@@ -31,7 +31,7 @@ global:
 # ----------------------------------------------------------------------------
 api:
   image:
-    repository: registry.menlo.ai/library/stratos
+    repository: ghcr.io/menlocloud/stratos
     # Empty tag falls back to the chart appVersion.
     tag: ""
     pullPolicy: IfNotPresent
@@ -134,7 +134,7 @@ api:
 # ----------------------------------------------------------------------------
 ui:
   image:
-    repository: registry.menlo.ai/library/stratos-web
+    repository: ghcr.io/menlocloud/stratos-web
     tag: ""
     pullPolicy: IfNotPresent
   replicas: 1
@@ -159,7 +159,7 @@ ui:
 
 admin:
   image:
-    repository: registry.menlo.ai/library/stratos-admin
+    repository: ghcr.io/menlocloud/stratos-admin
     tag: ""
     pullPolicy: IfNotPresent
   replicas: 1
