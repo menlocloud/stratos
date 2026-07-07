@@ -6,7 +6,7 @@ require (
 	github.com/cbroglie/mustache v1.4.0
 	github.com/cockroachdb/apd/v3 v3.2.3
 	github.com/coreos/go-oidc/v3 v3.19.0
-	github.com/go-chi/chi/v5 v5.3.0
+	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/uuid v1.6.0
 	github.com/gophercloud/gophercloud/v2 v2.12.0
