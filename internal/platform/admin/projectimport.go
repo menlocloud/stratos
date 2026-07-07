@@ -1,9 +1,12 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -200,6 +203,7 @@ func (h *Handler) projectImportBulk(w http.ResponseWriter, r *http.Request) {
 	// _id (a string id) so the stored ProjectExternalService.serviceId matches exactly.
 	serviceID := projectImportExternalServiceID(es, esID)
 
+	var imported []string
 	for i := range reqs {
 		req := reqs[i]
 		// Skip requests already linked to an stratos project.
@@ -212,11 +216,31 @@ func (h *Handler) projectImportBulk(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		doc := projectImportNewProjectDoc(req.Project, serviceID)
-		if _, err := h.repo.InsertDoc(r.Context(), projectImportProjectCollection, doc); err != nil {
+		saved, err := h.repo.InsertDoc(r.Context(), projectImportProjectCollection, doc)
+		if err != nil {
 			// Log and continue — never propagate per-item failures.
 			continue
 		}
+		if id, _ := saved["_id"].(string); id != "" {
+			imported = append(imported, id)
+		}
 		// TODO(audit): write an admin audit event when a project is imported.
+	}
+
+	// Sync the freshly imported projects in the background so their existing
+	// cloud resources show up right away — the import itself is a pure
+	// datastore write and would otherwise leave the resource cache empty
+	// until the next sync cron (which a dormant deploy never runs).
+	if len(imported) > 0 && h.projectCloud != nil && h.projectCloud.Sync != nil {
+		go func(ids []string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer cancel()
+			for _, pid := range ids {
+				if err := h.projectCloud.Sync(ctx, pid, ""); err != nil {
+					slog.Error("post-import project sync failed", "project", pid, "err", err)
+				}
+			}
+		}(imported)
 	}
 
 	// Success response → "Successful operation".
