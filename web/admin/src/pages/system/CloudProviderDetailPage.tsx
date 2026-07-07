@@ -119,14 +119,16 @@ function CopyField({ label, value }: { label?: string; value: string }) {
 function NotifierUriSection({ id, provider }: TabProps) {
   const regions = Object.keys(asObj(provider.config?.regions)).sort()
   const shown = regions.length ? regions : ["{region}"]
+  const [secret, setSecret] = useState("")
+  const save = useEsSave(id, () => setSecret(""))
   return (
     <div className="mt-6 space-y-3 border-t pt-4">
       <div>
         <div className="text-sm font-medium">OpenStack Notifier URI</div>
         <p className="text-xs text-muted-foreground">
           Point the cloud's ceilometer event publisher at these URLs to push resource lifecycle events for live
-          dashboard updates. Optional — the periodic sync reconciles the cache without it. If{" "}
-          <span className="font-mono">STRATOS_OS_NOTIFICATION_SECRET</span> is set, send it as the{" "}
+          dashboard updates. Optional — the periodic sync reconciles the cache without it. When a notification secret
+          is set below, the webhook is rejected unless the caller sends it as the{" "}
           <span className="font-mono">X-Stratos-Notification-Secret</span> header.
         </p>
       </div>
@@ -137,6 +139,27 @@ function NotifierUriSection({ id, provider }: TabProps) {
           value={`${config.apiUrl}/notifications/${id}/${region}`}
         />
       ))}
+      <div className="grid gap-1 pt-1">
+        <Label className="text-xs text-muted-foreground">Notification secret (leave blank to keep current)</Label>
+        <div className="flex items-center gap-2">
+          <Input
+            type="password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            autoComplete="off"
+            placeholder="Shared secret ceilometer must present"
+            className="font-mono text-xs"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!secret.trim() || save.isPending}
+            onClick={() => save.mutate({ path: `/admin/service/${id}/update`, body: { secret: { notificationSecret: secret.trim() } } })}
+          >
+            {save.isPending ? "Saving…" : "Save secret"}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }
