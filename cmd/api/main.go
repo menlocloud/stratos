@@ -130,7 +130,7 @@ func run() error {
 		}
 	}()
 	billingRepo := billing.NewRepo(pg)
-	orgSvc := org.NewService(orgRepo, billingRepo)
+	orgSvc := org.NewService(orgRepo, billingRepo, platformconfig.NewRepo(pg))
 	orgPolicy := org.NewPolicy(orgRepo)
 	orgH := org.NewHandler(orgSvc, orgPolicy, orgRepo, users, auditSvc)
 	// Custom org roles (roleDefinition) — completes RBAC (policy now resolves

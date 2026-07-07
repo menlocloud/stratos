@@ -4,24 +4,35 @@ import (
 	"context"
 
 	"github.com/menlocloud/stratos/internal/platform/billing"
+	"github.com/menlocloud/stratos/internal/platform/platformconfig"
 	"github.com/menlocloud/stratos/internal/platform/rbac"
 	"github.com/menlocloud/stratos/internal/platform/user"
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
 
 type Service struct {
-	repo    *Repo
-	billing *billing.Repo
+	repo        *Repo
+	billing     *billing.Repo
+	platformcfg *platformconfig.Repo // organization-provisioning-quota (default config); nil-safe
 }
 
-func NewService(repo *Repo, b *billing.Repo) *Service { return &Service{repo: repo, billing: b} }
+func NewService(repo *Repo, b *billing.Repo, pc *platformconfig.Repo) *Service {
+	return &Service{repo: repo, billing: b, platformcfg: pc}
+}
 
 // CreateOrganization:
-// save org → add creator as OWNER → create a BillingProfile (owner-populated) →
-// set its id → save.
+// quota gate → save org → add creator as OWNER → create a BillingProfile
+// (owner-populated) → set its id → save.
 func (s *Service) CreateOrganization(ctx context.Context, creator *user.User, name, description string) (*Organization, error) {
 	if name == "" {
 		return nil, httpx.BadRequest("Organization name must not be null")
+	}
+	exceeded, err := s.isOrganizationsQuotaExceeded(ctx, creator.Sub)
+	if err != nil {
+		return nil, err
+	}
+	if exceeded {
+		return nil, httpx.BadRequest("Your organizations limit has been reached")
 	}
 	o, err := s.repo.Insert(ctx, &Organization{Name: name, Description: description, CustomInfo: map[string]any{}})
 	if err != nil {
@@ -42,6 +53,35 @@ func (s *Service) CreateOrganization(ctx context.Context, creator *user.User, na
 		return nil, err
 	}
 	return o, nil
+}
+
+// isOrganizationsQuotaExceeded gates self-service org creation on the platform
+// default config's organizationProvisioningQuota: when enabled, a user may OWN
+// at most `limit` organizations (0 = self-service creation off — operators
+// create orgs and assign members). Disabled/absent = unlimited (the default).
+// Memberships in orgs the user does not own never count against the quota.
+func (s *Service) isOrganizationsQuotaExceeded(ctx context.Context, sub string) (bool, error) {
+	if s.platformcfg == nil {
+		return false, nil
+	}
+	cfg, err := s.platformcfg.FindDefault(ctx)
+	if err != nil {
+		return false, err
+	}
+	if cfg == nil || cfg.OrganizationProvisioningQuota == nil || !cfg.OrganizationProvisioningQuota.Enabled {
+		return false, nil
+	}
+	ms, err := s.repo.MembersForSub(ctx, sub)
+	if err != nil {
+		return false, err
+	}
+	owned := 0
+	for _, m := range ms {
+		if m.Role() == rbac.RoleOwner {
+			owned++
+		}
+	}
+	return owned >= cfg.OrganizationProvisioningQuota.Limit, nil
 }
 
 func (s *Service) GetOrganization(ctx context.Context, id string) (*Organization, error) {

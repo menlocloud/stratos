@@ -20,6 +20,7 @@ type PlatformConfig = {
   branding?: { name?: string; color?: string; logo?: string; faviconUrl?: string } & Record<string, unknown>
   dateConfiguration?: { dateFormat?: string }
   projectProvisioningQuota?: { enabled: boolean; limit: number }
+  organizationProvisioningQuota?: { enabled: boolean; limit: number }
   regions?: Array<{ serviceId: string; region: string; order: number }>
   [k: string]: unknown
 }
@@ -41,6 +42,8 @@ type PlatformForm = {
   dateFormat: string
   quotaEnabled: boolean
   quotaLimit: string
+  orgQuotaEnabled: boolean
+  orgQuotaLimit: string
 }
 
 export default function ConfigurationPage() {
@@ -59,6 +62,8 @@ export default function ConfigurationPage() {
         dateFormat: cfg.dateConfiguration?.dateFormat ?? "",
         quotaEnabled: cfg.projectProvisioningQuota?.enabled === true,
         quotaLimit: String(cfg.projectProvisioningQuota?.limit ?? 0),
+        orgQuotaEnabled: cfg.organizationProvisioningQuota?.enabled === true,
+        orgQuotaLimit: String(cfg.organizationProvisioningQuota?.limit ?? 0),
       })
     }
   }, [cfg, form])
@@ -75,6 +80,7 @@ export default function ConfigurationPage() {
         branding: { ...(cfg.branding ?? {}), name: form.brandingName, color: form.brandingColor },
         dateConfiguration: { ...(cfg.dateConfiguration ?? {}), dateFormat: form.dateFormat },
         projectProvisioningQuota: { enabled: form.quotaEnabled, limit: Number(form.quotaLimit) || 0 },
+        organizationProvisioningQuota: { enabled: form.orgQuotaEnabled, limit: Number(form.orgQuotaLimit) || 0 },
       }
       return apiFetch(`/admin/platform-configuration/${id}`, { method: "PUT", body })
     },
@@ -136,21 +142,44 @@ export default function ConfigurationPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-6 rounded-lg border p-4">
-                  <div className="flex items-center gap-2">
-                    <Switch checked={form.quotaEnabled} onCheckedChange={(v) => setForm({ ...form, quotaEnabled: v })} />
-                    <span className="text-sm">Project provisioning quota</span>
+                <div className="space-y-3">
+                  <div className="flex items-center gap-6 rounded-lg border p-4">
+                    <div className="flex items-center gap-2">
+                      <Switch checked={form.quotaEnabled} onCheckedChange={(v) => setForm({ ...form, quotaEnabled: v })} />
+                      <span className="text-sm">Project provisioning quota</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="pc-limit" className="text-sm text-muted-foreground">Limit</Label>
+                      <Input
+                        id="pc-limit"
+                        type="number"
+                        min={0}
+                        className="w-24"
+                        value={form.quotaLimit}
+                        disabled={!form.quotaEnabled}
+                        onChange={(e) => setForm({ ...form, quotaLimit: e.target.value })}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">Max projects per organization. 0 = only operators create projects.</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor="pc-limit" className="text-sm text-muted-foreground">Limit</Label>
-                    <Input
-                      id="pc-limit"
-                      type="number"
-                      className="w-24"
-                      value={form.quotaLimit}
-                      disabled={!form.quotaEnabled}
-                      onChange={(e) => setForm({ ...form, quotaLimit: e.target.value })}
-                    />
+                  <div className="flex items-center gap-6 rounded-lg border p-4">
+                    <div className="flex items-center gap-2">
+                      <Switch checked={form.orgQuotaEnabled} onCheckedChange={(v) => setForm({ ...form, orgQuotaEnabled: v })} />
+                      <span className="text-sm">Organization provisioning quota</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="pc-org-limit" className="text-sm text-muted-foreground">Limit</Label>
+                      <Input
+                        id="pc-org-limit"
+                        type="number"
+                        min={0}
+                        className="w-24"
+                        value={form.orgQuotaLimit}
+                        disabled={!form.orgQuotaEnabled}
+                        onChange={(e) => setForm({ ...form, orgQuotaLimit: e.target.value })}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">Max organizations a user can own. 0 = only operators create organizations and assign members.</p>
                   </div>
                 </div>
 

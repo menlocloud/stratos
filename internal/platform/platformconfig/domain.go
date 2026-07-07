@@ -33,12 +33,16 @@ type RegionDisplayConfig struct {
 	Order     int    `json:"order"`
 }
 
-// ProjectProvisioningQuota is the provisioning quota (server-side only; not in the
-// client DTO). Read by the project quota check.
-type ProjectProvisioningQuota struct {
+// ProvisioningQuota is an {enabled, limit} gate (server-side only; not in the
+// client DTO). limit 0 with enabled=true blocks self-service creation entirely
+// (operators create/assign instead).
+type ProvisioningQuota struct {
 	Enabled bool `json:"enabled"`
 	Limit   int  `json:"limit"`
 }
+
+// ProjectProvisioningQuota keeps the original name for the project gate.
+type ProjectProvisioningQuota = ProvisioningQuota
 
 // PlatformConfiguration is the document in the "platformConfiguration" collection.
 type PlatformConfiguration struct {
@@ -53,7 +57,10 @@ type PlatformConfiguration struct {
 	Regions                  []RegionDisplayConfig     `json:"regions,omitempty"`
 	DateConfiguration        *DateFormat               `json:"dateConfiguration,omitempty"`
 	ProjectProvisioningQuota *ProjectProvisioningQuota `json:"projectProvisioningQuota,omitempty"`
-	LoginConfiguration       map[string]any            `json:"loginConfiguration,omitempty"`
+	// Per-user cap on self-created organizations (enabled + limit; 0 = only
+	// operators create orgs and assign members). Read by org.CreateOrganization.
+	OrganizationProvisioningQuota *ProvisioningQuota `json:"organizationProvisioningQuota,omitempty"`
+	LoginConfiguration            map[string]any     `json:"loginConfiguration,omitempty"`
 	CreatedAt                *time.Time                `json:"createdAt,omitempty"`
 	UpdatedAt                *time.Time                `json:"updatedAt,omitempty"`
 }

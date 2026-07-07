@@ -38,24 +38,26 @@ type AdminDto struct {
 	DefaultConfiguration     bool                      `json:"defaultConfiguration"`
 	Regions                  []RegionDisplayConfig     `json:"regions"`
 	DateConfiguration        *DateFormat               `json:"dateConfiguration,omitempty"`
-	LoginConfiguration       map[string]any            `json:"loginConfiguration"`
-	ProjectProvisioningQuota *ProjectProvisioningQuota `json:"projectProvisioningQuota,omitempty"`
+	LoginConfiguration            map[string]any            `json:"loginConfiguration"`
+	ProjectProvisioningQuota      *ProjectProvisioningQuota `json:"projectProvisioningQuota,omitempty"`
+	OrganizationProvisioningQuota *ProvisioningQuota        `json:"organizationProvisioningQuota,omitempty"`
 }
 
 // adminConfigDoc reads the raw doc.
 type adminConfigDoc struct {
-	ID                       string                    `json:"id"`
-	Name                     string                    `json:"name"`
-	Language                 string                    `json:"language"`
-	MailGatewayID            string                    `json:"mailGatewayId"`
-	ContactIntegrationID     string                    `json:"contactIntegrationId"`
-	SegmentIntegrationID     string                    `json:"segmentIntegrationId"`
-	Branding                 *Branding                 `json:"branding"`
-	DefaultConfiguration     bool                      `json:"defaultConfiguration"`
-	Regions                  []RegionDisplayConfig     `json:"regions"`
-	DateConfiguration        *DateFormat               `json:"dateConfiguration"`
-	LoginConfiguration       map[string]any            `json:"loginConfiguration"`
-	ProjectProvisioningQuota *ProjectProvisioningQuota `json:"projectProvisioningQuota"`
+	ID                            string                    `json:"id"`
+	Name                          string                    `json:"name"`
+	Language                      string                    `json:"language"`
+	MailGatewayID                 string                    `json:"mailGatewayId"`
+	ContactIntegrationID          string                    `json:"contactIntegrationId"`
+	SegmentIntegrationID          string                    `json:"segmentIntegrationId"`
+	Branding                      *Branding                 `json:"branding"`
+	DefaultConfiguration          bool                      `json:"defaultConfiguration"`
+	Regions                       []RegionDisplayConfig     `json:"regions"`
+	DateConfiguration             *DateFormat               `json:"dateConfiguration"`
+	LoginConfiguration            map[string]any            `json:"loginConfiguration"`
+	ProjectProvisioningQuota      *ProjectProvisioningQuota `json:"projectProvisioningQuota"`
+	OrganizationProvisioningQuota *ProvisioningQuota        `json:"organizationProvisioningQuota"`
 }
 
 func (d adminConfigDoc) toAdminDto() AdminDto {
@@ -73,7 +75,8 @@ func (d adminConfigDoc) toAdminDto() AdminDto {
 		Branding:             d.Branding,
 		DefaultConfiguration: d.DefaultConfiguration, Regions: regions,
 		DateConfiguration: d.DateConfiguration, LoginConfiguration: login,
-		ProjectProvisioningQuota: d.ProjectProvisioningQuota,
+		ProjectProvisioningQuota:      d.ProjectProvisioningQuota,
+		OrganizationProvisioningQuota: d.OrganizationProvisioningQuota,
 	}
 }
 
