@@ -45,8 +45,7 @@ export default function MorePage() {
   })
 
   // The URL is operator-configured, but only ever render web URLs — never javascript: etc.
-  const lower = url.toLowerCase()
-  if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
     return (
       <>
         <PageHeader title="Not available" description="This menu item is not configured." />
