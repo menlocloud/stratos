@@ -34,7 +34,7 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: ghcr login (for OCI helm deps)
@@ -56,7 +56,7 @@ jobs:
       packages: write   # push the OCI chart artifact
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: ghcr login
