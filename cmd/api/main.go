@@ -323,14 +323,32 @@ func run() error {
 	// Resource-Server authenticator. Realms are discovered in the background so
 	// startup is never blocked on an unreachable issuer; until they arrive,
 	// bearer tokens fail closed (401) and unauthenticated protected paths 401.
+	// Retries until every configured realm has a verifier: on a fresh install
+	// the realms are often created (realm import / config-cli) after this binary
+	// boots, and a realm that failed discovery once would otherwise reject its
+	// tokens until a restart.
 	authn := auth.New(log)
 	go func() {
-		realms := oidc.Discover(ctx, cfg, log)
-		ar := make([]auth.Realm, 0, len(realms))
-		for _, r := range realms {
-			ar = append(ar, auth.Realm{Name: r.Name, ClientID: r.ClientID, IssuerURI: r.IssuerURI, Verifier: r.Verifier})
+		for {
+			realms := oidc.Discover(ctx, cfg, log)
+			ar := make([]auth.Realm, 0, len(realms))
+			missing := false
+			for _, r := range realms {
+				if r.Verifier == nil {
+					missing = true
+				}
+				ar = append(ar, auth.Realm{Name: r.Name, ClientID: r.ClientID, IssuerURI: r.IssuerURI, Verifier: r.Verifier})
+			}
+			authn.SetRealms(ar)
+			if !missing {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
 		}
-		authn.SetRealms(ar)
 	}()
 	// Admin-API SigV4 verification: resolve access keys from hmac_keys. The hmac_keys
 	// collection also holds provider keys (erpCreate) that must NOT grant Admin-API / MCP access, so

@@ -69,13 +69,20 @@ The API is a resource server for up to three OIDC realms (`auth.main`,
 `auth.admin`, `auth.adminApi`); an empty issuer disables that realm. The
 `ui` SPA logs in against `main`, the `admin` SPA against `admin`.
 
-`keycloak.enabled=true` bundles Keycloak, but issuers are never derived
+`keycloakx.enabled=true` bundles Keycloak, but issuers are never derived
 automatically: tokens carry a host-derived `iss`, so set `auth.*.issuer`
-to Keycloak's *public* URL. A realm export can be supplied via
-`realmImport.json` (rendered into `<fullname>-realm-import`); wire it into
-the subchart with `--import-realm` as shown in `values.yaml`. The chart
-ships no baked realm — define your realms and the `stratos-ui` /
-`stratos-admin` / `stratos-admin-api` clients yourself.
+to Keycloak's *public* URL.
+
+For a one-shot bring-up enable `keycloakConfigCli`: a post-install/
+post-upgrade Job derives the realms and clients from `auth.*` +
+`api.selfUrls` (customer realm with user registration + email-as-username
+on, PKCE clients with the right redirect URIs) and applies them
+idempotently — including into a pre-existing `master`; clients it does not
+manage are never deleted. Alternatively supply a realm export via
+`realmImport.json` (rendered into `<fullname>-realm-import`) and wire it
+into the subchart with `--import-realm` as shown in `values.yaml`. Without
+either, the chart ships no baked realm — define your realms and the
+`stratos-ui` / `stratos-admin` / `stratos-admin-api` clients yourself.
 
 ## Exposure
 

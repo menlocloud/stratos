@@ -298,6 +298,10 @@ externalRabbitmq:
 # ----------------------------------------------------------------------------
 keycloakx:
   enabled: false
+  # Serve Keycloak at the root path (keycloakx defaults to the legacy /auth),
+  # so issuers look like https://id.example.com/realms/<realm>.
+  http:
+    relativePath: "/"
   # Bootstrap admin — REQUIRED when enabled (no default). Prefer a Secret (valueFrom.secretKeyRef)
   # in any real install.
   extraEnv: |
@@ -331,9 +335,45 @@ keycloakx:
 # into a ConfigMap (<fullname>-realm-import, key realm.json). The chart
 # ships NO baked realm: supply your own export defining the realm(s) and
 # the stratos-ui / stratos-admin / stratos-admin-api clients you configure
-# under `auth` above.
+# under `auth` above. For one-shot installs prefer keycloakConfigCli below —
+# unlike kc.sh --import-realm it also updates realms that already exist
+# (e.g. adding the operator clients to `master`).
 realmImport:
   json: ""
+
+# ----------------------------------------------------------------------------
+# keycloak-config-cli — one-shot realm/client provisioning (adorsys
+# keycloak-config-cli). When enabled, a post-install/post-upgrade Job derives
+# the realm definitions from the values you already set and applies them
+# idempotently once Keycloak is reachable:
+#   • auth.main's realm (last path segment of the issuer) is created/updated
+#     with user registration + email-as-username ON and the auth.main.clientId
+#     public PKCE client (redirect/webOrigins from api.selfUrls.ui).
+#   • auth.admin's realm gets the auth.admin.clientId public PKCE client
+#     (redirect/webOrigins from api.selfUrls.admin); existing realms (master)
+#     are updated in place.
+#   • auth.adminApi's realm gets the auth.adminApi.clientId client
+#     (direct-access grants only).
+# Clients not managed here are never deleted (no-delete mode). Works with the
+# bundled keycloakx (default URL) or any external Keycloak (set url +
+# credentials).
+# ----------------------------------------------------------------------------
+keycloakConfigCli:
+  enabled: false
+  image: docker.io/adorsys/keycloak-config-cli:6.5.1-26.5.5
+  # Target Keycloak base URL; empty derives the bundled keycloakx http service
+  # (http://<keycloakx-fullname>-http:80).
+  url: ""
+  # Keycloak admin credentials (the keycloakx bootstrap admin, or any admin of
+  # the target). Password inline OR from a pre-created Secret — REQUIRED when
+  # enabled.
+  adminUser: admin
+  adminPassword: ""
+  existingSecret: ""
+  passwordKey: admin-password
+  # Additional raw keycloak-config-cli import files (filename -> JSON string),
+  # applied alongside the derived ones.
+  extraRealms: {}
 
 # ----------------------------------------------------------------------------
 # Gateway API — HTTPRoutes as an alternative to Ingress (OFF by default).

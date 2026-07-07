@@ -171,6 +171,11 @@ func (r *Repo) FromClaims(ctx context.Context, c Claims) (*User, error) {
 		}
 		id, err := r.col.InsertOne(ctx, u)
 		if err != nil {
+			// Lost a concurrent first-sight race (sub_unique): another request
+			// created the user between our find and insert — read theirs back.
+			if again, ferr := r.FindBySub(ctx, c.Sub); ferr == nil && again != nil {
+				return again, nil
+			}
 			return nil, err
 		}
 		u.ID = id

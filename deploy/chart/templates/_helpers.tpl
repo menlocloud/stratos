@@ -88,6 +88,21 @@ postgres://{{ $u }}:{{ $p }}@{{ include "stratos.pgHost" . }}:{{ .Values.externa
 {{- end -}}
 {{- end }}
 
+{{/* Target Keycloak base URL for keycloak-config-cli: explicit url, else the
+bundled keycloakx http service (keycloakx names it <fullname>-http). */}}
+{{- define "stratos.kcConfigCliURL" -}}
+{{- if .Values.keycloakConfigCli.url -}}
+{{- .Values.keycloakConfigCli.url -}}
+{{- else -}}
+http://{{ .Values.keycloakx.fullnameOverride | default (printf "%s-keycloakx" .Release.Name) }}-http:80
+{{- end -}}
+{{- end }}
+
+{{/* Realm name = the last path segment of an issuer URL. */}}
+{{- define "stratos.realmName" -}}
+{{- splitList "/" . | last -}}
+{{- end }}
+
 {{/* RabbitMQ host: bundled subchart service, else the external host. */}}
 {{- define "stratos.rabbitHost" -}}
 {{- if .Values.rabbitmq.enabled -}}
