@@ -34,19 +34,23 @@ type Membership struct {
 // Project is the `project` document. Memberships + services are embedded.
 // Money-free at this layer (billing lands elsewhere), so no money fields here.
 type Project struct {
-	ID                     string         `json:"id,omitempty"`
-	Name                   string         `json:"name"`
-	Status                 string         `json:"status"`
-	Data                   any            `json:"data,omitempty"`
-	Owner                  string         `json:"owner,omitempty"` // deprecated but still serialized
-	Memberships            []Membership   `json:"memberships"`
-	OrganizationID         string         `json:"organizationId"`
-	BillingProfileID       string         `json:"billingProfileId,omitempty"`
-	CustomInfo             map[string]any `json:"customInfo,omitempty"`
-	Services               []any          `json:"services"`
-	ScheduledForDeletionAt *time.Time     `json:"scheduledForDeletionAt,omitempty"`
-	CreatedAt              *time.Time     `json:"createdAt,omitempty"`
-	UpdatedAt              *time.Time     `json:"updatedAt,omitempty"`
+	ID               string         `json:"id,omitempty"`
+	Name             string         `json:"name"`
+	Status           string         `json:"status"`
+	Data             any            `json:"data,omitempty"`
+	Owner            string         `json:"owner,omitempty"` // deprecated but still serialized
+	Memberships      []Membership   `json:"memberships"`
+	OrganizationID   string         `json:"organizationId"`
+	BillingProfileID string         `json:"billingProfileId,omitempty"`
+	CustomInfo       map[string]any `json:"customInfo,omitempty"`
+	Services         []any          `json:"services"`
+	// PublicNetworkIds is the admin-managed external-network allow-list: nil/absent = ALL
+	// router:external networks allowed (the default); non-nil = only these Neutron network ids
+	// (empty = none).
+	PublicNetworkIds       []string   `json:"publicNetworkIds,omitempty"`
+	ScheduledForDeletionAt *time.Time `json:"scheduledForDeletionAt,omitempty"`
+	CreatedAt              *time.Time `json:"createdAt,omitempty"`
+	UpdatedAt              *time.Time `json:"updatedAt,omitempty"`
 }
 
 // MarshalJSON serializes Project with NULL fields OMITTED (data, billingProfileId,
@@ -77,14 +81,16 @@ func (p Project) MarshalJSON() ([]byte, error) {
 		BillingProfileID       string         `json:"billingProfileId,omitempty"`
 		CustomInfo             map[string]any `json:"customInfo"`
 		Services               []any          `json:"services"`
+		PublicNetworkIds       []string       `json:"publicNetworkIds,omitempty"`
 		ScheduledForDeletionAt *time.Time     `json:"scheduledForDeletionAt,omitempty"`
 		CreatedAt              *time.Time     `json:"createdAt,omitempty"`
 		UpdatedAt              *time.Time     `json:"updatedAt,omitempty"`
 	}{
 		ID: p.ID, Name: p.Name, Status: p.Status, Data: p.Data, Owner: p.Owner,
 		Memberships: ms, OrganizationID: p.OrganizationID, BillingProfileID: p.BillingProfileID,
-		CustomInfo: ci, Services: svc, ScheduledForDeletionAt: p.ScheduledForDeletionAt,
-		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+		CustomInfo: ci, Services: svc, PublicNetworkIds: p.PublicNetworkIds,
+		ScheduledForDeletionAt: p.ScheduledForDeletionAt,
+		CreatedAt:              p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	})
 }
 

@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -576,6 +577,38 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, httpx.BadRequest("invalid request body"))
 		return
 	}
+	// Public-network allow-list enforcement (project.publicNetworkIds, admin-managed): any
+	// external-network target — a FIP pool, a router gateway, or the server auto-FIP leg — must
+	// be enabled for the project (nil allow-list = all allowed; see publicnetworks.go).
+	assignFIP, _ := req.Data["assignFloatingIp"].(bool)
+	fipNetID := strAny(req.Data["floatingNetworkId"])
+	switch req.Type {
+	case cloud.TypeFloatingIP:
+		fnet := fipNetID
+		if fnet == "" {
+			fnet = strAny(req.Data["networkId"])
+		}
+		if fnet != "" && !publicNetworkAllowed(proj, fnet) {
+			h.fail(w, httpx.BadRequest("External network is not enabled for this project"))
+			return
+		}
+	case cloud.TypeRouter:
+		if ext := strAny(req.Data["externalNetworkId"]); ext != "" && !publicNetworkAllowed(proj, ext) {
+			h.fail(w, httpx.BadRequest("External network is not enabled for this project"))
+			return
+		}
+	case cloud.TypeServer, cloud.TypeBaremetalServer:
+		if assignFIP {
+			if fipNetID == "" {
+				h.fail(w, httpx.BadRequest("floatingNetworkId is required when assignFloatingIp is set"))
+				return
+			}
+			if !publicNetworkAllowed(proj, fipNetID) {
+				h.fail(w, httpx.BadRequest("External network is not enabled for this project"))
+				return
+			}
+		}
+	}
 	uid := u.ID
 	if uid == "" {
 		uid = u.Sub
@@ -585,8 +618,55 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	if assignFIP && (req.Type == cloud.TypeServer || req.Type == cloud.TypeBaremetalServer) {
+		h.autoAssignFloatingIP(ws, proj, svcID, region, uid, cr.ExternalID, strAny(req.Data["name"]), fipNetID)
+	}
 	h.projectAudit(u, proj, "CLOUD_RESOURCE_CREATE")
 	httpx.OK(w, *cr)
+}
+
+// autoAssignFloatingIP asynchronously allocates a floating IP on floatingNetworkID and associates
+// it with the new server's first port, through the normal FLOATING_IP create pipeline (so the FIP
+// is persisted/cached like a manual create — providers/write.go reads data.networkId +
+// data.externalPortId). Fire-and-forget: nova wires the port up after boot, so poll for it;
+// failures are logged and never surfaced (the server create already succeeded). The captured ws +
+// tenant client hold no request-scoped state (client.New only uses its ctx for the auth call), so
+// reuse is safe; the polling client is rebuilt inside the goroutine off the background ctx.
+func (h *Handler) autoAssignFloatingIP(ws *providers.WriteService, proj *Project, svcID, region, uid, serverExtID, serverName, floatingNetworkID string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+		cc, ok := h.tryTenantClient(ctx, proj, svcID)
+		if !ok {
+			slog.Error("auto-assign floating ip: cloud client not ready", "server", serverExtID)
+			return
+		}
+		var portID string
+		for portID == "" {
+			if ports, err := cc.ListPortsFull(ctx, serverExtID); err == nil && len(ports) > 0 {
+				portID, _ = ports[0]["id"].(string)
+			}
+			if portID != "" {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				slog.Error("auto-assign floating ip: no port appeared for server", "server", serverExtID)
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
+		if _, err := ws.Create(ctx, svcID, region, proj.ID, uid, providers.CreateRequest{
+			Type: cloud.TypeFloatingIP,
+			Data: map[string]any{
+				"networkId":      floatingNetworkID,
+				"externalPortId": portID,
+				"description":    "Auto-assigned for server " + serverName,
+			},
+		}); err != nil {
+			slog.Error("auto-assign floating ip failed", "server", serverExtID, "network", floatingNetworkID, "err", err)
+		}
+	}()
 }
 
 // cloudDelete handles DELETE /api/v1/project/{id}/cloud/{rid}.

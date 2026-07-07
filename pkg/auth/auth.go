@@ -69,10 +69,7 @@ var publicPrefix = []string{
 	"/api/v1/download/",
 	"/api/v1/notifications/",
 	"/api/v1/callbacks/",
-	"/api/v1/payments/",
 	"/api/v1/admin/onboarding/",
-	"/api/v1/digio/webhooks/",
-	"/api/v1/webhooks/",
 }
 
 // adminJobPrefix drives operator billing/collect/sync jobs — it is NOT public (anon must not be

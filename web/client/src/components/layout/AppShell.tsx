@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom"
 import {
-  Boxes, Camera, ChevronsUpDown, CreditCard, Database, FileClock, Globe, HardDrive,
+  BookOpen, Boxes, Camera, ChevronsUpDown, CreditCard, Database, FileClock, Globe, HardDrive,
   Image, KeyRound, Layers, LayoutDashboard, Lock, LogOut, Moon, Network, Receipt,
   ExternalLink, Gift, PiggyBank, Route as RouteIcon, Search as SearchIcon, Server, Settings, Share2, Shield, Sun, UserCircle, Users, Wallet, Waypoints, Zap,
 } from "lucide-react"
@@ -236,6 +236,11 @@ export function AppShell() {
           >
             <span className="inline-flex items-center gap-2"><SearchIcon className="size-4" /> Search…</span>
             <kbd className="rounded border px-1.5 font-mono text-[10px]">⌘K</kbd>
+          </Button>
+          <Button variant="ghost" size="sm" asChild>
+            <NavLink to="/docs">
+              <BookOpen className="size-4" /> Docs
+            </NavLink>
           </Button>
           <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme">
             {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}

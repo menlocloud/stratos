@@ -12,7 +12,7 @@ import (
 )
 
 // collect.go charges a saved card. Stripe confirm=true is SYNCHRONOUS →
-// no redirect callback (only ipay has one); the flow creates a PENDING CollectTransaction, charges,
+// no redirect callback; the flow creates a PENDING CollectTransaction, charges,
 // then processes the result inline. Two entry points:
 //   - CollectByCard       — client deposit-by-card → AccountCredit.
 //   - CollectBillingProfile/CollectAll — the monthlyCollect cron: collect each SENT bill via the

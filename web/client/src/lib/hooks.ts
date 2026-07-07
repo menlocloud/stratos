@@ -52,6 +52,17 @@ export function useCloudList(pid: string, type: string, extraQuery = "") {
   })
 }
 
+// External (router:external) networks the project may allocate public IPs from —
+// already filtered by the project's allow-list server-side.
+export type PublicNetwork = { id: string; name: string }
+export function usePublicNetworks(pid: string, scope: CloudScope | undefined) {
+  return useQuery({
+    queryKey: ["public-networks", pid, scope?.serviceId, scope?.region],
+    queryFn: () => apiFetch<PublicNetwork[]>(`/project/${pid}/public-networks`, { cloud: scope }),
+    enabled: !!pid && !!scope,
+  })
+}
+
 export function useCloudResource(pid: string, resourceId?: string) {
   const scope = useCloudScope(pid)
   return useQuery({

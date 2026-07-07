@@ -8,7 +8,7 @@ Start under **Network → Networks**, where you create the private networks your
 
 ## Reaching the internet
 
-Servers live on private networks by default. To expose one publicly, allocate a **Floating IP** under **Network → Floating IPs** and associate it with the server (or a specific port). Releasing the floating IP when you no longer need it stops it counting against your quota and bill.
+Servers live on private networks by default. To expose one publicly, allocate a **Floating IP** under **Network → Floating IPs** and associate it with the server (or a specific port). The create dialog lists the public networks enabled for your project — your operator may restrict which external networks a project can allocate from. Releasing the floating IP when you no longer need it stops it counting against your quota and bill.
 
 ## Firewalling with security groups
 

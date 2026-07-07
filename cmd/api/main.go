@@ -48,7 +48,6 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
 	"github.com/menlocloud/stratos/internal/platform/feature"
 	"github.com/menlocloud/stratos/internal/platform/job"
-	"github.com/menlocloud/stratos/internal/platform/livechat"
 	"github.com/menlocloud/stratos/internal/platform/lock"
 	"github.com/menlocloud/stratos/internal/platform/mail"
 	mcpsrv "github.com/menlocloud/stratos/internal/platform/mcp"
@@ -246,7 +245,6 @@ func run() error {
 	})
 	affiliateH := affiliate.NewHandler(affiliate.NewRepo(pg), projectSvc, orgSvc, billingRepo, users)
 	catalogH := catalog.NewHandler(catalog.NewRepo(pg))
-	liveChatH := livechat.NewHandler(livechat.NewRepo(pg))
 	orderH := order.NewHandler(orderRepo, users)
 	inviteRepo := projectinvite.NewRepo(pg)
 	if err := inviteRepo.EnsureIndexes(ctx); err != nil {
@@ -840,7 +838,7 @@ func run() error {
 
 	appSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:           server.AppRouter(log, corsOrigins, authn, acct, orgH, roleH, orgAuditH, billingH, billingCfgH, projectH, pcfgH, featureH, promotionH, affiliateH, catalogH, liveChatH, orderH, inviteH, adminH, adminAPIH, sseH, notiH, jobH, mcpH),
+		Handler:           server.AppRouter(log, corsOrigins, authn, acct, orgH, roleH, orgAuditH, billingH, billingCfgH, projectH, pcfgH, featureH, promotionH, affiliateH, catalogH, orderH, inviteH, adminH, adminAPIH, sseH, notiH, jobH, mcpH),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	mgmtSrv := &http.Server{

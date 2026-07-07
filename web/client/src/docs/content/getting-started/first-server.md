@@ -28,11 +28,12 @@ A server is assembled from a few smaller pieces. You can create them as you go t
 2. Name it, then choose the **image** and **flavor**.
 3. Attach it to a **network** and select the **key pair** from Step 2.
 4. Assign a **security group** that opens the ports you'll use.
-5. Confirm, and Stratos provisions the machine on the underlying cloud. It moves through build states and settles on **ACTIVE** once it's up. (For what's happening behind that, see [How Provisioning Works](/docs/concepts/provisioning).)
+5. Leave **Assign floating IP** on (the default) to have a public address attached automatically shortly after the server comes up.
+6. Confirm, and Stratos provisions the machine on the underlying cloud. It moves through build states and settles on **ACTIVE** once it's up. (For what's happening behind that, see [How Provisioning Works](/docs/concepts/provisioning).)
 
 ## Step 4 — Reach it from the internet
 
-A freshly launched server sits on a private network. To connect from outside, give it a public address:
+If you left **Assign floating IP** on in the launch form, the server picks up a public address on its own shortly after going **ACTIVE** — skip to the SSH step. To attach one by hand instead:
 
 1. Under **Network → Floating IPs**, allocate a floating IP.
 2. Associate that IP with your server.

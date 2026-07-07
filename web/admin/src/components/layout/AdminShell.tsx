@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom"
 import {
-  Banknote, Blocks, Building2, CheckSquare, Cloud, CreditCard, FileClock, FileText,
+  Banknote, Blocks, BookOpen, Building2, CheckSquare, Cloud, CreditCard, FileClock, FileText,
   FolderKanban, Gauge, KeyRound, LayoutDashboard, LogOut, Mail, Menu as MenuIcon,
   Moon, Percent, PiggyBank, Receipt, Server, Settings2, Shield, Sun, Tag, Users, Wallet,
 } from "lucide-react"
@@ -152,6 +152,11 @@ export function AdminShell() {
 
       <div className="ml-60 flex min-h-screen flex-1 flex-col">
         <header className="sticky top-0 z-20 flex h-14 items-center justify-end gap-2 border-b bg-background/80 px-6 backdrop-blur">
+          <Button variant="ghost" size="sm" asChild>
+            <NavLink to="/docs">
+              <BookOpen className="size-4" /> Docs
+            </NavLink>
+          </Button>
           <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme">
             {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </Button>

@@ -140,7 +140,7 @@ Set these in Helm via `api.extraEnvVars`. (The chart's `smtp.*` values render an
 ### Feature set
 
 The available feature set is a fixed list in code (`internal/platform/feature`:
-`billing`, `chatwoot`, `search`, `intercom`, `crisp`, `mailchimp`, `mailgun`) and
+`billing`, `search`, `mailchimp`) and
 is not config-driven. There is no license mechanism — Stratos is open-source and
 imposes no licensed limits. The meaningful **runtime toggles** are the
 scheduled-jobs flags above and per-region service enablement managed at runtime

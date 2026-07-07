@@ -18,9 +18,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudList, useCloudScope, useProjectId, usePublicNetworks } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
-import { networkName } from "./NetworksPage"
 
 function fipAddress(r: CloudResource): string {
   return (r.data?.floatingIp?.floating_ip_address as string) || r.name || r.id
@@ -31,20 +30,18 @@ export default function FloatingIPsPage() {
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
   const { data, isLoading, refetch, isFetching, error } = useCloudList(pid, "FLOATING_IP")
-  const { data: networks } = useCloudList(pid, "NETWORK")
   const { data: ports } = useCloudList(pid, "PORT")
   const [createOpen, setCreateOpen] = useState(false)
   const [toDelete, setToDelete] = useState<CloudResource | null>(null)
   const [toAssign, setToAssign] = useState<CloudResource | null>(null)
 
-  // create form: external network — from the cached NETWORK list flagged router:external
-  // (no LIST_PUBLIC_NETWORKS bulk action exists on the API), with a manual-ID fallback since
-  // external networks are often owned by the operator and absent from the tenant cache.
+  // create form: external networks from GET /project/{pid}/public-networks (already filtered by
+  // the project's allow-list server-side), with a manual-ID fallback for anything not listed.
   const [netSelect, setNetSelect] = useState("")
   const [netManual, setNetManual] = useState("")
   const [assignPort, setAssignPort] = useState("")
 
-  const externalNets = (networks ?? []).filter((n) => n.data?.network?.["router:external"] === true)
+  const externalNets = usePublicNetworks(pid, scope).data ?? []
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["cloud", pid, "FLOATING_IP"] })
 
@@ -190,22 +187,25 @@ export default function FloatingIPsPage() {
               <Label>External network</Label>
               <Select value={netSelect} onValueChange={setNetSelect}>
                 <SelectTrigger>
-                  <SelectValue placeholder={externalNets.length ? "Select an external network" : "No external networks cached"} />
+                  <SelectValue
+                    placeholder={
+                      externalNets.length
+                        ? "Select an external network"
+                        : "No public networks are enabled for this project"
+                    }
+                  />
                 </SelectTrigger>
                 <SelectContent>
-                  {externalNets.map((n) => {
-                    const ext = n.externalId ?? (n.data?.network?.id as string) ?? n.id
-                    return (
-                      <SelectItem key={n.id} value={ext}>
-                        {networkName(n)}
-                      </SelectItem>
-                    )
-                  })}
+                  {externalNets.map((n) => (
+                    <SelectItem key={n.id} value={n.id}>
+                      {n.name || n.id}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="fip-net">Or external network ID</Label>
+              <Label htmlFor="fip-net">Or enter a network ID manually</Label>
               <Input
                 id="fip-net"
                 className="font-mono"

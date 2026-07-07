@@ -267,36 +267,14 @@ type ThirdPartyStats struct {
 	Installed  bool     `json:"installed"`
 }
 
-// ThirdPartyCatalog is the static set of integration definitions across all third-party factories
-// (installed → false under greenfield, since nothing is configured). Includes the intentional duplicates
-// (Stripe/WHMCS/Chatwoot/Crisp/Intercom registered by more than one factory). Order is irrelevant
+// ThirdPartyCatalog is the static set of integration definitions
+// (installed → false under greenfield, since nothing is configured). Order is irrelevant
 // (the harness sorts arrays). `installed` is always false here (no integration is configured yet).
 var ThirdPartyCatalog = []ThirdPartyStats{
 	{"Built-in-Invoicing", []string{"Invoice"}, false},
-	{"Smartbill", []string{"Invoice"}, false},
 	{"Stripe", []string{"Invoice", "Payment"}, false},
-	{"WHMCS", []string{"Invoice", "Payment"}, false},
-	{"AmazonPay", []string{"Payment"}, false},
 	{"BankTransfer", []string{"Payment"}, false},
-	{"BTCPay", []string{"Payment"}, false},
-	{"HyperPay", []string{"Payment"}, false},
-	{"IPay", []string{"Payment"}, false},
-	{"PayPal", []string{"Payment"}, false},
-	{"RazorPay", []string{"Payment"}, false},
-	{"Stripe", []string{"Invoice", "Payment"}, false},
-	{"WHMCS", []string{"Invoice", "Payment"}, false},
-	{"Xendit", []string{"Payment"}, false},
-	{"Digio", []string{"KnowYourCustomer"}, false},
-	{"Idenfy", []string{"KnowYourCustomer"}, false},
-	{"Mailgun", []string{"Mail"}, false},
 	{"SMTP", []string{"Mail"}, false},
-	{"Chatwoot", []string{"CustomerService", "LiveChat"}, false},
-	{"Crisp", []string{"CustomerService", "LiveChat"}, false},
-	{"Intercom", []string{"CustomerService", "LiveChat"}, false},
-	{"SupportPal", []string{"CustomerService"}, false},
-	{"Chatwoot", []string{"CustomerService", "LiveChat"}, false},
-	{"Crisp", []string{"CustomerService", "LiveChat"}, false},
-	{"Intercom", []string{"CustomerService", "LiveChat"}, false},
 }
 
 // OpenstackServiceTypes is the static set of supported OpenStack service types

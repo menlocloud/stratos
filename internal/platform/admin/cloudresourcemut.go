@@ -122,7 +122,7 @@ func (h *Handler) cloudResourceSync(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.cloudNew == nil {
 		httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-			"syncCloudResource not implemented"))
+			"cloud resource sync not implemented"))
 		return
 	}
 	cc, extProjID, ok := h.tenantClientFor(w, r, res)
@@ -139,7 +139,7 @@ func (h *Handler) cloudResourceSync(w http.ResponseWriter, r *http.Request) {
 	if prov == nil {
 		// Identity / unsynced types (KEYPAIR, …) — no sync provider (none has sync either).
 		httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-			fmt.Sprintf("syncCloudResource for type %s not implemented", res.Type)))
+			fmt.Sprintf("cloud resource sync for type %s not implemented", res.Type)))
 		return
 	}
 	if _, err := providers.Reconcile(r.Context(), prov, h.cloud, res.ServiceID, time.Now().UTC()); httpx.WriteError(w, err) {
@@ -178,7 +178,7 @@ func (h *Handler) cloudResourceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.cloudNew == nil {
 		httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-			"deleteCloudResource not implemented"))
+			"cloud resource delete not implemented"))
 		return
 	}
 	cc, _, ok := h.tenantClientFor(w, r, res)

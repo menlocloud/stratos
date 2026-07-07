@@ -13,10 +13,7 @@ func TestBillingRoutes_gapScanAdditions(t *testing.T) {
 	(&BillingHandler{}).Routes(r)
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/bill/bp1/download/b1/statement"},
-		{http.MethodPost, "/digio/webhooks/i1/kyc-request-approved"},
 		{http.MethodPost, "/kyc/p1"},
-		{http.MethodPost, "/payment/paypal/t1/capture"},
-		{http.MethodPost, "/payments/razorpay/funds/confirm/t1"},
 		// neighbours that must keep matching around the new statics:
 		{http.MethodGet, "/bill/bp1/b1"},
 		{http.MethodPost, "/payment/deposit/bp1"},

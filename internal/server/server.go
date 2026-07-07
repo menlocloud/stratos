@@ -22,7 +22,6 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/catalog"
 	"github.com/menlocloud/stratos/internal/platform/feature"
 	"github.com/menlocloud/stratos/internal/platform/job"
-	"github.com/menlocloud/stratos/internal/platform/livechat"
 	"github.com/menlocloud/stratos/internal/platform/mcp"
 	"github.com/menlocloud/stratos/internal/platform/order"
 	"github.com/menlocloud/stratos/internal/platform/org"
@@ -96,7 +95,7 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 }
 
 // AppRouter is the public API on :8080.
-func AppRouter(log *slog.Logger, corsOrigins []string, authn *auth.Authenticator, acct *account.Handler, orgH *org.Handler, roleH *org.RoleHandler, orgAuditH *org.AuditHandler, billingH *org.BillingHandler, billingCfgH *billing.ConfigHandler, projectH *project.Handler, pcfgH *platformconfig.Handler, featureH *feature.Handler, promotionH *promotion.Handler, affiliateH *affiliate.Handler, catalogH *catalog.Handler, liveChatH *livechat.Handler, orderH *order.Handler, inviteH *projectinvite.Handler, adminH *admin.Handler, adminAPIH *adminapi.Handler, sseH *sse.Handler, notiH *notification.Handler, jobH *job.Handler, mcpH *mcp.Handler) http.Handler {
+func AppRouter(log *slog.Logger, corsOrigins []string, authn *auth.Authenticator, acct *account.Handler, orgH *org.Handler, roleH *org.RoleHandler, orgAuditH *org.AuditHandler, billingH *org.BillingHandler, billingCfgH *billing.ConfigHandler, projectH *project.Handler, pcfgH *platformconfig.Handler, featureH *feature.Handler, promotionH *promotion.Handler, affiliateH *affiliate.Handler, catalogH *catalog.Handler, orderH *order.Handler, inviteH *projectinvite.Handler, adminH *admin.Handler, adminAPIH *adminapi.Handler, sseH *sse.Handler, notiH *notification.Handler, jobH *job.Handler, mcpH *mcp.Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(requestLogger(log)) // access log: method/path/status/latency per request (JSON, one line each)
@@ -123,7 +122,6 @@ func AppRouter(log *slog.Logger, corsOrigins []string, authn *auth.Authenticator
 		promotionH.Routes(r)  // promotion (deposit config)
 		affiliateH.Routes(r)  // affiliate (cfy check + project config/log)
 		catalogH.Routes(r)    // cloud catalog config (flavor-categories + image groups)
-		liveChatH.Routes(r)   // live-chat installation-code (marketing integration)
 		orderH.Routes(r)      // order by-id (404 under seed; happy path when orders exist)
 		inviteH.Routes(r)     // project-invite by-token (empty {} under seed)
 		adminH.Routes(r)      // /admin/** surface (admin-permission gated)

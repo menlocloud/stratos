@@ -66,6 +66,7 @@ func (h *Handler) routeProjectMut(r chi.Router) {
 	r.Get("/project/{id}/external-service/{externalServiceId}", h.projectAddExternalService)
 	r.Post("/project/{id}/sync", h.projectSync)
 	r.Put("/project/{id}", h.projectUpdate)
+	r.Put("/project/{id}/public-networks", h.projectSetPublicNetworks)
 	r.Delete("/project/{id}", h.projectScheduleDeletion)
 	r.Delete("/project/{id}/now", h.projectDeleteNow)
 	r.Delete("/project/{id}/cancel", h.projectCancelDeletion)
@@ -350,7 +351,7 @@ func (h *Handler) projectUnassociatedOsProjects(w http.ResponseWriter, r *http.R
 	}
 	if h.cloudNew == nil {
 		httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-			"listUnassociatedOsProjects (keystone) not implemented"))
+			"listing unassociated OpenStack projects not implemented"))
 		return
 	}
 	cc, err := h.cloudClient(r.Context(), es, h.serviceRegions(es)[0])
@@ -431,7 +432,7 @@ func (h *Handler) projectAddExternalService(w http.ResponseWriter, r *http.Reque
 	}
 	if h.projectCloud == nil || h.projectCloud.Bootstrap == nil {
 		httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-			"addExternalServiceToProject (bootstrap/provision) not implemented"))
+			"attaching a cloud provider to a project not implemented"))
 		return
 	}
 	if err := h.projectCloud.Bootstrap(r.Context(), id, esID, ""); err != nil {
@@ -470,7 +471,7 @@ func (h *Handler) projectSync(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.projectCloud == nil || h.projectCloud.Sync == nil {
 		httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-			"syncProject (OpenStack sync) not implemented"))
+			"project cloud sync not implemented"))
 		return
 	}
 	if err := h.projectCloud.Sync(r.Context(), id, r.URL.Query().Get("serviceId")); err != nil {
@@ -532,6 +533,49 @@ type projectUpdateReq struct {
 	OrganizationId   string `json:"organizationId"`
 }
 
+// projectSetPublicNetworks replaces a project's external-network allow-list
+// (PUT /{id}/public-networks): {"publicNetworkIds": ["net-id",...]} sets the list (empty array =
+// no external networks allowed); {"publicNetworkIds": null} unsets the field (default: all
+// allowed — nulls are dropped from the stored doc, not stored as literal nulls). Pure datastore;
+// the client cloud-create path enforces the list. The available networks come from the existing
+// GET /cloud-resource/public-networks/{externalServiceId} read.
+func (h *Handler) projectSetPublicNetworks(w http.ResponseWriter, r *http.Request) {
+	if !h.require(w, r, projectUpdatePerm) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var req struct {
+		PublicNetworkIds *[]string `json:"publicNetworkIds"` // pointer: null/absent ≠ empty array
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, httpx.BadRequest("Invalid request body"))
+		return
+	}
+	existing, ok := h.findProjectOr404(w, r, id)
+	if !ok {
+		return
+	}
+	before := maps.Clone(existing)
+	if req.PublicNetworkIds == nil {
+		if _, err := h.repo.SetAndUnsetFields(r.Context(), projectCollection, id, nil,
+			pgdoc.M{"publicNetworkIds": nil}); httpx.WriteError(w, err) {
+			return
+		}
+	} else {
+		if _, err := h.repo.SetFields(r.Context(), projectCollection, id,
+			pgdoc.M{"publicNetworkIds": *req.PublicNetworkIds}); httpx.WriteError(w, err) {
+			return
+		}
+	}
+	after, err := h.repo.FindDoc(r.Context(), projectCollection, id)
+	if httpx.WriteError(w, err) {
+		return
+	}
+	// UPDATE PROJECT audit (the middleware diff carries the publicNetworkIds change).
+	audit.RecordSnapshots(r.Context(), before, after)
+	httpx.OK(w, shapeDoc(after))
+}
+
 // ── status (datastore flip + cloud suspend/resume integration point) ──────────────────────────────────
 
 // projectUpdateStatus changes a project's status (POST /{id}/{status}): load-or-404, validate the
@@ -569,7 +613,7 @@ func (h *Handler) projectUpdateStatus(w http.ResponseWriter, r *http.Request) {
 			// Cloud leg unwired (tests / degraded boot) → 501; the status is set only after the
 			// cloud call, so nothing persists.
 			httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-				fmt.Sprintf("onProject%s not implemented", suspendResumeOp(status))))
+				fmt.Sprintf("project %s not implemented", suspendResumeOp(status))))
 			return
 		}
 		before := maps.Clone(existing)
@@ -622,9 +666,9 @@ func (h *Handler) projectUpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 func suspendResumeOp(status string) string {
 	if status == "ENABLED" {
-		return "Resume"
+		return "resume"
 	}
-	return "Suspend"
+	return "suspend"
 }
 
 func isValidProjectStatus(s string) bool {
@@ -665,7 +709,7 @@ func (h *Handler) projectScheduleDeletion(w http.ResponseWriter, r *http.Request
 	// BEFORE any persist.
 	if h.projectCloud == nil || h.projectCloud.CanDelete == nil {
 		httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-			"scheduleProjectDeletion (canProjectBeDeleted cloud check) not implemented"))
+			"project deletion scheduling (cloud eligibility check) not implemented"))
 		return
 	}
 	if err := h.projectCloud.CanDelete(r.Context(), id); httpx.WriteError(w, err) {
@@ -699,7 +743,7 @@ func (h *Handler) projectDeleteNow(w http.ResponseWriter, r *http.Request) {
 	// the status flip (so a degraded boot never orphans a project in DELETE_IN_PROGRESS with no job).
 	if h.projectCloud == nil || h.projectCloud.Teardown == nil {
 		httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-			"executeProjectDeletion (async cloud teardown) not implemented"))
+			"project deletion (cloud teardown) not implemented"))
 		return
 	}
 	// status=DELETE_IN_PROGRESS, persisted (the faithful effect before dispatching the teardown).

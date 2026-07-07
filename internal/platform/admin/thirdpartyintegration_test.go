@@ -106,7 +106,7 @@ func TestIsNeededToUpdateSecret(t *testing.T) {
 // TestIntegrationCreateDefaulting mirrors the create() name/description defaulting (name←thirdParty
 // when blank; description←"<thirdParty> Integration" when blank) without touching the datastore.
 func TestIntegrationCreateDefaulting(t *testing.T) {
-	req := thirdPartyIntegrationReq{ThirdParty: "BTCPay"}
+	req := thirdPartyIntegrationReq{ThirdParty: "Acme"}
 	name := req.Name
 	if name == "" {
 		name = req.ThirdParty
@@ -115,10 +115,10 @@ func TestIntegrationCreateDefaulting(t *testing.T) {
 	if description == "" {
 		description = req.ThirdParty + " Integration"
 	}
-	if name != "BTCPay" {
-		t.Errorf("name default=%q want BTCPay", name)
+	if name != "Acme" {
+		t.Errorf("name default=%q want Acme", name)
 	}
-	if description != "BTCPay Integration" {
-		t.Errorf("description default=%q want %q", description, "BTCPay Integration")
+	if description != "Acme Integration" {
+		t.Errorf("description default=%q want %q", description, "Acme Integration")
 	}
 }

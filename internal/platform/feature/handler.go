@@ -16,7 +16,7 @@ import (
 )
 
 // Features is the available feature set (no license gating in the open-source build).
-var Features = []string{"billing", "chatwoot", "search", "intercom", "crisp", "mailchimp", "mailgun"}
+var Features = []string{"billing", "search", "mailchimp"}
 
 // IsEnabled reports whether a feature is in the available set.
 func IsEnabled(f string) bool {

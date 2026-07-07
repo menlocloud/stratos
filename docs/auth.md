@@ -142,7 +142,6 @@ vary by auth), but no credential is required.
 | `/api/v1/payments/` | Payment gateway callbacks |
 | `/api/v1/admin/job/` | Operator job triggers |
 | `/api/v1/admin/onboarding/` | Onboarding **status** read (the setup mutations are not exposed) |
-| `/api/v1/digio/webhooks/` | Signing-provider webhooks |
 | `/api/v1/webhooks/` | Generic inbound webhooks |
 | `/api/v1/events/` | SSE real-time streams |
 

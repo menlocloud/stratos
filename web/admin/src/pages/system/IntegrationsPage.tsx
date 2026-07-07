@@ -44,7 +44,7 @@ type Field = { key: string; label: string; type: FieldType; placeholder?: string
 type VendorSchema = { config: Field[]; secret: Field[] }
 
 // Per-vendor field schemas (keys match the Go create/update reads exactly). Any vendor without an
-// entry falls back to raw config/secret JSON textareas so all 25 catalog entries are configurable.
+// entry falls back to raw config/secret JSON textareas so all 4 catalog entries are configurable.
 const SCHEMAS: Record<string, VendorSchema> = {
   Stripe: {
     config: [
@@ -68,15 +68,6 @@ const SCHEMAS: Record<string, VendorSchema> = {
     ],
     secret: [{ key: "password", label: "Password", type: "password" }],
   },
-  Mailgun: {
-    config: [
-      { key: "domain", label: "Domain", type: "text" },
-      { key: "fromName", label: "From name", type: "text" },
-      { key: "fromEmail", label: "From email", type: "text" },
-      { key: "region", label: "Region", type: "text", placeholder: "us / eu" },
-    ],
-    secret: [{ key: "apiKey", label: "API key", type: "password" }],
-  },
   BankTransfer: {
     config: [
       { key: "minDeposit", label: "Minimum deposit", type: "number" },
@@ -91,8 +82,6 @@ const CATS = [
   { label: "Payment", key: "Payment" },
   { label: "Invoice", key: "Invoice" },
   { label: "Mail", key: "Mail" },
-  { label: "Customer service", key: "CustomerService" },
-  { label: "KYC", key: "KnowYourCustomer" },
 ] as const
 
 type EditTarget = { vendor: string; installed: Integration | null }
@@ -102,8 +91,8 @@ export default function IntegrationsPage() {
   const statsQ = useAdminList<CatalogEntry>(STATS_PATH)
   const listQ = useAdminList<Integration>(LIST_PATH)
 
-  // The backend catalog carries intentional duplicates (Stripe/WHMCS/… registered by several
-  // factories) — dedupe by name for display, merging categories.
+  // The backend catalog carries intentional duplicates (Stripe is registered by both the
+  // invoice and payment factories) — dedupe by name for display, merging categories.
   const catalog: CatalogEntry[] = []
   for (const e of statsQ.data?.data ?? []) {
     const seen = catalog.find((c) => c.name === e.name)
@@ -154,7 +143,7 @@ export default function IntegrationsPage() {
     <>
       <PageHeader
         title="Integrations"
-        description="Payment, invoicing, mail, customer service and KYC providers. Click a provider to configure it."
+        description="Payment, invoicing and mail providers. Click a provider to configure it."
       />
 
       {/* Installed */}

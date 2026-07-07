@@ -171,7 +171,7 @@ flowchart LR
 lists, the RFC 9728 resource-metadata doc) and prefixes (`/openapi.json`, `/mcp`,
 `/api/v1/auth/`, `/api/v1/download/`, `/api/v1/notifications/`,
 `/api/v1/callbacks/`, `/api/v1/payments/`, `/api/v1/admin/job/`,
-`/api/v1/admin/onboarding/`, `/api/v1/digio/webhooks/`, `/api/v1/webhooks/`,
+`/api/v1/admin/onboarding/`, `/api/v1/webhooks/`,
 `/api/v1/events/`). These are the webhook, download-token, SSE, and operator
 callback paths that authenticate by their own scheme (token in the URL, SigV4,
 signed webhook) rather than a bearer header.
@@ -319,8 +319,6 @@ flowchart TB
         order["order"]
         affiliate["affiliate"]
         crm["crm"]
-        kyc["kyc"]
-        livechat["livechat"]
         scheduler["scheduler"]
         lock["lock"]
         job["job"]
@@ -373,8 +371,6 @@ flowchart TB
 | `order` | Provisioning-order reads (order-by-id). |
 | `affiliate` | Affiliate endpoints: referral check + per-project affiliate config/log. |
 | `crm` | CRM-sync integration point (contacts/segments/user sync) with a stub provider until a CRM is connected. |
-| `kyc` | Identity-verification (KYC) integration point with a stub provider until a vendor is connected. |
-| `livechat` | Live-chat installation-code read sourced from a third-party integration config. |
 | `scheduler` | The cron engine (seconds-enabled cron) wrapping each job in a cross-fleet lock. |
 | `lock` | The `shedLock`-backed distributed lock so a scheduled job runs once across the pod fleet. |
 | `job` | The operator job-trigger endpoints under `/api/v1/admin/job/*` (whitelisted; runs the in-process job, else returns 202). |

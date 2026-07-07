@@ -26,8 +26,6 @@ import (
 //	DELETE /integrations/{id}        delete   (ADMIN_INTEGRATION_MANAGE)
 //	POST   /integrations/healthcheck/{id}  healthCheck-by-id  (ADMIN_INTEGRATION_READ) — external integration
 //	POST   /integrations/healthcheck       healthCheck-by-body(ADMIN_INTEGRATION_READ) — external integration
-//	POST   /integrations/btcpay/stores     BTCPay store list  (ADMIN_INTEGRATION_READ) — external integration
-//	GET    /integrations/whmcs/{id}        WHMCS details      (ADMIN_INTEGRATION_READ) — external integration
 //
 // create/update/delete should also write admin audit events —
 // deferred this pass (// TODO(audit)); the state + response are faithful.
@@ -47,8 +45,6 @@ func (h *Handler) routeThirdPartyIntegration(r chi.Router) {
 	// so these do not conflict with PUT/DELETE /integrations/{id} (different HTTP methods anyway).
 	r.Post("/integrations/healthcheck", h.integrationHealthCheckBody)
 	r.Post("/integrations/healthcheck/{id}", h.integrationHealthCheckByID)
-	r.Post("/integrations/btcpay/stores", h.integrationBTCPayStores)
-	r.Get("/integrations/whmcs/{id}", h.integrationWhmcsDetails)
 	r.Put("/integrations/{id}", h.integrationUpdate)
 	r.Delete("/integrations/{id}", h.integrationDelete)
 }
@@ -207,29 +203,6 @@ func (h *Handler) integrationHealthCheckBody(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented, "integration health check not implemented"))
-}
-
-// integrationBTCPayStores lists a BTCPay Server's stores: a live BTCPay Server
-// API call → not wired (no live calls). Gated ADMIN_INTEGRATION_READ.
-func (h *Handler) integrationBTCPayStores(w http.ResponseWriter, r *http.Request) {
-	if !h.require(w, r, integrationReadPerm) {
-		return
-	}
-	var req thirdPartyIntegrationReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpx.WriteError(w, httpx.BadRequest("Invalid request body"))
-		return
-	}
-	httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented, "BTCPay stores not implemented"))
-}
-
-// integrationWhmcsDetails returns a WHMCS integration's details: a live WHMCS
-// API call → not wired. Gated ADMIN_INTEGRATION_READ.
-func (h *Handler) integrationWhmcsDetails(w http.ResponseWriter, r *http.Request) {
-	if !h.require(w, r, integrationReadPerm) {
-		return
-	}
-	httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented, "WHMCS integration details not implemented"))
 }
 
 // integrationFields builds the non-secret mutable fields of a ThirdPartyIntegration doc. Optional

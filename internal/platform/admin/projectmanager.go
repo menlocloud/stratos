@@ -226,7 +226,7 @@ func (h *Handler) projectManagerInvite(w http.ResponseWriter, r *http.Request) {
 	if h.inviteToProject == nil {
 		// Invite subsystem not wired (unit tests construct the Handler without it).
 		httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-			"projectInviteService invite not implemented"))
+			"project invite delivery not implemented"))
 		return
 	}
 	// newUser → UserIDs carry EMAIL addresses (invite by address); else USER IDs (resolve the user →

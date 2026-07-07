@@ -109,33 +109,16 @@ func (h *BillingHandler) Routes(r chi.Router) {
 	r.Post("/card/{billingProfileId}/{cardId}/default", h.setDefaultCard)
 	r.Get("/card/{billingProfileId}/transactions/{transactionId}", h.getCardTransaction)
 	r.Get("/callbacks/payment/stripe/card/confirm/{transactionId}", h.stripeCardConfirm)
-	// Other payment gateways + KYC + websso callbacks.
-	// These gateways are NOT configured in this deployment → 501 (would verify with
-	// the vendor; the posture for an unconfigured external integration is a 501). Whitelisted (no bearer).
-	r.Get("/callbacks/payment/ipay/funds/confirm/{transactionId}", h.callbackSeam)
-	r.Get("/callbacks/payment/ipay/card/confirm/{transactionId}", h.callbackSeam)
-	r.Get("/callbacks/payment/ipay/collect/confirm/{transactionId}", h.callbackSeam)
-	r.Get("/callbacks/payment/hyperpay/funds/confirm/{transactionId}", h.callbackSeam)
-	r.Get("/callbacks/payment/hyperpay/card/confirm/{transactionId}", h.callbackSeam)
-	r.Get("/callbacks/payment/amazonpay/checkoutReview/{transactionId}", h.callbackSeam)
-	r.Get("/callbacks/idenfy/verificationComplete/{integrationId}/{billingProfileId}", h.callbackSeam)
+	// KYC + websso callbacks. These integrations are NOT configured in this
+	// deployment → 501 (would verify with the vendor; the posture for an
+	// unconfigured external integration is a 501). Whitelisted (no bearer).
 	r.Post("/callbacks/auth/websso", h.callbackSeam)
-	r.Get("/payments/btcpay/funds/confirm/{transactionId}", h.callbackSeam)
-	r.Get("/payments/xendit/funds/confirm/{transactionId}", h.callbackSeam)
-	r.Post("/payments/xendit/card/confirm/{transactionId}", h.callbackSeam)
-	r.Post("/webhooks/idenfy/{integrationId}", h.callbackSeam)
-	// Remaining vendor routes with no configured integration here — same
-	// 501 posture (were 404s before the 2026-07-02 gap scan): Digio web hooks (whitelisted
-	// prefix), KYC verification (multipart → Digio), paypal capture,
-	// RazorPay (form-urlencoded → redirect).
-	r.Post("/digio/webhooks/{integrationId}/kyc-request-approved", h.callbackSeam)
+	// KYC verification (multipart → an external KYC provider) — same 501 posture.
 	r.Post("/kyc/{projectId}", h.callbackSeam)
-	r.Post("/payment/paypal/{transactionId}/capture", h.callbackSeam)
-	r.Post("/payments/razorpay/funds/confirm/{transactionId}", h.callbackSeam)
 }
 
-// callbackSeam is the 501 for payment/KYC/SSO gateways that are not configured in this
-// deployment (btcpay/ipay/hyperpay/amazonpay/xendit/idenfy/websso). It would verify with the vendor;
+// callbackSeam is the 501 for KYC/SSO integrations that are not configured in this
+// deployment. It would verify with the vendor;
 // when no such integration exists, the external call is not wired.
 func (h *BillingHandler) callbackSeam(w http.ResponseWriter, r *http.Request) {
 	httpx.Err(w, http.StatusNotImplemented, http.StatusNotImplemented, "payment/KYC gateway not configured")

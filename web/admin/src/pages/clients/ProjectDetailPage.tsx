@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, CreditCard, Pause, Play, Plus, RefreshCw, Server, Trash2, Users } from "lucide-react"
@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -24,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, apiFetch } from "@/lib/api"
@@ -39,7 +41,16 @@ type ProjectDoc = {
   billingProfileId?: string
   memberships?: Array<{ sub?: string; role?: string }>
   services?: Array<{ serviceId?: string; externalProjectId?: string }>
+  // absent/null = all external networks allowed; array = allow-list of Neutron network ids.
+  publicNetworkIds?: string[] | null
   createdAt?: string
+}
+
+// GET /admin/cloud-resource/public-networks/{externalServiceId} (cloudadmin.go publicNetworks) —
+// the provider's router:external networks.
+type PublicNetwork = {
+  id?: string
+  name?: string
 }
 
 // GET /admin/project/{id}/members (projectmut.go projectMembers) — shaped user docs.
@@ -129,6 +140,18 @@ export default function ProjectDetailPage() {
 
   const bps = useAdminList<BillingProfile>("/admin/billing-profile", bpOpen)
   const users = useAdminList<AdminUser>("/admin/user", addMemberOpen)
+
+  const externalServiceId = project?.services?.find((s) => s.serviceId)?.serviceId ?? ""
+  const publicNets = useAdminList<PublicNetwork>(
+    `/admin/cloud-resource/public-networks/${externalServiceId}`,
+    !!externalServiceId,
+  )
+  const [allPublicNets, setAllPublicNets] = useState(true)
+  const [publicNetChoice, setPublicNetChoice] = useState<string[]>([])
+  useEffect(() => {
+    setAllPublicNets(!project?.publicNetworkIds)
+    setPublicNetChoice(project?.publicNetworkIds ?? [])
+  }, [project?.publicNetworkIds])
 
   const enabled = (project?.status ?? "").toUpperCase() === "ENABLED"
 
@@ -243,6 +266,21 @@ export default function ProjectDetailPage() {
         toast.error(e.message)
       }
     },
+  })
+
+  // PUT /admin/project/{id}/public-networks — null resets to the default (all external networks),
+  // an array restricts the project to that allow-list.
+  const savePublicNets = useMutation({
+    mutationFn: () =>
+      apiFetch(`${projectPath}/public-networks`, {
+        method: "PUT",
+        body: { publicNetworkIds: allPublicNets ? null : publicNetChoice },
+      }),
+    onSuccess: () => {
+      toast.success("Public networks updated")
+      invalidateProject()
+    },
+    onError: (e: Error) => toast.error(e.message),
   })
 
   const memberRoleOf = (sub?: string) =>
@@ -367,6 +405,58 @@ export default function ProjectDetailPage() {
                         </span>
                       </div>
                     ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Public networks</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {!externalServiceId ? (
+                  <p className="text-sm text-muted-foreground">No cloud service attached.</p>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <Switch id="all-public-networks" checked={allPublicNets} onCheckedChange={setAllPublicNets} />
+                      <label htmlFor="all-public-networks" className="text-sm">
+                        All public networks (default)
+                      </label>
+                    </div>
+                    {!allPublicNets &&
+                      (publicNets.isLoading ? (
+                        <Skeleton className="h-10" />
+                      ) : publicNets.error ? (
+                        <p className="text-sm text-muted-foreground">{(publicNets.error as Error).message}</p>
+                      ) : (publicNets.data?.data ?? []).length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No public networks available.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {(publicNets.data?.data ?? []).map((n) => {
+                            const nid = n.id
+                            if (!nid) return null
+                            return (
+                              <label key={nid} className="flex items-center gap-2 text-sm">
+                                <Checkbox
+                                  checked={publicNetChoice.includes(nid)}
+                                  onCheckedChange={(on) =>
+                                    setPublicNetChoice((prev) =>
+                                      on === true ? [...prev, nid] : prev.filter((x) => x !== nid),
+                                    )
+                                  }
+                                />
+                                <span>{n.name || nid}</span>
+                                <span className="font-mono text-xs text-muted-foreground">{nid}</span>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      ))}
+                    <Button size="sm" disabled={savePublicNets.isPending} onClick={() => savePublicNets.mutate()}>
+                      {savePublicNets.isPending ? "Saving…" : "Save"}
+                    </Button>
                   </div>
                 )}
               </CardContent>

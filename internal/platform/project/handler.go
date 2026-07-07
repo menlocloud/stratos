@@ -99,6 +99,9 @@ func (h *Handler) Routes(r chi.Router) {
 	r.Get("/project/{id}/resources/counts", h.resourceCounts)
 	r.Get("/project/{id}/resource/count", h.resourceStats)
 	r.Get("/project/{id}/resource-types", h.resourceTypes)
+	// GET /{id}/public-networks → the provider's router:external networks filtered by the
+	// project's publicNetworkIds allow-list — see publicnetworks.go.
+	r.Get("/project/{id}/public-networks", h.publicNetworks)
 	r.Get("/project/{id}/instance-metadata-options", h.instanceMetadataOptions)
 	// Price-preview (create forms) — empty when billingResources is empty (the
 	// wizard sends []) or the rating preview is deferred; 200-empty, not 404, so the FE renders.

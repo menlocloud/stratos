@@ -56,11 +56,19 @@ Each domain registers its own `Routes()` under `/api/v1` (see `AppRouter` in
 | `features` | Available feature set |
 | `promotion` / `affiliate` | Deposit promos, affiliate program |
 | `catalog` | Cloud catalog (flavor categories, image groups) |
-| `livechat` | Marketing live-chat integration |
 | `order` / `project-invites` | Orders and project invitations |
 | `admin/**` | Operator console surface (permission-gated) |
 | `streaming` | SSE real-time event stream (`/events/{projectId}`) |
-| `os-notification`, `callbacks`, `payments`, `webhooks`, `digio/webhooks` | Inbound webhooks (public whitelist) |
+| `os-notification`, `callbacks`, `payments`, `webhooks` | Inbound webhooks (public whitelist) |
+
+Project public-network policy: `GET /api/v1/project/{id}/public-networks` lists
+the external (public) networks the project is allowed to use, and
+`PUT /api/v1/admin/project/{id}/public-networks` (operator console surface) sets
+the per-project allow-list — a `null`/absent `publicNetworkIds` means all
+external networks. The cloud create body (`POST /api/v1/project/{id}/cloud`,
+type `SERVER`) additionally accepts optional `assignFloatingIp` /
+`floatingNetworkId` data keys to auto-attach a floating IP once the server has
+a port.
 
 ## Admin API — `/admin-api/v1`
 

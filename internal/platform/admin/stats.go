@@ -39,7 +39,7 @@ func (h *Handler) adminStats(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	count := func(c string) int64 { n, _ := h.repo.CountDocs(ctx, c); return n }
-	// mailGatewayConfigured is true when some Mail-category catalog entry (SMTP/Mailgun/…)
+	// mailGatewayConfigured is true when some Mail-category catalog entry (SMTP)
 	// has an installed thirdPartyIntegration doc.
 	mailConfigured := false
 	if installed, err := h.repo.InstalledThirdParties(ctx); err == nil {

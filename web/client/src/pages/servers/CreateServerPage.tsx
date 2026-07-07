@@ -1,7 +1,8 @@
-// Create-server wizard: Location → Availability zone → Image → Flavor → Network → Access → Name.
+// Create-server wizard: Location → Availability zone → Image → Flavor → Network → Public IP → Access → Name.
 // API contract verified against internal/cloud/providers/write.go (TypeServer branch):
 // data reads name / imageId / flavorId / networkInterfaces:[{uuid}] / availabilityZoneName /
-// keyName / securityGroupNames. (No user-data / boot-volume keys in the Go create — not offered.)
+// keyName / securityGroupNames / assignFloatingIp / floatingNetworkId.
+// (No user-data / boot-volume keys in the Go create — not offered.)
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -18,9 +19,10 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusBadge } from "@/components/status-badge"
+import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch, type CloudScope } from "@/lib/api"
-import { useLocations, useProjectId } from "@/lib/hooks"
+import { useLocations, useProjectId, usePublicNetworks } from "@/lib/hooks"
 import type { CloudResource, Location } from "@/lib/types"
 
 type Az = { name?: string; available?: boolean }
@@ -83,11 +85,14 @@ export default function CreateServerPage() {
       apiFetch<CloudResource[]>(`/project/${pid}/resource?type=SECURITY_GROUP`, { method: "POST", cloud: scope }),
     enabled: !!pid && !!scope,
   })
+  const pubNets = usePublicNetworks(pid, scope)
 
   const [azName, setAzName] = useState<string>()
   const [imageId, setImageId] = useState<string>()
   const [flavorId, setFlavorId] = useState<string>() // = flavor externalId
   const [netIds, setNetIds] = useState<string[]>([])
+  const [assignFip, setAssignFip] = useState(true)
+  const [fipNetId, setFipNetId] = useState<string>()
   const [keyName, setKeyName] = useState("") // "" = no key pair
   const [sgNames, setSgNames] = useState<string[]>([])
   const [name, setName] = useState("")
@@ -96,6 +101,8 @@ export default function CreateServerPage() {
   const sgName = (r: CloudResource) => (r.data?.securityGroup?.name as string) ?? r.name ?? ""
 
   const az = azName ?? (azs.data?.[0]?.name as string | undefined)
+  const fipNet = fipNetId ?? pubNets.data?.[0]?.id
+  const wantFip = assignFip && !!pubNets.data?.length
 
   const create = useMutation({
     mutationFn: () =>
@@ -110,6 +117,8 @@ export default function CreateServerPage() {
             flavorId,
             ...(az ? { availabilityZoneName: az } : {}),
             networkInterfaces: netIds.map((uuid) => ({ uuid })),
+            assignFloatingIp: wantFip,
+            ...(wantFip && fipNet ? { floatingNetworkId: fipNet } : {}),
             ...(keyName ? { keyName } : {}),
             ...(sgNames.length ? { securityGroupNames: sgNames } : {}),
           },
@@ -123,7 +132,8 @@ export default function CreateServerPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  const ready = !!scope && !!imageId && !!flavorId && netIds.length > 0 && !!name.trim()
+  const ready =
+    !!scope && !!imageId && !!flavorId && netIds.length > 0 && !!name.trim() && (!wantFip || !!fipNet)
 
   if (locations.isLoading) {
     return (
@@ -307,7 +317,48 @@ export default function CreateServerPage() {
             )}
           </Step>
 
-          <Step n={6} title="Access (optional)">
+          <Step n={6} title="Public IP">
+            {pubNets.isLoading ? (
+              <Skeleton className="h-9 w-48" />
+            ) : (
+              <div className="grid max-w-md gap-2">
+                <div className="flex items-center gap-3">
+                  <Switch
+                    id="assign-fip"
+                    checked={wantFip}
+                    disabled={!pubNets.data?.length}
+                    onCheckedChange={setAssignFip}
+                  />
+                  <Label htmlFor="assign-fip">Assign floating IP</Label>
+                </div>
+                {!pubNets.data?.length ? (
+                  <p className="text-sm text-muted-foreground">
+                    No public networks are enabled for this project.
+                  </p>
+                ) : wantFip ? (
+                  <>
+                    <Select value={fipNet} onValueChange={setFipNetId}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select a public network" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {pubNets.data.map((n) => (
+                          <SelectItem key={n.id} value={n.id}>
+                            {n.name || n.id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-sm text-muted-foreground">
+                      The floating IP is attached automatically shortly after the server becomes active.
+                    </p>
+                  </>
+                ) : null}
+              </div>
+            )}
+          </Step>
+
+          <Step n={7} title="Access (optional)">
             <div className="grid gap-4">
               <div className="grid max-w-md gap-2">
                 <Label>SSH key pair</Label>
@@ -374,7 +425,7 @@ export default function CreateServerPage() {
             </div>
           </Step>
 
-          <Step n={7} title="Name">
+          <Step n={8} title="Name">
             <div className="grid max-w-md gap-2">
               <Label htmlFor="server-name">Server name</Label>
               <Input

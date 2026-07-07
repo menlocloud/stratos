@@ -33,6 +33,8 @@ Anything financial sits under the **System** group in the sidebar, spread across
 
 How a new registration turns into an active, provisioned account is covered in [Account Activation](/docs/platform-admin/account-activation). Ongoing customer management happens under the **Client area** group: **Users**, **Organizations**, **Billing profiles**, **Validations**, and **Projects**.
 
+Each project's detail page also carries a **public networks** allow-list. By default a project can use every external network its cloud provider exposes; restrict it to a chosen subset there when a customer should only allocate from specific pools. The restriction is enforced when clients create floating IPs or attach a router's external gateway — a network outside the list is rejected.
+
 ### Clouds
 
 Your OpenStack regions are managed from **System → Cloud providers** — registering a region, switching individual services (compute, volumes, load balancers, object storage, shares) on or off, and pulling instance metrics. The Cloud Providers guides cover all of this.

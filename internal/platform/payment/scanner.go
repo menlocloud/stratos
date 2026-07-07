@@ -15,9 +15,6 @@ import (
 // or a collect the pod died mid-processing — stays PENDING forever and the credit never
 // materializes. The scan window: status PENDING, createdAt in
 // (now-24h, now-20min) — old enough to not race the live flow, young enough to still matter.
-//
-// The WHMCS minutely scan (scanWhmcsTransactionsEveryMinute) is intentionally omitted: it no-ops
-// without a WHMCS integration, and no WHMCS gateway exists here.
 
 // TransactionScanner re-drives stuck PENDING transactions through the same Process paths the
 // callbacks use (ProcessAddFunds / processCollect — both idempotent; a still-pending gateway

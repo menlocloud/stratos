@@ -288,7 +288,7 @@ func (h *Handler) erpTestBillingResources(w http.ResponseWriter, r *http.Request
 	// HMAC-signed POST to the external resource-provider's /billing_resources API. Purely external;
 	// not wired this pass.
 	httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-		"getBillingResources not implemented"))
+		"billing resources listing not implemented"))
 }
 
 // erpTestBillingResourceTypes fetches the provider's billing resource types: resolves the
@@ -310,7 +310,7 @@ func (h *Handler) erpTestBillingResourceTypes(w http.ResponseWriter, r *http.Req
 	// External integration point: fetch the billing resource types — HMAC-signed POST to
 	// the external provider's /billing_resources/types API. Purely external; not wired this pass.
 	httpx.WriteError(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented,
-		"getBillingResourceTypes not implemented"))
+		"billing resource types listing not implemented"))
 }
 
 // stringID renders a stored _id (a hex string id) as the id the domain
