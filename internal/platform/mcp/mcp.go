@@ -81,7 +81,7 @@ func New(log *slog.Logger, lookup auth.HmacKeyLookup, mainIssuer, adminIssuer, b
 // config surfaces (pricing, platform/provider config, project ops, billing ops).
 func adminAllTools() []toolDef {
 	out := []toolDef{}
-	for _, set := range [][]toolDef{adminTools, adminPricingTools, adminPlatformTools, adminProjectOpsTools, adminBillingOpsTools} {
+	for _, set := range [][]toolDef{adminTools, adminPricingTools, adminPlatformTools, adminCatalogTools, adminProjectOpsTools, adminBillingOpsTools} {
 		out = append(out, set...)
 	}
 	return out
