@@ -178,3 +178,10 @@ the UI refreshes without a reload.
 4. If nothing happens: check the bridge logs for AMQP connect + POST status,
    confirm the URL region matches, and confirm the `X-Stratos-Notification-Secret`
    header matches the saved secret (a mismatch is a silent `401` at Stratos).
+
+**Common gotcha — the port.** In-cluster the API Service listens on its service
+port (`8080` by default), not `80`. `http://stratos-api/…` (implicit `:80`) has
+nothing to connect to and the POST times out with
+`context deadline exceeded (Client.Timeout exceeded while awaiting headers)`.
+Use `http://<api-service>:8080/…`. A fast `401` (not a timeout) instead means the
+API is reachable but the secret is missing/wrong.

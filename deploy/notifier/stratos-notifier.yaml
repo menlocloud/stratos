@@ -58,8 +58,11 @@ spec:
             - name: RABBITMQ_TOPIC
               value: "notifications.#"
             # ── sink: the Stratos Notifier URI + its secret ──
+            # In-cluster: the api Service listens on its service port (8080 by default), NOT 80 — so the
+            # port is REQUIRED (http://stratos-api without it hits port 80 and times out). Use the
+            # public https URL only if the pod can reach the ingress.
             - name: TARGET_URL
-              value: "https://cloud-api.menlo.ai/api/v1/notifications/6a4d466f4f34c7e7d800e7a7/RegionOne"
+              value: "http://stratos-api:8080/api/v1/notifications/6a4d466f4f34c7e7d800e7a7/RegionOne"
             - name: TARGET_SECRET
               valueFrom: { secretKeyRef: { name: stratos-notifier-regionone, key: target-secret } }
             - name: PORT
