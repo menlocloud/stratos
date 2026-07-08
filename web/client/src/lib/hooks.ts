@@ -103,6 +103,43 @@ export function useBillingSummary(pid: string) {
   })
 }
 
+// Curated flavor categories (admin-configured "hardware" groups). The create-server flavor picker
+// shows only flavors that belong to a category, grouped by it — uncategorized flavors are hidden.
+export type FlavorCategory = {
+  id: string
+  name: string
+  orderNumber?: number
+  bareMetal?: boolean
+  flavors?: Array<{ flavorName?: string }>
+}
+export function useFlavorCategories() {
+  return useQuery({
+    queryKey: ["flavor-categories"],
+    queryFn: () => apiFetch<FlavorCategory[]>("/flavor-categories"),
+  })
+}
+
+// Curated image groups + categories. Each enabled group offers named images under a category;
+// the create-server image picker shows only offered images (matched to live glance images by name).
+export type ImageGroup = {
+  id: string
+  name: string
+  categoryId?: string
+  enabled?: boolean
+  orderNumber?: number
+  images?: Array<{ name?: string; version?: string; orderNumber?: number }>
+}
+export type ImageGrouping = {
+  imageGroups?: ImageGroup[]
+  imageCategories?: Array<{ id: string; name: string }>
+}
+export function useImageGroups() {
+  return useQuery({
+    queryKey: ["image-groups"],
+    queryFn: () => apiFetch<ImageGrouping>("/groups/images"),
+  })
+}
+
 export function useProjectServices(pid: string) {
   return useQuery({
     queryKey: ["project-services", pid],

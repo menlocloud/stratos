@@ -3,7 +3,7 @@
 // data reads name / imageId / flavorId / networkInterfaces:[{uuid}] / availabilityZoneName /
 // keyName / securityGroupNames / assignFloatingIp / floatingNetworkId.
 // (No user-data / boot-volume keys in the Go create — not offered.)
-import { useState } from "react"
+import { Fragment, useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
@@ -22,9 +22,66 @@ import { StatusBadge } from "@/components/status-badge"
 import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch, type CloudScope } from "@/lib/api"
-import { useLocations, useProject, useProjectId, usePublicNetworks } from "@/lib/hooks"
+import {
+  useFlavorCategories, useImageGroups, useLocations, useProject, useProjectId, usePublicNetworks,
+} from "@/lib/hooks"
+import type { FlavorCategory, ImageGrouping } from "@/lib/hooks"
 import type { CloudResource, Location } from "@/lib/types"
 import { isPrivateNetwork } from "../network/NetworksPage"
+
+type Section<T> = { label: string; items: T[] }
+
+// buildFlavorSections groups live flavors by the admin's flavor categories (category order), showing
+// only categorized flavors. If no category matches any live flavor (none configured / all drifted),
+// it falls back to one unlabeled section of every flavor so the picker is never empty.
+function buildFlavorSections(live: Flavor[], cats: FlavorCategory[]): Section<Flavor>[] {
+  const sections = [...cats]
+    .sort((a, b) => (a.orderNumber ?? 0) - (b.orderNumber ?? 0))
+    .map((c) => {
+      const names = new Set((c.flavors ?? []).map((f) => f.flavorName).filter(Boolean))
+      return { label: c.name, items: live.filter((f) => f.data?.name && names.has(f.data.name)) }
+    })
+    .filter((s) => s.items.length > 0)
+  const curated = sections.reduce((n, s) => n + s.items.length, 0)
+  return curated > 0 ? sections : [{ label: "", items: live }]
+}
+
+// buildImageSections groups live glance images by the enabled image groups (matched by name),
+// labeled "Category · Group". Same never-empty fallback as flavors.
+function buildImageSections(live: GlanceImage[], grouping?: ImageGrouping): Section<GlanceImage>[] {
+  const catName = new Map((grouping?.imageCategories ?? []).map((c) => [c.id, c.name]))
+  const byName = new Map(live.map((im) => [String(im.name), im]))
+  const seen = new Set<string>()
+  const sections = [...(grouping?.imageGroups ?? [])]
+    .filter((g) => g.enabled)
+    .sort((a, b) => (a.orderNumber ?? 0) - (b.orderNumber ?? 0))
+    .map((g) => {
+      const items: GlanceImage[] = []
+      for (const gi of g.images ?? []) {
+        const im = byName.get(String(gi.name))
+        if (im && !seen.has(String(im.id))) {
+          seen.add(String(im.id))
+          items.push(im)
+        }
+      }
+      const cat = g.categoryId ? catName.get(g.categoryId) : ""
+      return { label: cat ? `${cat} · ${g.name}` : g.name, items }
+    })
+    .filter((s) => s.items.length > 0)
+  const curated = sections.reduce((n, s) => n + s.items.length, 0)
+  return curated > 0 ? sections : [{ label: "", items: live }]
+}
+
+// CategoryRow is the muted section header inside a picker table.
+function CategoryRow({ label, cols }: { label: string; cols: number }) {
+  return (
+    <TableRow className="bg-muted/50 hover:bg-muted/50">
+      <TableCell colSpan={cols} className="py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </TableCell>
+    </TableRow>
+  )
+}
 
 type Az = { name?: string; displayName?: string; available?: boolean }
 type GlanceImage = Record<string, any>
@@ -68,6 +125,12 @@ export default function CreateServerPage() {
   const azs = useBulkAction<Az>(pid, scope, "LIST_AVAILABILITY_ZONES")
   const images = useBulkAction<GlanceImage>(pid, scope, "PUBLIC_IMAGES")
   const flavors = useBulkAction<Flavor>(pid, scope, "LIST_FLAVORS")
+  // Curated catalog: show only the flavors/images the admin grouped into categories (grouped by
+  // category), not the raw live cloud lists. Falls back to showing everything if nothing matches.
+  const flavorCats = useFlavorCategories()
+  const imageGroups = useImageGroups()
+  const flavorSections = useMemo(() => buildFlavorSections(flavors.data ?? [], flavorCats.data ?? []), [flavors.data, flavorCats.data])
+  const imageSections = useMemo(() => buildImageSections(images.data ?? [], imageGroups.data), [images.data, imageGroups.data])
   const networks = useQuery({
     queryKey: ["cloud", pid, "NETWORK", scope?.serviceId, scope?.region],
     queryFn: () =>
@@ -214,7 +277,7 @@ export default function CreateServerPage() {
           </Step>
 
           <Step n={3} title="Image">
-            {images.isLoading ? (
+            {images.isLoading || imageGroups.isLoading ? (
               <Skeleton className="h-40" />
             ) : !images.data?.length ? (
               <p className="text-sm text-muted-foreground">No public images available.</p>
@@ -231,23 +294,28 @@ export default function CreateServerPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {images.data.map((im) => (
-                      <TableRow
-                        key={String(im.id)}
-                        className="cursor-pointer"
-                        data-state={imageId === im.id ? "selected" : undefined}
-                        onClick={() => setImageId(String(im.id))}
-                      >
-                        <TableCell>{imageId === im.id ? <Check className="size-4 text-primary" /> : null}</TableCell>
-                        <TableCell className="font-medium">{String(im.name ?? im.id)}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {[im.os_distro, im.os_version].filter(Boolean).join(" ") || "—"}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{gb(im.size as number)} GB</TableCell>
-                        <TableCell>
-                          <StatusBadge status={im.status as string} />
-                        </TableCell>
-                      </TableRow>
+                    {imageSections.map((sec) => (
+                      <Fragment key={sec.label || "__all__"}>
+                        {sec.label ? <CategoryRow label={sec.label} cols={5} /> : null}
+                        {sec.items.map((im) => (
+                          <TableRow
+                            key={String(im.id)}
+                            className="cursor-pointer"
+                            data-state={imageId === im.id ? "selected" : undefined}
+                            onClick={() => setImageId(String(im.id))}
+                          >
+                            <TableCell>{imageId === im.id ? <Check className="size-4 text-primary" /> : null}</TableCell>
+                            <TableCell className="font-medium">{String(im.name ?? im.id)}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {[im.os_distro, im.os_version].filter(Boolean).join(" ") || "—"}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{gb(im.size as number)} GB</TableCell>
+                            <TableCell>
+                              <StatusBadge status={im.status as string} />
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </Fragment>
                     ))}
                   </TableBody>
                 </Table>
@@ -256,7 +324,7 @@ export default function CreateServerPage() {
           </Step>
 
           <Step n={4} title="Flavor">
-            {flavors.isLoading ? (
+            {flavors.isLoading || flavorCats.isLoading ? (
               <Skeleton className="h-40" />
             ) : !flavors.data?.length ? (
               <p className="text-sm text-muted-foreground">No flavors available.</p>
@@ -273,21 +341,26 @@ export default function CreateServerPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {flavors.data.map((f) => (
-                      <TableRow
-                        key={f.externalId}
-                        className="cursor-pointer"
-                        data-state={flavorId === f.externalId ? "selected" : undefined}
-                        onClick={() => setFlavorId(f.externalId)}
-                      >
-                        <TableCell>
-                          {flavorId === f.externalId ? <Check className="size-4 text-primary" /> : null}
-                        </TableCell>
-                        <TableCell className="font-medium">{f.data?.name ?? f.externalId}</TableCell>
-                        <TableCell>{f.data?.vcpus ?? "—"}</TableCell>
-                        <TableCell>{f.data?.ram ? `${Math.round(f.data.ram / 1024)} GB` : "—"}</TableCell>
-                        <TableCell>{f.data?.disk != null ? `${f.data.disk} GB` : "—"}</TableCell>
-                      </TableRow>
+                    {flavorSections.map((sec) => (
+                      <Fragment key={sec.label || "__all__"}>
+                        {sec.label ? <CategoryRow label={sec.label} cols={5} /> : null}
+                        {sec.items.map((f) => (
+                          <TableRow
+                            key={f.externalId}
+                            className="cursor-pointer"
+                            data-state={flavorId === f.externalId ? "selected" : undefined}
+                            onClick={() => setFlavorId(f.externalId)}
+                          >
+                            <TableCell>
+                              {flavorId === f.externalId ? <Check className="size-4 text-primary" /> : null}
+                            </TableCell>
+                            <TableCell className="font-medium">{f.data?.name ?? f.externalId}</TableCell>
+                            <TableCell>{f.data?.vcpus ?? "—"}</TableCell>
+                            <TableCell>{f.data?.ram ? `${Math.round(f.data.ram / 1024)} GB` : "—"}</TableCell>
+                            <TableCell>{f.data?.disk != null ? `${f.data.disk} GB` : "—"}</TableCell>
+                          </TableRow>
+                        ))}
+                      </Fragment>
                     ))}
                   </TableBody>
                 </Table>
