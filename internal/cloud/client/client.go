@@ -411,6 +411,7 @@ type Server struct {
 	// carry it or GPU servers silently bill zero (rules filter on gpu_model).
 	FlavorExtraSpecs map[string]string
 	Metadata         map[string]string
+	Addresses        map[string]any // nova server addresses (per-network) → the cache's IP column
 	Created          time.Time
 	Updated          time.Time
 }
@@ -438,7 +439,8 @@ func (c *Client) ListServers(ctx context.Context) ([]Server, error) {
 		srv := Server{
 			ID: s.ID, Name: s.Name, Status: s.Status, Host: s.HostID,
 			AvailabilityZone: s.AvailabilityZone, Metadata: s.Metadata,
-			Created: s.Created, Updated: s.Updated,
+			Addresses: s.Addresses,
+			Created:   s.Created, Updated: s.Updated,
 			ImageID:  mapID(s.Image),
 			FlavorID: mapID(s.Flavor),
 		}

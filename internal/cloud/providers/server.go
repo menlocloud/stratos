@@ -60,10 +60,18 @@ func (p *ServerProvider) List(ctx context.Context) ([]cloud.CloudResource, error
 					"host":             s.Host,
 					"status":           s.Status,
 					"availabilityZone": s.AvailabilityZone,
+					// addresses feeds the list/detail IP column (the FE reads server.addresses); nil
+					// when the server has none yet.
+					"addresses": s.Addresses,
 					"flavor": map[string]any{
-						"ram":   s.RAM,
-						"vcpus": s.VCPUs,
-						"disk":  s.Disk,
+						// id/original_name so the FE flavor helper (original_name ?? name) renders the
+						// flavor without a live re-fetch.
+						"id":            s.FlavorID,
+						"name":          s.FlavorName,
+						"original_name": s.FlavorName,
+						"ram":           s.RAM,
+						"vcpus":         s.VCPUs,
+						"disk":          s.Disk,
 						// extra_specs feeds GPU rating (gpu_model/gpu_count) — without it a
 						// GPU server bills zero. Always present (possibly empty).
 						"extra_specs": s.FlavorExtraSpecs,
