@@ -93,6 +93,23 @@ type Flavor = {
 
 const gb = (bytes?: number) => (bytes ? (bytes / 1073741824).toFixed(2) : "0.00")
 
+// cloudInitUser builds a #cloud-config that creates a sudo login user with a password and enables
+// password SSH — the reliable way to do username+password login across images. JSON.stringify quotes
+// each value as a YAML double-quoted scalar so special characters can't break the document.
+function cloudInitUser(username: string, password: string): string {
+  return [
+    "#cloud-config",
+    "ssh_pwauth: true",
+    "users:",
+    "  - default",
+    `  - name: ${JSON.stringify(username)}`,
+    "    lock_passwd: false",
+    "    shell: /bin/bash",
+    "    sudo: 'ALL=(ALL) NOPASSWD:ALL'",
+    `    plain_text_passwd: ${JSON.stringify(password)}`,
+  ].join("\n")
+}
+
 // Collection-level cloud action (POST /project/{pid}/cloud/action → {result}).
 function useBulkAction<T>(pid: string, scope: CloudScope | undefined, action: string) {
   return useQuery({
@@ -164,6 +181,7 @@ export default function CreateServerPage() {
   const [fipNetId, setFipNetId] = useState<string>()
   const [keyName, setKeyName] = useState("") // "" = no key pair
   const [loginMethod, setLoginMethod] = useState<"key" | "password">("key")
+  const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [userData, setUserData] = useState("")
   const [sgNames, setSgNames] = useState<string[]>([])
@@ -179,8 +197,14 @@ export default function CreateServerPage() {
   const wantFip = assignFip && (netsVisible ? !!pubNets.data?.length : true)
 
   const create = useMutation({
-    mutationFn: () =>
-      apiFetch<CloudResource>(`/project/${pid}/cloud`, {
+    mutationFn: () => {
+      // Password login with a username creates that user via cloud-init (reliable on any cloud-init
+      // image); the generated user-data wins over a manually-typed one. Without a username, fall back
+      // to nova adminPass on the image's default account.
+      const genUserData =
+        loginMethod === "password" && username.trim() && password ? cloudInitUser(username.trim(), password) : ""
+      const finalUserData = genUserData || userData
+      return apiFetch<CloudResource>(`/project/${pid}/cloud`, {
         method: "POST",
         cloud: scope,
         body: {
@@ -194,12 +218,13 @@ export default function CreateServerPage() {
             assignFloatingIp: wantFip,
             ...(wantFip && netsVisible && fipNet ? { floatingNetworkId: fipNet } : {}),
             ...(loginMethod === "key" && keyName ? { keyName } : {}),
-            ...(loginMethod === "password" && password ? { adminPass: password } : {}),
-            ...(userData.trim() ? { userData } : {}),
+            ...(loginMethod === "password" && !username.trim() && password ? { adminPass: password } : {}),
+            ...(finalUserData.trim() ? { userData: finalUserData } : {}),
             ...(sgNames.length ? { securityGroupNames: sgNames } : {}),
           },
         },
-      }),
+      })
+    },
     onSuccess: () => {
       toast.success(`Server "${name.trim()}" is being created`)
       void qc.invalidateQueries({ queryKey: ["cloud", pid, "SERVER"] })
@@ -503,20 +528,27 @@ export default function CreateServerPage() {
                     </Select>
                   )
                 ) : (
-                  <>
+                  <div className="grid gap-2">
+                    <Input
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="Username (optional, e.g. devuser)"
+                      autoComplete="off"
+                    />
                     <Input
                       type="password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Admin/root password"
+                      placeholder="Password"
                       autoComplete="new-password"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Sets the instance's admin password. The login username depends on the image (e.g.{" "}
-                      <span className="font-mono">ubuntu</span>, <span className="font-mono">root</span>). Leave
-                      blank for a cloud-generated password. Requires the image to support password login.
+                      With a username, a sudo login user is created via cloud-init (works on any cloud-init
+                      image). Without one, the password is set on the image's default account (e.g.{" "}
+                      <span className="font-mono">ubuntu</span>/<span className="font-mono">root</span>) via nova
+                      and needs an image that supports password login.
                     </p>
-                  </>
+                  </div>
                 )}
               </div>
 

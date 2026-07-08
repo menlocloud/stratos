@@ -113,6 +113,7 @@ unexpectedly.
 | Scheduler | `STRATOS_JOBS_SCHEDULER_ENABLED` | `stratos.jobs.scheduler-enabled` | `false` | Auto-start the charge/metrics crons (charges bills on a timer). |
 | Debug triggers | `STRATOS_JOBS_DEBUG_TRIGGERS` | `stratos.jobs.debug-triggers` | `false` | Expose on-demand `POST :8081/debug/run-*` triggers **without** starting the crons — for deterministic, manual runs. |
 | Rabbit fanout | `STRATOS_JOBS_RABBIT_FANOUT` | `stratos.jobs.rabbit-fanout` | `false` | Route the charge cron through RabbitMQ (one message per active profile) instead of the in-process loop. |
+| Default network MTU | `STRATOS_DEFAULT_NETWORK_MTU` | `api.network.defaultMtu` (Helm) | _unset_ | MTU stamped on client-created networks. Unset/0 leaves it to neutron's provider default (e.g. the geneve/vxlan value); set e.g. `1500` to force a fixed MTU. |
 
 When the scheduler or debug triggers are enabled, the management port also exposes
 operator triggers such as `POST :8081/debug/gen-hmac-key` (mint an Admin API key —

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -150,6 +151,11 @@ func run() error {
 	mailBusiness := os.Getenv("STRATOS_MAIL_BUSINESS_NAME")
 	if mailBusiness == "" {
 		mailBusiness = "Stratos"
+	}
+	// STRATOS_DEFAULT_NETWORK_MTU stamps client-created networks with a fixed MTU; unset/0 leaves it
+	// to neutron's provider default (e.g. the geneve/vxlan value).
+	if v, err := strconv.Atoi(os.Getenv("STRATOS_DEFAULT_NETWORK_MTU")); err == nil && v > 0 {
+		providers.SetDefaultNetworkMTU(v)
 	}
 	integrationStore := pg.C("thirdPartyIntegration")
 	envMailer := mail.FromEnv()

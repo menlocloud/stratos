@@ -180,6 +180,13 @@ func NewWriteService(w Writer, repo *cloud.Repo) *WriteService {
 	return &WriteService{w: w, repo: repo}
 }
 
+// defaultNetworkMTU is the deployment-wide MTU stamped on client-created networks (0 = leave unset,
+// so neutron uses the provider default). Set once at startup from config via SetDefaultNetworkMTU.
+var defaultNetworkMTU int
+
+// SetDefaultNetworkMTU sets the process-wide default network MTU (from STRATOS_DEFAULT_NETWORK_MTU).
+func SetDefaultNetworkMTU(m int) { defaultNetworkMTU = m }
+
 // CreateRequest is the controller body: a type + free-form data.
 type CreateRequest struct {
 	Type string         `json:"type"`
@@ -199,8 +206,15 @@ func (s *WriteService) Create(ctx context.Context, serviceID, region, projectID,
 
 	switch req.Type {
 	case cloud.TypeNetwork:
+		// MTU: an explicit per-request mtu wins, else the deployment default (0 = leave unset →
+		// neutron's provider default, e.g. the geneve/vxlan value).
+		netMTU := mint(d, "mtu")
+		if netMTU == 0 {
+			netMTU = defaultNetworkMTU
+		}
 		net, err := s.w.CreateNetwork(ctx, client.CreateNetworkOpts{
 			Name: mstr(d, "name"), AvailabilityZoneHints: mstrs(d, "availabilityZones"),
+			MTU: netMTU,
 		})
 		if err != nil {
 			return nil, err
@@ -815,8 +829,12 @@ func (s *WriteService) Action(ctx context.Context, serviceID, projectID, externa
 		// its externalId); in DELETE_INTERFACE it is passed straight to neutron as a PORT id.
 		switch action {
 		case "ADD_INTERFACE":
-			subnetExtID := s.resolveExtID(ctx, mstr(data, "interfaceId"))
-			return cr, s.w.AddRouterInterface(ctx, externalID, subnetExtID)
+			// interfaceId is the subnet's neutron external id. Subnets have no cache row of their own
+			// (their ids live on the parent NETWORK doc), so resolveExtID — a cache-id→externalId
+			// lookup — always misses and would send an empty subnet id. Pass it straight through like
+			// DELETE_INTERFACE's port id; the client is scoped to the project's tenant, so neutron
+			// enforces ownership.
+			return cr, s.w.AddRouterInterface(ctx, externalID, mstr(data, "interfaceId"))
 		case "DELETE_INTERFACE":
 			return cr, s.w.RemoveRouterInterfaceByPort(ctx, externalID, mstr(data, "interfaceId"))
 		case "ADD_EXTERNAL_GATEWAY":

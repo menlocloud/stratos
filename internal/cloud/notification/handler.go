@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -94,14 +95,24 @@ func (h *Handler) receive(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.BadRequest("Invalid request body"))
 		return
 	}
+	// Apply the change in the BACKGROUND and return 200 immediately. Handle re-fetches the resource
+	// live from OpenStack, which can take longer than the notifier's HTTP timeout; blocking on it
+	// makes the notifier time out and retry-storm the same message. The context is detached (the
+	// request's is canceled once we return) with its own deadline. The periodic sync is the safety
+	// net if the async apply fails.
 	if h.svc != nil {
-		if err := h.svc.Handle(r.Context(), serviceID, region, msg); err != nil && h.log != nil {
-			// Log the failure and move on (fire-and-forget).
-			h.log.Error("os-notification process", "serviceId", serviceID, "region", region,
-				"eventType", msg.EventType, "err", err)
-		} else if err == nil && h.notify != nil {
-			h.notify(serviceID, region, msg.EventType)
-		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := h.svc.Handle(ctx, serviceID, region, msg); err != nil {
+				if h.log != nil {
+					h.log.Error("os-notification process", "serviceId", serviceID, "region", region,
+						"eventType", msg.EventType, "err", err)
+				}
+			} else if h.notify != nil {
+				h.notify(serviceID, region, msg.EventType)
+			}
+		}()
 	}
-	httpx.Empty(w) // always 200
+	httpx.Empty(w) // always 200, fast
 }

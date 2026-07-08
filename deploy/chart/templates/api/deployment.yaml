@@ -120,6 +120,10 @@ spec:
             - name: STRATOS_JOBS_RABBIT_FANOUT
               value: "true"
             {{- end }}
+            {{- if .Values.api.network.defaultMtu }}
+            - name: STRATOS_DEFAULT_NETWORK_MTU
+              value: {{ .Values.api.network.defaultMtu | quote }}
+            {{- end }}
             {{- if .Values.api.mail.smtp.host }}
             - name: STRATOS_MAIL_SMTP_HOST
               value: {{ .Values.api.mail.smtp.host | quote }}

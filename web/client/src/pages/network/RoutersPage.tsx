@@ -63,8 +63,8 @@ export default function RoutersPage() {
   const externalNets = (networks ?? []).filter((n) => n.data?.network?.["router:external"] === true)
 
   // Subnet candidates for ADD_INTERFACE — subnets have no cache docs of their own; their ids live
-  // on the parent NETWORK doc (data.network.subnets). Go resolveExtID falls back to the raw id, so
-  // passing the raw subnet UUID works.
+  // on the parent NETWORK doc (data.network.subnets). We send the raw subnet UUID (its neutron
+  // external id); the backend passes it straight to neutron, which enforces the tenant scope.
   const subnetOptions = (networks ?? []).flatMap((n) => {
     const subs = (n.data?.network?.subnets as string[] | undefined) ?? []
     return subs.map((s) => ({ id: s, label: `${networkName(n)} — ${s.slice(0, 8)}…` }))

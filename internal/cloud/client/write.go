@@ -15,6 +15,7 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/volumeattach"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/layer3/floatingips"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/layer3/routers"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/mtu"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/portsecurity"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/security/groups"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/security/rules"
@@ -55,6 +56,7 @@ type CreateNetworkOpts struct {
 	Name                  string
 	AdminStateUp          *bool    // nil → true
 	AvailabilityZoneHints []string // neutron availability_zone_hints
+	MTU                   int      // 0 → don't set (OpenStack picks the provider default)
 }
 
 // CreateNetwork creates an INTERNAL Neutron network. Returns the
@@ -68,7 +70,13 @@ func (c *Client) CreateNetwork(ctx context.Context, o CreateNetworkOpts) (map[st
 	if o.AdminStateUp != nil {
 		asu = *o.AdminStateUp
 	}
-	n, err := networks.Create(ctx, nc, networks.CreateOpts{Name: o.Name, AdminStateUp: &asu, AvailabilityZoneHints: o.AvailabilityZoneHints}).Extract()
+	base := networks.CreateOpts{Name: o.Name, AdminStateUp: &asu, AvailabilityZoneHints: o.AvailabilityZoneHints}
+	// MTU rides via the mtu extension; 0 leaves it unset so neutron uses the provider default.
+	var builder networks.CreateOptsBuilder = base
+	if o.MTU > 0 {
+		builder = mtu.CreateOptsExt{CreateOptsBuilder: base, MTU: o.MTU}
+	}
+	n, err := networks.Create(ctx, nc, builder).Extract()
 	if err != nil {
 		return nil, err
 	}
