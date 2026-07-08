@@ -27,18 +27,30 @@ func (p *VolumeProvider) List(ctx context.Context) ([]cloud.CloudResource, error
 	if err != nil {
 		return nil, err
 	}
+	return volumesToResources(vols, p.region, p.projectID), nil
+}
+
+// volumesToResources maps Cinder volumes → CloudResources. Info.CreatedAt carries cinder's real
+// created_at so billing accrues from the volume's true age (clamped to the cycle start), not the
+// first-sync time — see the billingresource createdAt resolution.
+func volumesToResources(vols []client.Volume, region, projectID string) []cloud.CloudResource {
 	out := make([]cloud.CloudResource, 0, len(vols))
 	for _, v := range vols {
-		out = append(out, cloud.CloudResource{
+		cr := cloud.CloudResource{
 			Type:       cloud.TypeVolume,
 			ExternalID: v.ID,
-			Region:     p.region,
-			ProjectID:  p.projectID,
+			Region:     region,
+			ProjectID:  projectID,
 			Data: map[string]any{"volume": map[string]any{
 				"id": v.ID, "name": v.Name, "size": v.Size, "status": v.Status,
 				"volume_type": v.VolumeType, "availability_zone": v.AvailabilityZone, "bootable": v.Bootable,
 			}},
-		})
+		}
+		if !v.CreatedAt.IsZero() {
+			created := v.CreatedAt
+			cr.Info = &cloud.Info{CreatedAt: &created}
+		}
+		out = append(out, cr)
 	}
-	return out, nil
+	return out
 }

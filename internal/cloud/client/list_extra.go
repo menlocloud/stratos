@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2/openstack"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
@@ -21,7 +22,8 @@ type Volume struct {
 	Status           string
 	VolumeType       string
 	AvailabilityZone string
-	Bootable         string // cinder returns "true"/"false" as a string
+	Bootable         string    // cinder returns "true"/"false" as a string
+	CreatedAt        time.Time // cinder's real created_at → billing accrual start (not the sync time)
 }
 
 // ListVolumes returns the project's Cinder volumes (read-only).
@@ -43,6 +45,7 @@ func (c *Client) ListVolumes(ctx context.Context) ([]Volume, error) {
 		out = append(out, Volume{
 			ID: v.ID, Name: v.Name, Size: v.Size, Status: v.Status,
 			VolumeType: v.VolumeType, AvailabilityZone: v.AvailabilityZone, Bootable: v.Bootable,
+			CreatedAt: v.CreatedAt,
 		})
 	}
 	return out, nil

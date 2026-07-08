@@ -141,15 +141,21 @@ func Reconcile(ctx context.Context, p Provider, repo *cloud.Repo, serviceID stri
 			}
 			_ = repo.StampCreatedAtIfNull(ctx, serviceID, r.ExternalID, heal)
 		}
-		// isNeededToUpdate: skip the write when the cloud object is unchanged. A KeyedComparer
-		// provider uses the per-key compareMaps (number-width + list-order tolerant); others
-		// fall back to the whole-data JSON compare.
-		if kc, ok := p.(KeyedComparer); ok {
-			if dataEqualKeyed(cached.Data, r.Data, kc.CompareKeys()) {
+		// One-time heal: a doc cached before its provider supplied the real cloud created_at (Info)
+		// gets it stamped so billing accrues from true age, not first-sync time. Bypass the
+		// unchanged-data skip until Info.CreatedAt lands (self-limiting — once set, this is false).
+		infoHeal := r.Info != nil && r.Info.CreatedAt != nil && (cached.Info == nil || cached.Info.CreatedAt == nil)
+		// isNeededToUpdate: skip the write when the cloud object is unchanged (unless healing Info). A
+		// KeyedComparer provider uses the per-key compareMaps (number-width + list-order tolerant);
+		// others fall back to the whole-data JSON compare.
+		if !infoHeal {
+			if kc, ok := p.(KeyedComparer); ok {
+				if dataEqualKeyed(cached.Data, r.Data, kc.CompareKeys()) {
+					continue
+				}
+			} else if dataEqual(cached.Data, r.Data) {
 				continue
 			}
-		} else if dataEqual(cached.Data, r.Data) {
-			continue
 		}
 		t := now
 		r.UpdatedAt = &t
