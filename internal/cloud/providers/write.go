@@ -1087,6 +1087,24 @@ func (s *WriteService) Delete(ctx context.Context, serviceID, externalID string)
 	if cr == nil {
 		return nil
 	}
+	if err := s.deleteCloudObject(ctx, cr); err != nil {
+		return err
+	}
+	return s.repo.DeleteAndArchive(ctx, cr, time.Now().UTC())
+}
+
+// DeleteResource deletes the cloud object for an already-resolved resource that has NO cache row —
+// the live-listed types (floating IPs, ports, security groups) the FE deletes by their neutron
+// external id. Nothing to archive (they were never cached).
+func (s *WriteService) DeleteResource(ctx context.Context, cr *cloud.CloudResource) error {
+	return s.deleteCloudObject(ctx, cr)
+}
+
+// deleteCloudObject dispatches the type-specific cloud delete for a resolved resource (cached or
+// live-resolved).
+func (s *WriteService) deleteCloudObject(ctx context.Context, cr *cloud.CloudResource) error {
+	externalID := cr.ExternalID
+	var err error
 	switch cr.Type {
 	case cloud.TypeNetwork:
 		err = s.w.DeleteNetwork(ctx, externalID)
@@ -1158,10 +1176,7 @@ func (s *WriteService) Delete(ctx context.Context, serviceID, externalID string)
 	default:
 		return fmt.Errorf("unsupported delete type %q", cr.Type)
 	}
-	if err != nil {
-		return err
-	}
-	return s.repo.DeleteAndArchive(ctx, cr, time.Now().UTC())
+	return err
 }
 
 // resolveExtID maps a Stratos CloudResource CACHE id to its OpenStack externalId, REQUIRING the

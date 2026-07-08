@@ -730,11 +730,29 @@ func (h *Handler) cloudDelete(w http.ResponseWriter, r *http.Request) {
 	// resource (WriteService.Delete resolves by {serviceId, externalId} with no project filter).
 	resourceID := chi.URLParam(r, "resourceId")
 	cr, ok := h.ownedResource(r.Context(), resourceID, proj)
+	if ok {
+		if err := ws.Delete(r.Context(), svcID, cr.ExternalID); err != nil {
+			h.fail(w, err)
+			return
+		}
+		h.projectAudit(u, proj, "CLOUD_RESOURCE_DELETE")
+		httpx.Accepted(w)
+		return
+	}
+	// Live-listed types (floating IPs, ports, security groups) have no cache row — the FE id is the
+	// neutron external id. Resolve it via the TENANT-scoped client, which only sees this project's
+	// tenant (so a successful resolve IS the ownership proof), then delete by type.
+	cc, ok := h.tryTenantClient(r.Context(), proj, svcID)
 	if !ok {
 		h.fail(w, httpx.NotFound("Resource not found"))
 		return
 	}
-	if err := ws.Delete(r.Context(), svcID, cr.ExternalID); err != nil {
+	live := liveResolveByExternalID(r.Context(), cc, resourceID, svcID, h.regionFor(proj, svcID), proj.ID)
+	if live == nil {
+		h.fail(w, httpx.NotFound("Resource not found"))
+		return
+	}
+	if err := ws.DeleteResource(r.Context(), live); err != nil {
 		h.fail(w, err)
 		return
 	}
