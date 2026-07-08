@@ -64,6 +64,9 @@ func (p *ServerProvider) List(ctx context.Context) ([]cloud.CloudResource, error
 						"ram":   s.RAM,
 						"vcpus": s.VCPUs,
 						"disk":  s.Disk,
+						// extra_specs feeds GPU rating (gpu_model/gpu_count) — without it a
+						// GPU server bills zero. Always present (possibly empty).
+						"extra_specs": s.FlavorExtraSpecs,
 					},
 					"image": map[string]any{"id": s.ImageID},
 				},

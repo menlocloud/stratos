@@ -19,13 +19,16 @@ import (
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
 
-// UnpricedFlavor is one live flavor with no matching price rule.
+// UnpricedFlavor is one live flavor with a pricing gap. Reason distinguishes a flavor
+// matching NO rule at all from a GPU flavor whose generic (CPU/RAM) rules match but no
+// GPU-aware rule does — the GPU devices themselves would bill zero.
 type UnpricedFlavor struct {
 	Region   string `json:"region"`
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	GpuModel string `json:"gpuModel,omitempty"`
 	GpuCount int    `json:"gpuCount,omitempty"`
+	Reason   string `json:"reason"` // "no rule" | "no gpu rule"
 }
 
 // pricePlanTimeUnits are the rule time units a plan can price on.
@@ -44,6 +47,25 @@ func (h *Handler) unpricedFlavors(w http.ResponseWriter, r *http.Request) {
 	rules := []pricing.PricePlanRule{}
 	for _, tu := range pricePlanTimeUnits {
 		rules = append(rules, pricing.ApplicableRules(plans, h.pricing.RuleSource(ctx), tu)...)
+	}
+	// GPU-aware rules: price gpu_count or filter on gpu_model. A GPU flavor that matches
+	// only generic rules (per-vCPU/RAM) still runs its GPU devices for free — flag it.
+	gpuRules := []pricing.PricePlanRule{}
+	for _, rule := range rules {
+		aware := false
+		for _, p := range rule.Prices {
+			if p.AttributeName == "gpu_count" {
+				aware = true
+			}
+		}
+		for _, f := range rule.Filters {
+			if f.AttributeName == "gpu_model" {
+				aware = true
+			}
+		}
+		if aware {
+			gpuRules = append(gpuRules, rule)
+		}
 	}
 	var instanceType *pricing.BillingResourceType
 	for _, t := range billingresource.Catalog() {
@@ -64,7 +86,7 @@ func (h *Handler) unpricedFlavors(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		for _, f := range fs {
-			model, count := cloud.GPUFromSpecStrings(f.ExtraSpecs)
+			model, count := cloud.GPUFromFlavor(f.ExtraSpecs)
 			res := &pricing.BillingResource{
 				ResourceType: "instance",
 				Values: map[string]any{
@@ -75,15 +97,19 @@ func (h *Handler) unpricedFlavors(w http.ResponseWriter, r *http.Request) {
 				},
 				BillingResourceType: instanceType,
 			}
-			priced := false
-			for _, tu := range pricePlanTimeUnits {
-				if rs, err := engine.ApplyPricePlanRules(rules, res, tu); err == nil && len(rs) > 0 {
-					priced = true
-					break
+			matchesAny := func(set []pricing.PricePlanRule) bool {
+				for _, tu := range pricePlanTimeUnits {
+					if rs, err := engine.ApplyPricePlanRules(set, res, tu); err == nil && len(rs) > 0 {
+						return true
+					}
 				}
+				return false
 			}
-			if !priced {
-				out = append(out, UnpricedFlavor{Region: region, ID: f.ID, Name: f.Name, GpuModel: model, GpuCount: count})
+			switch {
+			case !matchesAny(rules):
+				out = append(out, UnpricedFlavor{Region: region, ID: f.ID, Name: f.Name, GpuModel: model, GpuCount: count, Reason: "no rule"})
+			case count > 0 && !matchesAny(gpuRules):
+				out = append(out, UnpricedFlavor{Region: region, ID: f.ID, Name: f.Name, GpuModel: model, GpuCount: count, Reason: "no gpu rule"})
 			}
 		}
 	}

@@ -6,17 +6,28 @@ import (
 )
 
 // GPUFromFlavor derives the GPU model alias + device count from a nova flavor's
-// extra specs (values arrive as any JSON scalar after the cloudResource cache round-trip).
+// extra specs. Accepts either map shape — map[string]string straight off the cloud
+// client, or map[string]any after the cloudResource cache round-trip — so no call
+// site can silently miss GPUs on a type assertion.
 //
 // Primary source: `pci_passthrough:alias` = "<alias>:<count>[,<alias>:<count>…]" —
 // model = first alias, count = total across entries.
 // Fallback: `resources:VGPU` = "<count>" → model "vgpu".
 //
 // The alias is normalized (lowercase, "_"→"-") to match the placement-trait vocabulary
-// (CUSTOM_PCI_A100_80GB → "a100-80gb") shared by gpu-info capacity and project GPU quota,
-// so pricing rules, capacity and quota all key on one model name.
-func GPUFromFlavor(extraSpecs map[string]any) (model string, count int) {
-	if extraSpecs == nil {
+// (CUSTOM_PCI_NVIDIA_A6000 → "nvidia-a6000") shared by gpu-info capacity and project GPU
+// quota, so pricing rules, capacity and quota all key on one model name.
+func GPUFromFlavor(specs any) (model string, count int) {
+	var extraSpecs map[string]any
+	switch m := specs.(type) {
+	case map[string]any:
+		extraSpecs = m
+	case map[string]string:
+		extraSpecs = make(map[string]any, len(m))
+		for k, v := range m {
+			extraSpecs[k] = v
+		}
+	default:
 		return "", 0
 	}
 	if alias, ok := extraSpecs["pci_passthrough:alias"].(string); ok && strings.TrimSpace(alias) != "" {
@@ -47,17 +58,8 @@ func GPUFromFlavor(extraSpecs map[string]any) (model string, count int) {
 }
 
 // NormalizeGPUAlias lowercases and dash-normalizes a GPU alias / trait suffix so
-// "A100_80GB" (from trait CUSTOM_PCI_A100_80GB) and "a100-80gb" (pci alias) compare equal.
+// "NVIDIA_A6000" (from trait CUSTOM_PCI_NVIDIA_A6000) and "nvidia-a6000" (pci alias)
+// compare equal.
 func NormalizeGPUAlias(s string) string {
 	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "_", "-")
-}
-
-// GPUFromSpecStrings adapts a live (typed) flavor extra-specs map to GPUFromFlavor —
-// the cloud client returns map[string]string, the cached docs map[string]any.
-func GPUFromSpecStrings(specs map[string]string) (model string, count int) {
-	m := make(map[string]any, len(specs))
-	for k, v := range specs {
-		m[k] = v
-	}
-	return GPUFromFlavor(m)
 }

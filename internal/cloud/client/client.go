@@ -407,18 +407,23 @@ type Server struct {
 	RAM              int // MB
 	VCPUs            int
 	Disk             int // GB
+	// FlavorExtraSpecs feeds GPU rating (pci_passthrough:alias) — the sync cache MUST
+	// carry it or GPU servers silently bill zero (rules filter on gpu_model).
+	FlavorExtraSpecs map[string]string
 	Metadata         map[string]string
 	Created          time.Time
 	Updated          time.Time
 }
 
 // ListServers returns the project's Nova servers (detail), resolving each server's flavor
-// (cached by id) so ram/vcpus/disk/originalName are populated for the rating mapping. READ-ONLY.
+// (cached by id) so ram/vcpus/disk/originalName AND extra_specs (GPU rating) are populated
+// for the rating mapping. READ-ONLY.
 func (c *Client) ListServers(ctx context.Context) ([]Server, error) {
 	cc, err := openstack.NewComputeV2(c.provider, c.endpointOpts())
 	if err != nil {
 		return nil, err
 	}
+	cc.Microversion = flavorMicroversion
 	pages, err := servers.List(cc, servers.ListOpts{}).AllPages(ctx)
 	if err != nil {
 		return nil, err
@@ -447,6 +452,10 @@ func (c *Client) ListServers(ctx context.Context) ([]Server, error) {
 			}
 			if f != nil {
 				srv.FlavorName, srv.RAM, srv.VCPUs, srv.Disk = f.Name, f.RAM, f.VCPUs, f.Disk
+				srv.FlavorExtraSpecs = f.ExtraSpecs
+				if srv.FlavorExtraSpecs == nil {
+					srv.FlavorExtraSpecs = map[string]string{}
+				}
 			}
 		}
 		out = append(out, srv)

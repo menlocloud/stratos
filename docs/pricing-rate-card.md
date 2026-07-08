@@ -40,26 +40,30 @@ set ~3–5% under RunPod headline; final calibration = operator decision at seed
 Formula: vCPU $0.008/hr + RAM $0.004/GB/hr. Root disk bundled ($0) like DO; block storage
 is billed separately.
 
-## GPU per-model rates ($/GPU/hr, on-demand)
+## GPU per-model rates ($/GPU/hr, on-demand) — the actual fleet
 
-| gpu_model (alias) | Ours | RunPod | Lambda |
-|---|---|---|---|
-| rtx-4090 | **0.65** | 0.69 | — |
-| rtx-5090 | **0.95** | 0.99 | — |
-| l40s | **0.95** | 0.99 | — |
-| a40 | **0.42** | 0.44 | — |
-| a6000 | **0.47** | 0.49 | 1.09 |
-| a100-80gb (PCIe) | **1.35** | 1.39 | 1.99 |
-| a100-sxm-80gb | **1.45** | 1.49 | 2.79 |
-| h100-pcie | **2.79** | 2.89 | 3.29 |
-| h100-sxm | **3.19** | 3.29 | 3.99–4.29 |
-| h200 | **4.29** | 4.39 | — |
-| b200 | **5.75** | 5.89 | 6.69–6.99 |
+Aliases below = the cluster's real placement aliases (gpu-info 2026-07-08):
+intel-a60 ×1 · nvidia-3080ti ×1 · nvidia-3090 ×6 · nvidia-4090 ×2 · nvidia-a6000 ×18 ·
+nvidia-pro-4500 ×4 · nvidia-pro-6000 ×24.
 
-Alias vocabulary = the placement trait / pci alias form (`CUSTOM_PCI_A100_80GB` →
-`a100-80gb`) — the same names gpu-info capacity and project GPU quota use. A flavor's
+| gpu_model (alias) | Card | Ours | Benchmark | Confidence |
+|---|---|---|---|---|
+| nvidia-4090 | RTX 4090 24GB | **0.65** | RunPod 0.69 | direct |
+| nvidia-3090 | RTX 3090 24GB | **0.43** | RunPod 0.46 (community) | direct |
+| nvidia-3080ti | RTX 3080 Ti 12GB | **0.29** | none listed — set just under 3090 | interpolated |
+| nvidia-a6000 | RTX A6000 (Ampere) 48GB | **0.47** | RunPod 0.49, Lambda 1.09 | direct |
+| nvidia-pro-6000 | RTX PRO 6000 (Blackwell) 96GB | **1.99** | RunPod 2.09 community / 4.00 secure | direct (community-anchored) |
+| nvidia-pro-4500 | RTX PRO 4500 (Blackwell) 32GB | **0.69** | none listed — between 4090 and pro-6000 | interpolated |
+| intel-a60 | Intel Data Center GPU | **0.15** | no market benchmark | placeholder — operator decision |
+
+pro-6000 is the fleet's flagship (24 devices): anchored to RunPod *community* 2.09 −5%;
+RunPod *secure* is 4.00, so there is room to price higher if positioned as secure-grade —
+operator call. Interpolated/placeholder rows need sign-off before seeding.
+
+Alias vocabulary = the placement trait / pci alias form (`CUSTOM_PCI_NVIDIA_A6000` →
+`nvidia-a6000`) — the same names gpu-info capacity and project GPU quota use. A flavor's
 model+count derive from `pci_passthrough:alias` extra specs (see `internal/cloud/gpu.go`);
-rename the seed rule filters if your aliases differ.
+the seed rule filters use exactly the aliases above.
 
 ## Other resources — benchmarks
 
@@ -71,9 +75,10 @@ rename the seed rule filters if your aliases differ.
   RunPod/Lambda free. Ours: 1 TiB free per server / month, then $0.01/GB (DO-style,
   undercuts AWS hard, still monetizes heavy egress).
 
-Sources: runpod.io/pricing · lambda.ai/service/gpu-cloud · digitalocean.com/pricing
-(droplets, load-balancers, volumes, spaces, bandwidth docs) · aws.amazon.com (ec2
-on-demand, ebs, vpc, elasticloadbalancing, s3) · us.ovhcloud.com/public-cloud/prices.
+Sources: runpod.io/pricing + runpod.io/gpu-models/{rtx-3090,rtx-pro-6000} ·
+lambda.ai/service/gpu-cloud · digitalocean.com/pricing (droplets, load-balancers,
+volumes, spaces, bandwidth docs) · aws.amazon.com (ec2 on-demand, ebs, vpc,
+elasticloadbalancing, s3) · us.ovhcloud.com/public-cloud/prices.
 OVH LB / additional-IP rows are JS-rendered and were secondary-sourced — reverify before
 quoting them externally.
 

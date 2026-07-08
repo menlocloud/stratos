@@ -5,10 +5,12 @@ import "testing"
 func TestGPUFromFlavor(t *testing.T) {
 	cases := []struct {
 		name  string
-		es    map[string]any
+		es    any
 		model string
 		count int
 	}{
+		{"typed string map (live client)", map[string]string{"pci_passthrough:alias": "nvidia-a6000:2"}, "nvidia-a6000", 2},
+		{"non-map input", "garbage", "", 0},
 		{"nil specs", nil, "", 0},
 		{"no gpu keys", map[string]any{"hw:cpu_policy": "dedicated"}, "", 0},
 		{"single alias", map[string]any{"pci_passthrough:alias": "a100-80gb:2"}, "a100-80gb", 2},

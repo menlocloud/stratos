@@ -496,7 +496,7 @@ function QuotaTab({ id, provider }: TabProps) {
 
 // ── 6b. GPU (placement capacity + unpriced-flavor guard) ─────────────────────
 type GpuRegionCapacity = { region: string; gpus: Array<{ name: string; total: number; inUse: number }> }
-type UnpricedFlavor = { region: string; id: string; name: string; gpuModel?: string; gpuCount?: number }
+type UnpricedFlavor = { region: string; id: string; name: string; gpuModel?: string; gpuCount?: number; reason?: string }
 
 function GpuTab({ id }: { id: string }) {
   const capQ = useAdminGet<GpuRegionCapacity[]>(`/admin/service/${id}/gpu-info`)
@@ -567,7 +567,8 @@ function GpuTab({ id }: { id: string }) {
           ) : (
             <div className="space-y-3">
               <p className="text-sm text-destructive">
-                These flavors match no enabled public price rule — servers on them bill ZERO.
+                These flavors have a pricing gap — "no rule" bills the whole server ZERO,
+                "no gpu rule" bills the GPU devices ZERO (only CPU/RAM rules match).
               </p>
               <Table>
                 <TableHeader>
@@ -575,6 +576,7 @@ function GpuTab({ id }: { id: string }) {
                     <TableHead>Flavor</TableHead>
                     <TableHead>Region</TableHead>
                     <TableHead>GPU</TableHead>
+                    <TableHead>Gap</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -585,6 +587,7 @@ function GpuTab({ id }: { id: string }) {
                       <TableCell className="font-mono text-xs">
                         {f.gpuModel ? `${f.gpuModel} × ${f.gpuCount}` : "—"}
                       </TableCell>
+                      <TableCell className="text-xs text-destructive">{f.reason ?? "no rule"}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

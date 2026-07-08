@@ -74,8 +74,7 @@ func (p *ServerProvider) instanceBR(cr *cloud.CloudResource, notEligible bool) *
 	}
 	// GPU pricing dimension: model alias + device count from the flavor's extra specs
 	// (rules filter on gpu_model and price gpu_count). Zero/"" for non-GPU flavors.
-	es, _ := mapAt(flavor, "extra_specs")
-	gpuModel, gpuCount := cloud.GPUFromFlavor(es)
+	gpuModel, gpuCount := cloud.GPUFromFlavor(flavor["extra_specs"])
 	values["gpu_model"] = gpuModel
 	values["gpu_count"] = gpuCount
 	if img, ok := mapAt(server, "image"); ok {

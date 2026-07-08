@@ -50,8 +50,7 @@ func (h *Handler) gpuUsage(ctx context.Context, projectID string) map[string]int
 			continue
 		}
 		fl, _ := srv["flavor"].(map[string]any)
-		es, _ := fl["extra_specs"].(map[string]any)
-		if model, n := cloud.GPUFromFlavor(es); n > 0 {
+		if model, n := cloud.GPUFromFlavor(fl["extra_specs"]); n > 0 {
 			out[model] += n
 		}
 	}
@@ -75,8 +74,7 @@ func (h *Handler) enforceGPUQuota(ctx context.Context, proj *Project, svcID, fla
 	if err != nil {
 		return nil
 	}
-	specs, _ := fl["extra_specs"].(map[string]string)
-	model, want := cloud.GPUFromSpecStrings(specs)
+	model, want := cloud.GPUFromFlavor(fl["extra_specs"])
 	if want == 0 {
 		return nil
 	}

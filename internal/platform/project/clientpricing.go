@@ -225,8 +225,7 @@ func instanceValuesFromServer(cr *cloud.CloudResource) map[string]any {
 		vals["ram_gb"] = ram.DivRound(decimal.NewFromInt(1024), 2)
 	}
 	// Mirror the billing cron's GPU attributes so the client price preview rates GPUs too.
-	es, _ := fl["extra_specs"].(map[string]any)
-	gpuModel, gpuCount := cloud.GPUFromFlavor(es)
+	gpuModel, gpuCount := cloud.GPUFromFlavor(fl["extra_specs"])
 	vals["gpu_model"] = gpuModel
 	vals["gpu_count"] = gpuCount
 	return vals

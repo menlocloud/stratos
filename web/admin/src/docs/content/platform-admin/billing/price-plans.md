@@ -58,13 +58,13 @@ Rules can also carry filters — applying the price only when a resource attribu
 
 Instances expose two GPU attributes derived from the flavor's extra specs
 (`pci_passthrough:alias`): `gpu_count` (number of devices) and `gpu_model` (the alias,
-e.g. `a100-80gb` — the same name the provider's GPU capacity tab and project GPU quotas use).
-Price GPU flavors per model with one rule each:
+e.g. `nvidia-a6000` — the same name the provider's GPU capacity tab and project GPU quotas
+use). Price GPU flavors per model with one rule each:
 
 ```
-Rule "GPU — a100-80gb"   resource type: instance   time unit: hour
-  Filter:  gpu_model  eq  a100-80gb
-  Price:   gpu_count  →  1.35 $/h per device
+Rule "GPU — nvidia-a6000"   resource type: instance   time unit: hour
+  Filter:  gpu_model  eq  nvidia-a6000
+  Price:   gpu_count  →  0.47 $/h per device
 ```
 
 The GPU rule adds on top of your per-vCPU / per-GB rules, so a GPU flavor's total is
