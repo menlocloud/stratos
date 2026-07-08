@@ -104,12 +104,11 @@ a small AMQP consumer that subscribes to the OpenStack notification exchanges
 on its own durable queue and re-posts each raw oslo.messaging body to the region's
 Notifier URI with the `X-Stratos-Notification-Secret` header.
 
-Build and push the image (from the repo root):
-
-```sh
-docker build -f deploy/notifier.Dockerfile -t ghcr.io/menlocloud/stratos-notifier:latest .
-docker push ghcr.io/menlocloud/stratos-notifier:latest
-```
+CI publishes the image to ghcr.io (`.github/workflows/docker.yml`): a `v*` tag
+publishes `ghcr.io/menlocloud/stratos-notifier:<tag>`, a push to `main` publishes
+`:dev-<short-sha>`. Pin the manifest's `image:` to a released tag — no manual
+build needed. (To build locally anyway: `docker build -f deploy/notifier.Dockerfile
+-t ghcr.io/menlocloud/stratos-notifier:dev .`)
 
 Then edit the two secret values in
 [deploy/notifier/stratos-notifier.yaml](../deploy/notifier/stratos-notifier.yaml)

@@ -1,6 +1,6 @@
 name: docker
 
-# Publishes the 3 Stratos images to GitHub Container Registry (ghcr.io):
+# Publishes the 4 Stratos images to GitHub Container Registry (ghcr.io):
 #   push to main   -> tag `dev-<short-sha>`
 #   push a git tag -> that tag name (e.g. v1.2.3)
 #   pull request   -> build only, no push
@@ -28,6 +28,10 @@ jobs:
         include:
           - image: stratos
             dockerfile: deploy/Dockerfile
+            context: .
+            build-args: ""
+          - image: stratos-notifier
+            dockerfile: deploy/notifier.Dockerfile
             context: .
             build-args: ""
           - image: stratos-web

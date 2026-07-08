@@ -1,9 +1,10 @@
 # stratos-notifier — OpenStack RabbitMQ -> Stratos webhook bridge.
 # Run one Deployment per (cloud, region). See docs/openstack-notifications.md.
 #
-# Build & push the image (from the repo root):
-#   docker build -f deploy/notifier.Dockerfile -t ghcr.io/menlocloud/stratos-notifier:latest .
-#   docker push ghcr.io/menlocloud/stratos-notifier:latest
+# The image is built & pushed by CI (.github/workflows/docker.yml): a v* tag publishes
+#   ghcr.io/menlocloud/stratos-notifier:<tag>, and pushes to main publish :dev-<short-sha>.
+# Pin the `image:` below to a released tag. To build locally instead:
+#   docker build -f deploy/notifier.Dockerfile -t ghcr.io/menlocloud/stratos-notifier:dev .
 #
 # Fill in the two secrets below, then:
 #   kubectl apply -f deploy/notifier/stratos-notifier.yaml
@@ -39,7 +40,7 @@ spec:
     spec:
       containers:
         - name: notifier
-          image: ghcr.io/menlocloud/stratos-notifier:latest
+          image: ghcr.io/menlocloud/stratos-notifier:v0.3.16 # pin to a released tag
           env:
             # ── source: your OpenStack RabbitMQ ──
             - name: RABBITMQ_ADDRESSES
