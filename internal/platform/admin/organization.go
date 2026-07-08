@@ -68,6 +68,70 @@ func (h *Handler) routeOrganization(r chi.Router) {
 	r.Put("/organizations/{id}/member/{userSub}/role", h.organizationUpdateMemberRole)
 	r.Post("/organizations/{id}/member", h.organizationAddMember)
 	r.Delete("/organizations/{id}/member/{userSub}", h.organizationRemoveMember)
+	r.Post("/organizations/{id}/billing-profile", h.organizationCreateBillingProfile)
+}
+
+// organizationCreateBillingProfile creates the owner-populated billing profile for an EXISTING
+// org that has none (the state an admin-created org lands in when createBillingProfile wasn't set,
+// e.g. under an operator-only self-service lock). Idempotent: returns the org unchanged when it
+// already has a profile. Builds the profile from the org's OWNER member via
+// billing.CreateForOrganization — the same path as client onboarding. ADMIN_ORGANIZATION_UPDATE.
+func (h *Handler) organizationCreateBillingProfile(w http.ResponseWriter, r *http.Request) {
+	if !h.require(w, r, orgUpdatePerm) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	org, err := h.repo.OrgFindByID(r.Context(), id)
+	if httpx.WriteError(w, err) {
+		return
+	}
+	if org == nil {
+		httpx.WriteError(w, httpx.NotFound("Organization not found"))
+		return
+	}
+	if bpID, _ := org["billingProfileId"].(string); bpID != "" {
+		// Already has one — no-op (idempotent).
+		dto, derr := h.orgToDto(r.Context(), org)
+		if httpx.WriteError(w, derr) {
+			return
+		}
+		httpx.OK(w, dto)
+		return
+	}
+	// Find the org's OWNER member (members live in organization_members, roles is an array).
+	ownerDoc, err := h.repo.FindOneBy(r.Context(), "organization_members",
+		pgdoc.M{"organizationId": id, "roles": pgdoc.M{"$contains": "OWNER"}})
+	if httpx.WriteError(w, err) {
+		return
+	}
+	if ownerDoc == nil {
+		httpx.WriteError(w, httpx.BadRequest("Organization has no owner"))
+		return
+	}
+	ownerSub, _ := ownerDoc["sub"].(string)
+	owner, err := h.users.FindBySub(r.Context(), ownerSub)
+	if httpx.WriteError(w, err) {
+		return
+	}
+	if owner == nil {
+		httpx.WriteError(w, httpx.BadRequest("Organization owner user not found"))
+		return
+	}
+	bpID, err := h.billing.CreateForOrganization(r.Context(), id, billing.Owner{
+		Sub: owner.Sub, Email: owner.Email, FirstName: owner.FirstName, LastName: owner.LastName, FullName: owner.FullName(),
+	})
+	if httpx.WriteError(w, err) {
+		return
+	}
+	if _, err := h.repo.SetFields(r.Context(), "organization", id, pgdoc.M{"billingProfileId": bpID}); httpx.WriteError(w, err) {
+		return
+	}
+	org["billingProfileId"] = bpID
+	dto, err := h.orgToDto(r.Context(), org)
+	if httpx.WriteError(w, err) {
+		return
+	}
+	httpx.OK(w, dto)
 }
 
 // createOrganizationReq is the create-organization request body (name required).

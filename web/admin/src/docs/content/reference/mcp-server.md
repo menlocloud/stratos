@@ -51,7 +51,7 @@ API-key principals always get the **admin toolset**. Treat the pair like any adm
 The core directory tools wrap the [Admin API](/docs/reference/overview):
 
 - Reads: `list_users`, `get_user`, `list_organizations`, `get_organization`, `list_org_members`, `list_projects`, `get_project`, `list_billing_profiles`, `get_billing_profile`, `list_bills`, `get_bill`, `list_account_credits`, `get_account_credit`, `list_service_providers`, `get_service_provider`.
-- Writes: `create_user`, `delete_user`, `create_organization`, `create_project`, `provision_project`, `activate_billing_profile`, `suspend_billing_profile`, `resume_billing_profile`, `create_account_credit`, `delete_account_credit`.
+- Writes: `create_user`, `delete_user`, `create_organization`, `create_organization_billing_profile`, `create_project`, `provision_project`, `activate_billing_profile`, `suspend_billing_profile`, `resume_billing_profile`, `create_account_credit`, `delete_account_credit`.
 
 On top of those, the admin toolset exposes the platform's configuration surfaces (these wrap the internal admin REST routes — same permissions and audit trail as the admin console):
 

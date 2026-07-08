@@ -91,6 +91,16 @@ var adminTools = []toolDef{
 		},
 	},
 
+	{
+		name:   "create_organization_billing_profile",
+		desc:   "Create the billing profile for an EXISTING organization that has none (e.g. an admin-created org under an operator-only self-service lock). Built from the org's OWNER member; idempotent (no-op if one already exists). Returns the organization with its billingProfileId.",
+		method: "POST",
+		path:   "/api/v1/admin/organizations/{id}/billing-profile",
+		params: []param{
+			{name: "id", typ: "string", desc: "Organization id.", required: true, in: "path"},
+		},
+	},
+
 	// ── projects ─────────────────────────────────────────────────────────────
 	{
 		name:   "list_projects",
