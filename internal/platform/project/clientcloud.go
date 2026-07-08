@@ -23,6 +23,16 @@ import (
 // jsonNum renders a decimal string as an unquoted JSON number (BigDecimal money).
 func jsonNum(s string) json.Number { return json.Number(s) }
 
+// emptyCostInfo is the zero CostInfo envelope (every field present) used when a project or its
+// billing profile has no bills yet — mirrors billing.CostInfoMap's shape.
+func emptyCostInfo(zero json.Number) map[string]any {
+	return map[string]any{
+		"lastMonthCosts": zero, "currentMonthCosts": zero,
+		"currentMonthCostsByType": map[string]any{}, "forecastedMonthEndCostsByType": map[string]any{},
+		"lastMonthCostsByType": map[string]any{}, "forecastedMonthEndCosts": zero, "topResourcePrices": []any{},
+	}
+}
+
 // initUI returns {id, menu, kycRequests}. The menu = base
 // provider items (greenfield: none) + the OpenStack service items derived from every non-disabled
 // CLOUD externalService's config.services (keyed by serviceName, {newMenuItem:false, enabled}).
@@ -249,18 +259,17 @@ func (h *Handler) projectCostInfo(w http.ResponseWriter, r *http.Request) {
 			due = jsonNum(v.String())
 		}
 	}
-	// Cost overview from the profile's bills (the usage overview,
-	// minus the live prorated forecast): the current-month OPEN bill's net = currentMonthCosts; its
-	// items grouped by resource CATEGORY = currentMonthCostsByType; each item = a topResourcePrices
-	// entry. The dashboard cost cards + Current-Month-Breakdown chart + Top-Cost-Generators read these.
-	curCost, byType, lastByType, topPrices := zero, map[string]any{}, map[string]any{}, []any{}
-	lastCost := zero
+	// Cost overview from the profile's bills, split by scope so a project dashboard isn't shown the
+	// whole org's cost:
+	//   - projects[p.ID] + the top-level cost cards = THIS project's slice (bill items grouped by
+	//     projectId), so only this project's cost + top resources show.
+	//   - billingProfileCostInfo = the org (billing-profile) aggregate across every project.
+	// Balance/credits/due stay org-level — funds are pooled at the billing profile, not per project.
+	projCostInfo, bpCostInfo := emptyCostInfo(zero), emptyCostInfo(zero)
 	if bpID != "" {
 		if bills, err := h.billing.BillsByBillingProfile(r.Context(), bpID); err == nil {
-			// Build a resource-id → createdAt map from the project's cloud cache so each
-			// topResourcePrices entry carries the resource's real creation time (the rated
-			// resource carries the full CloudResource; the FE created-at helper reads
-			// resource.createdAt). Without it moment(undefined).fromNow() shows "a few seconds ago".
+			// resource-id → createdAt (this project's cache) so each topResourcePrices entry carries
+			// the resource's real creation time; without it the FE renders "a few seconds ago".
 			created := map[string]*time.Time{}
 			if rs, e := h.cloud.FindAllByProjectID(r.Context(), p.ID); e == nil {
 				for i := range rs {
@@ -269,22 +278,21 @@ func (h *Handler) projectCostInfo(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			cur, last, bt, lbt, tp := billing.BillCostBreakdown(bills, now, func(id string) *time.Time { return created[id] })
-			curCost, lastCost, byType, lastByType, topPrices = jsonNum(cur.String()), jsonNum(last.String()), bt, lbt, tp
+			createdFn := func(id string) *time.Time { return created[id] }
+			bpCostInfo = billing.CostInfoMap(billing.BillCostBreakdown(bills, now, createdFn))
+			if ci, ok := billing.ProjectCostInfoMap(bills, now, createdFn)[p.ID].(map[string]any); ok {
+				projCostInfo = ci
+			}
 		}
 	}
-	costInfo := map[string]any{
-		"lastMonthCosts": lastCost, "currentMonthCosts": curCost,
-		"currentMonthCostsByType": byType, "forecastedMonthEndCostsByType": byType,
-		"lastMonthCostsByType": lastByType, "forecastedMonthEndCosts": curCost, "topResourcePrices": topPrices,
-	}
-	// The FE dashboard reads the per-project cost from `projects[projectId]` (controllers/project/index
-	// projectCost = model.costInfo.projects.<id>) for Top-Cost-Generators + the "from the current
-	// project" lines; billingProfileCostInfo is the bp aggregate. Both = this project's cost here.
+	// The FE dashboard reads the per-project cost from `projects[projectId]` (Top-Cost-Generators +
+	// the "from the current project" lines); billingProfileCostInfo is the org aggregate.
 	httpx.OK(w, map[string]any{
-		"projects": map[string]any{p.ID: costInfo}, "billingProfileCostInfo": costInfo,
-		"balance": balance, "dueAmount": due, "accountCredit": credit, "promotionalCredits": promo,
-		"currentMonthCosts": curCost, "lastMonthCosts": lastCost, "proratedMonthEndCosts": curCost, "forecastedMonthEndCosts": curCost,
+		"projects":               map[string]any{p.ID: projCostInfo},
+		"billingProfileCostInfo": bpCostInfo,
+		"balance":                balance, "dueAmount": due, "accountCredit": credit, "promotionalCredits": promo,
+		"currentMonthCosts":      projCostInfo["currentMonthCosts"], "lastMonthCosts": projCostInfo["lastMonthCosts"],
+		"proratedMonthEndCosts":  projCostInfo["currentMonthCosts"], "forecastedMonthEndCosts": projCostInfo["currentMonthCosts"],
 	})
 }
 
