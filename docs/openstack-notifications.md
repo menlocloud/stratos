@@ -28,7 +28,7 @@ waiting for the next sync.
 
 ## Architecture
 
-```
+```text
 OpenStack services  ──emit──▶  RabbitMQ  ──consumed by──▶  notifier bridge  ──HTTP POST──▶  Stratos webhook
 (nova, neutron, …)             (oslo topic)                 (you run this)                   /api/v1/notifications/{id}/{region}
 ```
@@ -76,7 +76,7 @@ After this, OpenStack publishes lifecycle events (e.g. `compute.instance.create.
 In the admin console: **Settings → Cloud providers → [provider]**, the
 **OpenStack Notifier URI** section shows one URL per configured region:
 
-```
+```text
 https://cloud.<your-domain>/api/v1/notifications/<serviceId>/<region>
 ```
 
@@ -98,62 +98,37 @@ returned on reads.
 
 ## Step 3 — Run the notifier bridge
 
-The bridge must:
+Stratos ships the bridge as `stratos-notifier` ([cmd/notifier](../cmd/notifier/main.go)):
+a small AMQP consumer that subscribes to the OpenStack notification exchanges
+(`nova`, `neutron`, `cinder`, `glance`, `heat`, `magnum`, `manila`, `designate`)
+on its own durable queue and re-posts each raw oslo.messaging body to the region's
+Notifier URI with the `X-Stratos-Notification-Secret` header.
 
-1. Connect to your RabbitMQ and subscribe to the OpenStack notification exchanges
-   (`nova`, `neutron`, `cinder`, `glance`, `heat`, `magnum`, `manila`,
-   `designate`) on the `notifications.*` topic, via its own durable queue.
-2. For each message, HTTP `POST` the **raw oslo.messaging JSON body** to the
-   region's Notifier URI with header
-   `X-Stratos-Notification-Secret: <the secret from Step 2>`.
-3. Ignore the response (Stratos always returns `200` — see *Delivery semantics*).
+Build and push the image (from the repo root):
 
-> **Note:** Stratos does not yet publish a prebuilt notifier image. The contract
-> above is small (an AMQP consumer that reposts the body with one header); run
-> any compatible RabbitMQ→HTTP forwarder configured to it, or ask us to ship a
-> `stratos-notifier`.
-
-Example Kubernetes Deployment (one bridge per cloud; fill in the placeholders):
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: stratos-notifier-regionone
-  namespace: menlo-cloud
-spec:
-  replicas: 1
-  selector:
-    matchLabels: { app: stratos-notifier-regionone }
-  template:
-    metadata:
-      labels: { app: stratos-notifier-regionone }
-    spec:
-      containers:
-        - name: notifier
-          image: <your-notifier-image>
-          env:
-            # source: your OpenStack RabbitMQ
-            - name: RABBITMQ_ADDRESSES
-              value: "rabbitmq1:5672,rabbitmq2:5672,rabbitmq3:5672"
-            - name: RABBITMQ_USERNAME
-              value: "openstack"
-            - name: RABBITMQ_PASSWORD
-              valueFrom: { secretKeyRef: { name: notifier-rabbit, key: password } }
-            - name: RABBITMQ_TOPIC
-              value: "notifications.*"
-            - name: RABBITMQ_QUEUE
-              value: "stratos-notifier"
-            - name: RABBITMQ_EXCHANGES
-              value: "nova,neutron,cinder,glance,heat,magnum,manila,designate"
-            # sink: the Stratos webhook (from Step 2) + its secret (from Step 2)
-            - name: TARGET_URL
-              value: "https://cloud.<your-domain>/api/v1/notifications/<serviceId>/RegionOne"
-            - name: TARGET_SECRET
-              valueFrom: { secretKeyRef: { name: notifier-rabbit, key: stratos-secret } }
+```sh
+docker build -f deploy/notifier.Dockerfile -t ghcr.io/menlocloud/stratos-notifier:latest .
+docker push ghcr.io/menlocloud/stratos-notifier:latest
 ```
 
-Run **one bridge per (cloud, region)** — the Notifier URI is region-scoped.
+Then edit the two secret values in
+[deploy/notifier/stratos-notifier.yaml](../deploy/notifier/stratos-notifier.yaml)
+(`rabbitmq-password` and `target-secret`) and the RabbitMQ address / Notifier URI,
+and apply it:
+
+```sh
+kubectl apply -f deploy/notifier/stratos-notifier.yaml
+```
+
+Configuration is all environment variables (see the manifest and the
+[package doc](../cmd/notifier/main.go)): `RABBITMQ_URL` **or**
+`RABBITMQ_ADDRESSES`+`RABBITMQ_USERNAME`+`RABBITMQ_PASSWORD` for the source,
+`TARGET_URL`+`TARGET_SECRET` for the sink, and optional `RABBITMQ_EXCHANGES` /
+`RABBITMQ_QUEUE` / `RABBITMQ_TOPIC` / `RABBITMQ_PREFETCH` / `PORT`.
+
+Run **one bridge per (cloud, region)** — the Notifier URI is region-scoped. The
+bridge exposes `/healthz` on `PORT` (default 7476) for liveness/readiness, and
+exits non-zero on a broker drop so the orchestrator restarts it.
 
 ---
 
@@ -204,4 +179,3 @@ the UI refreshes without a reload.
 4. If nothing happens: check the bridge logs for AMQP connect + POST status,
    confirm the URL region matches, and confirm the `X-Stratos-Notification-Secret`
    header matches the saved secret (a mismatch is a silent `401` at Stratos).
-```

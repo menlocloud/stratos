@@ -1,0 +1,83 @@
+# stratos-notifier — OpenStack RabbitMQ -> Stratos webhook bridge.
+# Run one Deployment per (cloud, region). See docs/openstack-notifications.md.
+#
+# Build & push the image (from the repo root):
+#   docker build -f deploy/notifier.Dockerfile -t ghcr.io/menlocloud/stratos-notifier:latest .
+#   docker push ghcr.io/menlocloud/stratos-notifier:latest
+#
+# Fill in the two secrets below, then:
+#   kubectl apply -f deploy/notifier/stratos-notifier.yaml
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: stratos-notifier-regionone
+  namespace: menlo-cloud
+type: Opaque
+stringData:
+  # Your OpenStack RabbitMQ password.
+  rabbitmq-password: "REPLACE_WITH_RABBITMQ_PASSWORD"
+  # The notification secret you saved in admin (Cloud providers -> provider -> Notifier URI).
+  target-secret: "REPLACE_WITH_STRATOS_NOTIFICATION_SECRET"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stratos-notifier-regionone
+  namespace: menlo-cloud
+  labels: { app: stratos-notifier-regionone }
+spec:
+  replicas: 1
+  # A durable shared queue means multiple replicas would compete for messages; keep it at 1 and let
+  # the orchestrator restart on failure (the bridge exits non-zero on a broker drop).
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: stratos-notifier-regionone }
+  template:
+    metadata:
+      labels: { app: stratos-notifier-regionone }
+    spec:
+      containers:
+        - name: notifier
+          image: ghcr.io/menlocloud/stratos-notifier:latest
+          env:
+            # ── source: your OpenStack RabbitMQ ──
+            - name: RABBITMQ_ADDRESSES
+              value: "REPLACE_WITH_RABBITMQ_HOST:5672" # comma-list for HA, e.g. rabbit1:5672,rabbit2:5672
+            - name: RABBITMQ_USERNAME
+              value: "openstack"
+            - name: RABBITMQ_PASSWORD
+              valueFrom: { secretKeyRef: { name: stratos-notifier-regionone, key: rabbitmq-password } }
+            # Or set RABBITMQ_URL instead (wins over the above; carries vhost), e.g.
+            #   value: "amqp://openstack:pass@rabbit:5672/%2f"
+            - name: RABBITMQ_QUEUE
+              value: "stratos-notifier"
+            - name: RABBITMQ_EXCHANGES
+              value: "nova,neutron,cinder,glance,heat,magnum,manila,designate"
+            - name: RABBITMQ_TOPIC
+              value: "notifications.#"
+            # ── sink: the Stratos Notifier URI + its secret ──
+            - name: TARGET_URL
+              value: "https://cloud-api.menlo.ai/api/v1/notifications/6a4d466f4f34c7e7d800e7a7/RegionOne"
+            - name: TARGET_SECRET
+              valueFrom: { secretKeyRef: { name: stratos-notifier-regionone, key: target-secret } }
+            - name: PORT
+              value: "7476"
+          ports:
+            - containerPort: 7476
+              name: health
+          livenessProbe:
+            httpGet: { path: /healthz, port: 7476 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /healthz, port: 7476 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
