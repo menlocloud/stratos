@@ -15,7 +15,7 @@
   },
   "rules": [
     {
-      "name": "Compute — CPU + RAM components",
+      "name": "Compute: CPU + RAM components",
       "timeUnit": "hour",
       "resourceType": "instance",
       "pricePlanId": "<PLAN_ID>",
@@ -27,15 +27,15 @@
       "filters": [],
       "modifiers": []
     },
-    { "name": "GPU — nvidia-4090 (RTX 4090)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.65" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-4090" }], "modifiers": [] },
-    { "name": "GPU — nvidia-3090 (RTX 3090)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.43" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-3090" }], "modifiers": [] },
-    { "name": "GPU — nvidia-3080ti (RTX 3080 Ti, interpolated)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.29" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-3080ti" }], "modifiers": [] },
-    { "name": "GPU — nvidia-a6000 (RTX A6000 Ampere 48GB)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.47" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-a6000" }], "modifiers": [] },
-    { "name": "GPU — nvidia-pro-6000 (RTX PRO 6000 Blackwell 96GB)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "1.99" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-pro-6000" }], "modifiers": [] },
-    { "name": "GPU — nvidia-pro-4500 (RTX PRO 4500 Blackwell 32GB, interpolated)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.69" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-pro-4500" }], "modifiers": [] },
-    { "name": "GPU — intel-a60 (placeholder, no market benchmark)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.15" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "intel-a60" }], "modifiers": [] },
+    { "name": "GPU:nvidia-4090 (RTX 4090)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.65" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-4090" }], "modifiers": [] },
+    { "name": "GPU:nvidia-3090 (RTX 3090)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.43" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-3090" }], "modifiers": [] },
+    { "name": "GPU:nvidia-3080ti (RTX 3080 Ti, interpolated)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.29" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-3080ti" }], "modifiers": [] },
+    { "name": "GPU:nvidia-a6000 (RTX A6000 Ampere 48GB)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.47" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-a6000" }], "modifiers": [] },
+    { "name": "GPU:nvidia-pro-6000 (RTX PRO 6000 Blackwell 96GB)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "1.99" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-pro-6000" }], "modifiers": [] },
+    { "name": "GPU:nvidia-pro-4500 (RTX PRO 4500 Blackwell 32GB, interpolated)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.69" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-pro-4500" }], "modifiers": [] },
+    { "name": "GPU:intel-a60 (placeholder, no market benchmark)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.15" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "intel-a60" }], "modifiers": [] },
     {
-      "name": "Public egress — 1 TiB free, then $0.01/GB",
+      "name": "Public egress: 1 TiB free, then $0.01/GB",
       "timeUnit": "hour",
       "resourceType": "instance_traffic",
       "pricePlanId": "<PLAN_ID>",
