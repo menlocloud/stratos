@@ -157,6 +157,11 @@ func run() error {
 	if v, err := strconv.Atoi(os.Getenv("STRATOS_DEFAULT_NETWORK_MTU")); err == nil && v > 0 {
 		providers.SetDefaultNetworkMTU(v)
 	}
+	// Data-at-rest encryptor (shared): esSvc encrypts secrets on write; the mail SMTP gateway and
+	// the billing payment-gateway reads decrypt with the SAME key. Declared here (ahead of esSvc at
+	// its original site) so the mail resolver closure below can capture it.
+	enc := textcrypt.New(cfg.Encryption.DefaultKey)
+	billingRepo.SetEncryptor(enc) // decrypt payment-gateway (Stripe) secrets on GetGateway
 	integrationStore := pg.C("thirdPartyIntegration")
 	envMailer := mail.FromEnv()
 	envFrom := os.Getenv("STRATOS_MAIL_FROM")
@@ -167,7 +172,7 @@ func run() error {
 		},
 		// ponytail: DB read per send — emails are infrequent; add a short TTL cache if it ever matters.
 		func(ctx context.Context) (mail.Mailer, string) {
-			if m, from, ok := mail.SMTPFromStore(ctx, integrationStore); ok {
+			if m, from, ok := mail.SMTPFromStore(ctx, integrationStore, enc); ok {
 				return m, from
 			}
 			return envMailer, envFrom
@@ -216,9 +221,9 @@ func run() error {
 	// cloudCli holds the live CloudClient (set in the background once OpenStack auth completes;
 	// declared here so the project handler's write endpoints can resolve it lazily).
 	var cloudCli atomic.Pointer[client.Client]
-	// enc + esSvc are created here (ahead of the admin handler) so the project handler's client
-	// cloud read endpoints (init menu / project services) can resolve external services too.
-	enc := textcrypt.New(cfg.Encryption.DefaultKey)
+	// esSvc is created here (ahead of the admin handler) so the project handler's client cloud read
+	// endpoints (init menu / project services) can resolve external services too. It shares `enc`
+	// (declared above, near the mail gateway) so write-encrypt and read-decrypt use the same key.
 	esSvc := externalservice.NewService(externalservice.NewRepo(pg), enc)
 	projectH := project.NewHandler(
 		projectSvc,
@@ -359,15 +364,15 @@ func run() error {
 	}()
 	// Admin-API SigV4 verification: resolve access keys from hmac_keys. The hmac_keys
 	// collection also holds provider keys (erpCreate) that must NOT grant Admin-API / MCP access, so
-	// the lookup EXCLUDES purpose:"provider". A $ne match also accepts docs with no purpose field, so
-	// legacy admin/MCP keys minted before purpose-scoping (no purpose stamped) still authenticate —
-	// only explicit provider keys are rejected. New admin-api keys carry purpose:"admin-api" (the
-	// admin hmac-keys endpoint + the mgmt gen-hmac-key trigger); provider keys carry purpose:"provider".
+	// the lookup is a POSITIVE allowlist: purpose:"admin-api" only. Every admin-api key writer stamps
+	// this purpose (the admin hmac-keys endpoint + the mgmt gen-hmac-key trigger); provider keys carry
+	// purpose:"provider". A positive match (vs the old $ne:"provider") means any key lacking an explicit
+	// admin-api purpose is rejected rather than defaulted-in — defence in depth against a no-purpose row.
 	hmacLookup := func(ctx context.Context, keyID string) (string, bool) {
 		var doc struct {
 			SecretKey string `json:"secretKey"`
 		}
-		filter := pgdoc.M{"_id": keyID, "purpose": pgdoc.M{"$ne": "provider"}}
+		filter := pgdoc.M{"_id": keyID, "purpose": "admin-api"}
 		found, err := pg.C("hmac_keys").FindOne(ctx, filter, &doc)
 		if err != nil || !found {
 			return "", false
@@ -725,23 +730,6 @@ func run() error {
 				n, err := suspensionJob.ExecuteDunning(r.Context())
 				jobResult(w, map[string]any{"ran": "dunning", "suspended": n}, err)
 			},
-			// gen-hmac-key mints an Admin-API SigV4 key pair on the operator mgmt port. The
-			// secret is returned ONCE here and stored verbatim (stored in clear).
-			"gen-hmac-key": func(w http.ResponseWriter, r *http.Request) {
-				m := md5.Sum([]byte(uuid.NewString()))
-				s := sha1.Sum([]byte(uuid.NewString()))
-				id := "pk" + hex.EncodeToString(m[:])
-				secret := "sk" + hex.EncodeToString(s[:])
-				_, err := pg.C("hmac_keys").InsertOne(r.Context(), pgdoc.M{
-					"_id": id, "secretKey": secret,
-					"description": r.URL.Query().Get("description"),
-					"createdAt":   time.Now().UTC(),
-					// purpose:"admin-api" — this mints an Admin-API/MCP credential; the SigV4 lookup
-					// excludes only purpose:"provider", so this is redundant-safe but explicit.
-					"purpose": "admin-api",
-				})
-				jobResult(w, map[string]any{"id": id, "secretKey": secret}, err)
-			},
 			"run-send-bills": func(w http.ResponseWriter, r *http.Request) {
 				n, err := billSendSvc.SendAllBills(r.Context(), time.Now().UTC())
 				jobResult(w, map[string]any{"ran": "send-bills", "finalized": n}, err)
@@ -820,6 +808,25 @@ func run() error {
 					jobResult(w, nil, errors.New("selftest timeout"))
 				}
 			},
+		}
+		// gen-hmac-key mints an Admin-API SigV4 key pair on the operator mgmt port and is
+		// UNAUTHENTICATED, so it is gated on DebugTriggers ONLY — deliberately NOT the scheduler. A
+		// production billing deploy must set SchedulerEnabled=true to run the charge crons; that must
+		// not also expose unauthenticated key-minting. The secret is returned ONCE and stored verbatim.
+		if cfg.Jobs.DebugTriggers {
+			jobsDebug["gen-hmac-key"] = func(w http.ResponseWriter, r *http.Request) {
+				m := md5.Sum([]byte(uuid.NewString()))
+				s := sha1.Sum([]byte(uuid.NewString()))
+				id := "pk" + hex.EncodeToString(m[:])
+				secret := "sk" + hex.EncodeToString(s[:])
+				_, err := pg.C("hmac_keys").InsertOne(r.Context(), pgdoc.M{
+					"_id": id, "secretKey": secret,
+					"description": r.URL.Query().Get("description"),
+					"createdAt":   time.Now().UTC(),
+					"purpose":     "admin-api",
+				})
+				jobResult(w, map[string]any{"id": id, "secretKey": secret}, err)
+			}
 		}
 	}
 

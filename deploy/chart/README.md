@@ -107,6 +107,7 @@ on purpose — never expose it.
 | `api.jobs.rabbitFanout` | `false` | Charge cron via RabbitMQ fan-out. |
 | `api.applicationYml` | `""` | Optional literal `application.yml` mounted at `/opt/stratos/api/application.yml`. |
 | `api.extraEnv` | `[]` | Raw env passthrough (OpenStack `OS_*`, mail `STRATOS_MAIL_*`, …). |
+| `api.extraVolumes` / `api.extraVolumeMounts` | `[]` | Extra volumes/mounts on the api pod (e.g. mount a private CA — see Self-hosting → Custom CA). |
 | `ui.image.repository` / `admin.image.repository` | `…/stratos-web` / `…/stratos-admin` | SPA images. |
 | `ui.apiUrl` / `admin.apiUrl` | derived | Browser-facing API URL (defaults to `<api.selfUrls.api>/api/v1`). |
 | `auth.main.{issuer,clientId}` | `""` / `stratos-ui` | Customer realm. |

@@ -53,6 +53,12 @@ func (h *Handler) tenantWriteService(ctx context.Context, w http.ResponseWriter,
 		httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud service not available")
 		return nil, "", false
 	}
+	// App-cred tokens are keystone-locked to one project and can't be re-scoped to extProjID —
+	// building a client here would silently write into the app-cred's own project. Fail closed.
+	if es.IsAppCred() {
+		httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "provider uses application-credential auth which cannot be scoped to a tenant project")
+		return nil, "", false
+	}
 	region := p.ServiceRegion(svcID)
 	if region == "" {
 		region = h.cloudRegion
@@ -412,6 +418,11 @@ func (h *Handler) tryTenantClient(ctx context.Context, p *Project, svcID string)
 	}
 	es, err := h.esSvc.Get(ctx, svcID)
 	if err != nil || es == nil {
+		return nil, false
+	}
+	// App-cred tokens can't be re-scoped to extProjID (keystone-locked to one project) — a client
+	// built here would read/write the app-cred's own project, not this tenant. Fail closed.
+	if es.IsAppCred() {
 		return nil, false
 	}
 	region := p.ServiceRegion(svcID)
@@ -1559,6 +1570,16 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.enforceGPUQuota(r.Context(), proj, svcID, strAny(req.Data["flavorId"]), replaced); err != nil {
 			h.fail(w, err)
+			return
+		}
+	}
+
+	// Public-network allow-list on router gateway attach: ADD_EXTERNAL_GATEWAY forwards the
+	// caller's networkId straight to neutron, so — like the router-create path — reject a target
+	// that isn't on the project's allow-list (nil allow-list = all allowed; see publicnetworks.go).
+	if cr != nil && cr.Type == cloud.TypeRouter && action == "ADD_EXTERNAL_GATEWAY" {
+		if netID := strAny(req.Data["networkId"]); netID != "" && !publicNetworkAllowed(proj, netID) {
+			h.fail(w, httpx.BadRequest("External network is not enabled for this project"))
 			return
 		}
 	}

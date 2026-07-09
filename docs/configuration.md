@@ -62,10 +62,11 @@ or external codec) and stored verbatim in each table's `doc` jsonb column.
 
 | Concern | env | file | helm | Default | Meaning |
 |---------|-----|------|------|---------|---------|
-| Default key | `STRATOS_ENCRYPTION_DEFAULT_KEY` | `stratos.encryption.default.key` (alias `default-key`) | `encryption.bcrypt.password` / `encryption.bcrypt.existingPasswordSecret` | — | Key used to encrypt sensitive fields at rest. |
+| Default key | `STRATOS_ENCRYPTION_DEFAULT_KEY` | `stratos.encryption.default.key` (alias `default-key`) | `api.encryptionKey` (or `api.existingSecret`) | — | Key used to encrypt sensitive fields at rest. |
 
-The chart's `encryption.provider` is `bcrypt`; it renders a secret and injects the
-key as env.
+The chart renders `api.encryptionKey` into a Secret and injects it as
+`STRATOS_ENCRYPTION_DEFAULT_KEY`. Alternatively, point `api.existingSecret` at a
+pre-made Secret carrying `db-url` / `rabbitmq-password` / `encryption-key`.
 
 ### Self URLs
 
@@ -73,10 +74,10 @@ Used to build absolute links (mail, redirects, MCP resource metadata).
 
 | Concern | env | file | helm | Meaning |
 |---------|-----|------|------|---------|
-| Base URL | `STRATOS_SELF_BASE_URL` | `stratos.self.base-url` | `global.baseUrl` | Overall public base URL. |
-| API base URL | `STRATOS_SELF_API_BASE_URL` | `stratos.self.api-base-url` | `api.baseUrl` (else derived from ingress) | Public API URL (also the MCP resource base). |
-| UI base URL | `STRATOS_SELF_UI_BASE_URL` | `stratos.self.ui-base-url` | `ui.baseUrl` (else derived) | Customer console URL. |
-| Admin base URL | `STRATOS_SELF_ADMIN_BASE_URL` | `stratos.self.admin-base-url` | `admin.baseUrl` (else derived) | Admin console URL. |
+| Base URL | `STRATOS_SELF_BASE_URL` | `stratos.self.base-url` | `api.selfUrls.base` | Overall public base URL. |
+| API base URL | `STRATOS_SELF_API_BASE_URL` | `stratos.self.api-base-url` | `api.selfUrls.api` | Public API URL (also the MCP resource base). |
+| UI base URL | `STRATOS_SELF_UI_BASE_URL` | `stratos.self.ui-base-url` | `api.selfUrls.ui` | Customer console URL. |
+| Admin base URL | `STRATOS_SELF_ADMIN_BASE_URL` | `stratos.self.admin-base-url` | `api.selfUrls.admin` | Admin console URL. |
 
 ### OIDC realms
 
@@ -85,9 +86,9 @@ identity model. Empty issuer = realm disabled (tokens for it are rejected).
 
 | Realm | env (issuer / client) | file | helm |
 |-------|-----------------------|------|------|
-| Customer (`clients`) | `AUTH_MAIN_OAUTH2_ISSUER_URI` / `AUTH_MAIN_OAUTH2_CLIENT_ID` | `auth.main.oauth2.issuer-uri` / `.client-id` | issuer: `externalOpenid.issuer` (or bundled Keycloak `clients` realm); client: `ui.oauth2.clientId` (`stratos-ui`) |
-| Operator (`master`) | `AUTH_ADMIN_OAUTH2_ISSUER_URI` / `AUTH_ADMIN_OAUTH2_CLIENT_ID` | `auth.admin.oauth2.issuer-uri` / `.client-id` | issuer: `externalOpenid.adminIssuer` (or bundled `master` realm); client: `admin.oauth2.clientId` (`stratos-admin`) |
-| Admin API | `AUTH_ADMIN_API_OAUTH2_ISSUER_URI` / `AUTH_ADMIN_API_OAUTH2_CLIENT_ID` | `auth.admin-api.oauth2.issuer-uri` / `.client-id` | issuer: `adminApi.oauth2.issuerUri`; client: `adminApi.oauth2.clientId` (`stratos-admin-api`) |
+| Customer (`clients`) | `AUTH_MAIN_OAUTH2_ISSUER_URI` / `AUTH_MAIN_OAUTH2_CLIENT_ID` | `auth.main.oauth2.issuer-uri` / `.client-id` | issuer: `auth.main.issuer` (empty ⇒ bundled Keycloak `clients` realm); client: `auth.main.clientId` (`stratos-ui`) |
+| Operator (`master`) | `AUTH_ADMIN_OAUTH2_ISSUER_URI` / `AUTH_ADMIN_OAUTH2_CLIENT_ID` | `auth.admin.oauth2.issuer-uri` / `.client-id` | issuer: `auth.admin.issuer` (empty ⇒ bundled `master` realm); client: `auth.admin.clientId` (`stratos-admin`) |
+| Admin API | `AUTH_ADMIN_API_OAUTH2_ISSUER_URI` / `AUTH_ADMIN_API_OAUTH2_CLIENT_ID` | `auth.admin-api.oauth2.issuer-uri` / `.client-id` | issuer: `auth.adminApi.issuer`; client: `auth.adminApi.clientId` (`stratos-admin-api`) |
 
 ### OpenStack cloud
 
@@ -134,9 +135,10 @@ service uses a no-op mailer and gated email side-effects silently do nothing.
 | From address | `STRATOS_MAIL_FROM` | — | Envelope-from / sender. |
 | Business name | `STRATOS_MAIL_BUSINESS_NAME` | `Stratos` | Sender display / branding in templates. |
 
-Set these in Helm via `api.extraEnvVars`. (The chart's `smtp.*` values render an
-`smtp` block into `application.yml`, but the running service reads mail from the
-`STRATOS_MAIL_*` env vars above — wire mail through `api.extraEnvVars`.)
+Set these in Helm via the first-class `api.mail.smtp.*` block (plus `api.mail.from`),
+which the chart injects into the pod as the `STRATOS_MAIL_*` env vars above
+(see `deploy/chart/templates/api/deployment.yaml`). Mail is env-only — nothing
+renders into `application.yml`.
 
 ### Feature set
 
@@ -147,11 +149,6 @@ imposes no licensed limits. The meaningful **runtime toggles** are the
 scheduled-jobs flags above and per-region service enablement managed at runtime
 (not via this config file).
 
-### Other chart values
-
-`sentry.dsn` renders into `application.yml`, but the current API binary has no
-Sentry integration and does not consume it.
-
 ## Bundled vs external dependencies
 
 The chart can run everything in-cluster or point at your own managed services.
@@ -161,7 +158,7 @@ Toggle the bundled component off and fill in the matching `external*` block:
 |------------|---------------|----------------|
 | PostgreSQL | `postgresql.enabled` (bitnami subchart) or `cnpg.enabled` (CloudNativePG operator) | `externalPostgresql.*` |
 | RabbitMQ | `rabbitmq.enabled` | `externalRabbitmq.*` |
-| Keycloak (OIDC) | `keycloakx.enabled` (codecentric/keycloakx) | `externalOpenid.issuer` / `externalOpenid.adminIssuer` (+ client ids) |
+| Keycloak (OIDC) | `keycloakx.enabled` (codecentric/keycloakx) | set `auth.main.issuer` / `auth.admin.issuer` (+ `auth.adminApi.issuer`) to the external issuer |
 
 For the deployment side — ingress, TLS, Gateway API routes, secrets wiring, and the
 external-IdP checklist — see `deploy/chart/README.md` and

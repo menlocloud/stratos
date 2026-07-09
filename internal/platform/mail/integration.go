@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/menlocloud/stratos/internal/pgdoc"
+	"github.com/menlocloud/stratos/pkg/textcrypt"
 )
 
 // integration.go builds a Mailer from the admin-configured "SMTP" thirdPartyIntegration (Admin →
@@ -13,8 +14,9 @@ import (
 
 // smtpIntegration decodes the "SMTP" thirdPartyIntegration doc. Field keys match the admin
 // integrations page SMTP schema (web/admin IntegrationsPage): config.{domain,port,username,
-// fromName,fromEmail,noAuth} + secret.password. The secret is stored as-provided (the at-rest
-// encryptor is not wired), so no decrypt step is needed here.
+// fromName,fromEmail,noAuth} + secret.password. The password is stored ENCRYPTED at rest (admin
+// write path → esSvc.EncryptSecret) and decrypted here with the passed encryptor; textcrypt is
+// fail-open, so a nil encryptor or a legacy plaintext value passes through unchanged.
 type smtpIntegration struct {
 	Config struct {
 		Domain    string `json:"domain"`
@@ -31,8 +33,10 @@ type smtpIntegration struct {
 
 // SMTPFromStore builds an SMTP Mailer from the "SMTP" thirdPartyIntegration in the given store.
 // Returns ok=false when no SMTP integration is configured, or it lacks host/from — the caller then
-// falls back to the STRATOS_MAIL_* env gateway (FromEnv).
-func SMTPFromStore(ctx context.Context, store *pgdoc.Store) (Mailer, string, bool) {
+// falls back to the STRATOS_MAIL_* env gateway (FromEnv). enc is an OPTIONAL, nil-safe encryptor
+// (variadic so existing 2-arg callers/tests compile unchanged) used to decrypt secret.password;
+// textcrypt fail-open means a nil enc or a legacy plaintext value passes through untouched.
+func SMTPFromStore(ctx context.Context, store *pgdoc.Store, enc ...*textcrypt.Encryptor) (Mailer, string, bool) {
 	if store == nil {
 		return nil, "", false
 	}
@@ -40,6 +44,9 @@ func SMTPFromStore(ctx context.Context, store *pgdoc.Store) (Mailer, string, boo
 	ok, err := store.FindOne(ctx, pgdoc.M{"thirdParty": "SMTP"}, &doc)
 	if err != nil || !ok {
 		return nil, "", false
+	}
+	if len(enc) > 0 && enc[0] != nil {
+		doc.Secret.Password = enc[0].Decrypt(doc.Secret.Password)
 	}
 	c := doc.Config
 	if c.Domain == "" || c.FromEmail == "" { // mirror Config.Enabled(): need host + from

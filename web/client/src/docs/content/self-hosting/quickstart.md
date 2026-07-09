@@ -1,6 +1,6 @@
 # MicroK8s Quickstart
 
-The quickest way to try Stratos is a single-node MicroK8s cluster on one VM. It gives you a fully working platform — API, portal, admin console, Keycloak, PostgreSQL — on a machine you can discard afterward.
+The quickest way to try Stratos is a single-node MicroK8s cluster on one VM. It gives you a fully working platform — API, portal, admin console, PostgreSQL, RabbitMQ — on a machine you can discard afterward. Identity is configured separately: enable the bundled Keycloak or point at your own IdP — see [How Identity Works](/docs/concepts/identity).
 
 ## What you'll need
 
@@ -56,18 +56,55 @@ EOF
 
 ## 3. Install Stratos
 
-Write a minimal `values.yaml` — note MicroK8s's ingress class is `public`:
+Write a minimal `values.yaml` — note MicroK8s's ingress class is `public`. The chart ships no default secrets, so set the required ones (insecure dev values shown here — never reuse them for anything real):
 
 ```yaml
-global:
+api:
+  encryptionKey: "insecure-dev-key-change-me"
+  selfUrls:
+    base: "https://cloud.example.com"
+  # Ingress is per-component; the three share one host, split by path.
   ingress:
     enabled: true
-    hostname: "cloud.example.com"
-    ingressClassName: "public"
+    className: "public"
+    host: "cloud.example.com"
+    path: /api
     annotations:
       cert-manager.io/cluster-issuer: letsencrypt
-    tls: true
+    tls:
+      - hosts: ["cloud.example.com"]
+        secretName: stratos-tls
+ui:
+  ingress:
+    enabled: true
+    className: "public"
+    host: "cloud.example.com"
+    path: /
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    tls:
+      - hosts: ["cloud.example.com"]
+        secretName: stratos-tls
+admin:
+  ingress:
+    enabled: true
+    className: "public"
+    host: "cloud.example.com"
+    path: /stratos_admin
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    tls:
+      - hosts: ["cloud.example.com"]
+        secretName: stratos-tls
+postgresql:
+  auth:
+    password: "stratos"
+rabbitmq:
+  auth:
+    password: "stratos"
 ```
+
+(Equivalently, add `-f deploy/chart/values-dev.yaml` to the install for these dev secrets.)
 
 Then install straight from the OCI registry:
 
@@ -77,7 +114,7 @@ microk8s helm upgrade --install stratos oci://ghcr.io/menlocloud/charts/stratos 
   -f values.yaml
 ```
 
-First boot takes a few minutes: PostgreSQL, RabbitMQ and Keycloak all start, the Keycloak realms get provisioned, and the API waits — via its `wait-for-db` init container — until PostgreSQL answers.
+First boot takes a few minutes: PostgreSQL and RabbitMQ start, and the API waits — via its `wait-for-db` init container — until PostgreSQL answers.
 
 ```sh
 microk8s kubectl -n stratos get pods
@@ -87,7 +124,8 @@ microk8s kubectl -n stratos get pods
 
 - Customer portal: `https://cloud.example.com/`
 - Admin console: `https://cloud.example.com/stratos_admin`
-- Keycloak: `https://auth.cloud.example.com/`
+
+You need an OIDC provider before you can sign in — enable the bundled Keycloak (`keycloakx.enabled: true` plus realm provisioning) or point `auth.*.issuer` at your own IdP; see [How Identity Works](/docs/concepts/identity).
 
 Before anything else, save the encryption key offline:
 

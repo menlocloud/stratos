@@ -81,7 +81,7 @@ type ExternalService struct {
     Type             string          // CLOUD | CPANEL | PAYMENT
     Status           string          // PUBLIC | PRIVATE | DISABLED
     Config           map[string]any  // free-form: identityUrl, provider, regions, services, auth...
-    Secret           any             // the encryptor-encrypted at rest, decrypted in memory on read
+    Secret           any             // encrypted at rest, decrypted in memory on read
 }
 ```
 
@@ -99,7 +99,7 @@ free-form; typed accessors over the known keys live on the struct:
 
 ### Credentials
 
-Secrets are stored **the encryptor-encrypted** and decrypted in place when the service
+Secrets are stored encrypted at rest and decrypted in place when the service
 is loaded (`Service.decrypt` in `externalservice/service.go`, which walks the
 free-form sub-documents and decrypts textual leaves). Never serialize `Secret` —
 its JSON tag is `-`.
@@ -298,9 +298,11 @@ consistent *between* sync passes.
 
 - **Endpoint** — `POST /api/v1/notifications/{externalServiceId}/{region}`
   (`notification/handler.go`). This is the "Notifier URI" configured in
-  OpenStack. It is `permitAll` (ceilometer cannot present a bearer token), and it
-  **always returns 200** — a processing error must not make OpenStack
-  retry-storm. A malformed body is the one 400.
+  OpenStack. It is `permitAll` (ceilometer cannot present a bearer token) but
+  fails closed on a shared secret: a missing/wrong `X-Stratos-Notification-Secret`
+  gets a `401` **before** any cache mutation (`handler.go`, `authorized`). Once
+  authorized it **always returns 200** — a processing error must not make
+  OpenStack retry-storm. A malformed body is the one 400.
 - **Routing** — `TypeForEvent` maps the first dot-segment of `event_type` to a
   resource type: `compute.*` → SERVER (or BAREMETAL_SERVER via the flavor
   check), `volume.*` → VOLUME, `network.*` → NETWORK, `floatingip.*` →

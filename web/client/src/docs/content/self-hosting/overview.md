@@ -9,14 +9,14 @@ Stratos is a cloud billing and self-service platform sitting in front of OpenSta
 - **stratos-api** — the Go backend that serves the REST API, the admin API, and the background jobs (billing, resource sync, notifications).
 - **stratos-web** — the customer portal SPA.
 - **stratos-admin** — the operator/admin SPA, served under `/stratos_admin`.
-- **Dependencies** — **PostgreSQL** (the primary datastore, one JSONB document per aggregate), **RabbitMQ** (messaging), and **Keycloak** (OpenID Connect identity, which you can skip if you bring your own IdP).
+- **Dependencies** — **PostgreSQL** (the primary datastore, one JSONB document per aggregate), **RabbitMQ** (messaging), and, optionally, **Keycloak** (OpenID Connect identity — off by default; enable it or point at your own IdP).
 
 The whole thing is one Helm chart, and every dependency can be bundled with the chart or pointed at an external instance you already run.
 
 ## Before you start
 
 - **A Kubernetes cluster.** A single-node MicroK8s VM is plenty for evaluation — see the [MicroK8s Quickstart](/docs/self-hosting/quickstart).
-- **An OpenID Connect provider.** The chart bundles Keycloak by default, or you federate with an external OIDC provider. See [How Identity Works](/docs/concepts/identity).
+- **An OpenID Connect provider.** The chart can bundle Keycloak (off by default — enable `keycloakx.enabled: true`), or you federate with an external OIDC provider. See [How Identity Works](/docs/concepts/identity).
 - **One or more OpenStack regions** with admin credentials, added after installation from the admin console.
 
 ## The pages in this section

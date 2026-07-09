@@ -24,7 +24,7 @@ A billing profile is rated against the `PUBLIC` plan unless a `SCOPED` plan has 
 
 Open a plan to work on its rules.
 
-<!-- screenshot: /docs-img/price-plan-rules.png — Price plan detail page listing pricing rules with resource type, priced attribute and time unit columns -->
+![Price plan detail listing its pricing rules](/docs-img/price-plan-rules.png)
 
 Each rule holds:
 
@@ -36,7 +36,7 @@ Each rule holds:
 | Price | The amount charged per attribute unit, per time unit. |
 | Time unit | `minute`, `hour`, or `month`. |
 
-<!-- screenshot: /docs-img/price-plan-rule-create.png — Rule creation dialog with a resource type selected and its attribute list expanded -->
+![Add-rule dialog with a resource type selected and its attribute list expanded](/docs-img/price-plan-rule-create.png)
 
 The charge for a single billing tick is:
 

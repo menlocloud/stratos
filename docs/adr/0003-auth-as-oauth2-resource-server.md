@@ -42,7 +42,7 @@ them.
   ships in browser code.
 - **Machine clients** authenticate to `/admin-api/v1` with **AWS Signature
   Version 4**–style signed requests. Access-key pairs live in the `hmac_keys`
-  collection (`id = pk…`, `secretKey = sk…`); `pkg/auth/sigv4.go` recomputes the
+  table (`id = pk…`, `secretKey = sk…`); `pkg/auth/sigv4.go` recomputes the
   canonical-request signature and enforces a 5-minute clock-skew window. Keys are
   minted by an operator command, not self-service.
 - A request context carries either the OIDC-derived principal or the SigV4 key
@@ -54,7 +54,7 @@ them.
   and never store customer passwords.
 - A deployment **must** run and trust an OIDC issuer. The chart bundles Keycloak
   (with its own PostgreSQL) so the default install is self-contained; production
-  can point at an existing IdP via `externalOpenid`.
+  can point at an existing IdP by setting `auth.*.issuer` to that issuer.
 - Realm/client configuration is part of deployment config and must match on both
   the SPA (issuer, client id, PKCE) and the API (issuer, expected audience) or
   tokens are rejected.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/pgdoc"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/textcrypt"
 )
 
 // Repo backs the billingProfile collection (+ reads billingConfiguration for the
@@ -20,22 +21,28 @@ type Repo struct {
 	configs     *pgdoc.Store
 	bills       *pgdoc.Store
 	validations *pgdoc.Store
-	credits     *pgdoc.Store // accountCreditTransaction (the txn log)
-	acctCredits *pgdoc.Store // accountCredit (the spendable balance docs)
-	promoCredit *pgdoc.Store // promotionalCredit
-	collects    *pgdoc.Store // collectTransaction
-	savingPlans *pgdoc.Store // savingsPlan
-	savingCtrs  *pgdoc.Store // savingsContract
-	priceAdjust *pgdoc.Store // priceAdjustmentRule
-	suspensions *pgdoc.Store // suspension (SuspensionProcess)
-	gateways    *pgdoc.Store // thirdPartyIntegration (payment gateways live here too)
-	bankXfers   *pgdoc.Store // bankTransfer (manual bank-transfer deposits)
-	cards       *pgdoc.Store // creditCard (saved cards)
-	cardTxns    *pgdoc.Store // creditCardTransaction
-	promoCodes  *pgdoc.Store // promotionCode (admin-created codes)
-	promoRedeem *pgdoc.Store // promotionCodeRedemption (per-org redemption record)
-	reminders   *pgdoc.Store // reminderNotification (savings-contract expiry reminders)
+	credits     *pgdoc.Store         // accountCreditTransaction (the txn log)
+	acctCredits *pgdoc.Store         // accountCredit (the spendable balance docs)
+	promoCredit *pgdoc.Store         // promotionalCredit
+	collects    *pgdoc.Store         // collectTransaction
+	savingPlans *pgdoc.Store         // savingsPlan
+	savingCtrs  *pgdoc.Store         // savingsContract
+	priceAdjust *pgdoc.Store         // priceAdjustmentRule
+	suspensions *pgdoc.Store         // suspension (SuspensionProcess)
+	gateways    *pgdoc.Store         // thirdPartyIntegration (payment gateways live here too)
+	bankXfers   *pgdoc.Store         // bankTransfer (manual bank-transfer deposits)
+	cards       *pgdoc.Store         // creditCard (saved cards)
+	cardTxns    *pgdoc.Store         // creditCardTransaction
+	promoCodes  *pgdoc.Store         // promotionCode (admin-created codes)
+	promoRedeem *pgdoc.Store         // promotionCodeRedemption (per-org redemption record)
+	reminders   *pgdoc.Store         // reminderNotification (savings-contract expiry reminders)
+	enc         *textcrypt.Encryptor // OPTIONAL, nil-safe: decrypts payment-gateway secrets on read
 }
+
+// SetEncryptor wires the at-rest secret encryptor used to DECRYPT payment-gateway secrets
+// (GetGateway). Optional and nil-safe: when unset (e.g. in tests) GetGateway returns the secret
+// as-stored, and textcrypt is fail-open so a legacy plaintext value survives either way.
+func (r *Repo) SetEncryptor(enc *textcrypt.Encryptor) { r.enc = enc }
 
 func NewRepo(db *pgdoc.DB) *Repo {
 	return &Repo{

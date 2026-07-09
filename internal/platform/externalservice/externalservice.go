@@ -116,6 +116,14 @@ func (e *ExternalService) auth() map[string]any {
 	return m
 }
 
+// IsAppCred reports whether this provider authenticates with an application credential
+// (config.auth.adminAuthType == "application_credential") — the same test ClientConfig uses to
+// set AppCredID. App-cred tokens are keystone-locked to one project and CANNOT be re-scoped, so
+// the tenant-write choke points refuse to build a mis-scoped client for such a provider.
+func (e *ExternalService) IsAppCred() bool {
+	return strings.EqualFold(str(e.auth()["adminAuthType"]), "application_credential")
+}
+
 // ClientConfig maps the (decrypted) external service to a cloud client.Config for the given
 // region. password vs application_credential is selected by config.auth.adminAuthType.
 // Region falls back to the service's first configured region when empty.

@@ -1,6 +1,6 @@
 # How Identity Works
 
-Stratos keeps no passwords of its own. Every sign-in is delegated to an OpenID Connect provider — either the **Keycloak bundled with the Helm chart** (the default) or **any external OIDC provider** you already run. The Stratos API behaves purely as an OAuth2 resource server: it validates the JWTs the SPAs bring back and identifies the platform user by the token's **email** claim.
+Stratos keeps no passwords of its own. Every sign-in is delegated to an OpenID Connect provider — either the **Keycloak bundled with the Helm chart** (optional, off by default) or **any external OIDC provider** you already run. The Stratos API behaves purely as an OAuth2 resource server: it validates the JWTs the SPAs bring back and identifies the platform user by the token's **email** claim.
 
 ## Two audiences, two realms
 
@@ -13,9 +13,9 @@ Customer identity and operator identity are kept deliberately apart:
 
 Both SPAs are public OIDC clients running the authorization-code flow with PKCE. Authenticating against the admin realm marks a user as an administrator; a customer holding a `clients`-realm token can never reach the admin console.
 
-## The bundled Keycloak (default)
+## The bundled Keycloak (optional)
 
-Set `keycloakx.enabled: true` and the chart runs Keycloak — the official image, via [codecentric/keycloakx](https://github.com/codecentric/helm-charts/tree/master/charts/keycloakx) — pointed at a PostgreSQL you provide (the bundled `postgresql`/`cnpg`, or a managed one; set `keycloakx.database.*`). Supply a realm export through `realmImport` to create both realms, the three clients and their redirect URIs; set the bootstrap admin in `keycloakx.extraEnv` and `smtp.*` for verification and password-reset mail. Keycloak is served at `auth.<your-hostname>` by default.
+Keycloak is off by default. Set `keycloakx.enabled: true` and the chart runs Keycloak — the official image, via [codecentric/keycloakx](https://github.com/codecentric/helm-charts/tree/master/charts/keycloakx) — pointed at a PostgreSQL you provide (the bundled `postgresql`/`cnpg`, or a managed one; set `keycloakx.database.*`). Enable `keycloakConfigCli.enabled: true` (or supply a realm export through `realmImport.json`) to create both realms, the three clients and their redirect URIs; set the bootstrap admin in `keycloakx.extraEnv`, and configure SMTP on the realm for verification and password-reset mail. Expose Keycloak yourself via `keycloakx.ingress.*`.
 
 Because Keycloak fronts identity, its features come along at no extra cost: email verification, password recovery, TOTP two-factor auth, and identity brokering — social logins like Google or GitHub, or federation with LDAP, Active Directory, or SAML. You configure these per realm in the Keycloak admin console.
 
@@ -28,12 +28,16 @@ Set `keycloakx.enabled: false` and aim Stratos at your own provider — an exist
 ```yaml
 keycloakx:
   enabled: false
-externalOpenid:
-  issuer:      "https://auth.example.com/realms/clients"       # end-user issuer
-  adminIssuer: "https://admin-auth.example.com/realms/master"  # admin issuer
+auth:
+  main:
+    issuer: "https://auth.example.com/realms/clients"        # customer issuer
+  admin:
+    issuer: "https://admin-auth.example.com/realms/master"   # admin issuer
+  adminApi:
+    issuer: "https://admin-auth.example.com/realms/master"   # admin-API issuer
 ```
 
-`issuer` and `adminIssuer` are independent: your customer auth domain and your admin auth domain can differ, and can even live on entirely different providers.
+`auth.main.issuer` and `auth.admin.issuer` are independent: your customer auth domain and your admin auth domain can differ, and can even live on entirely different providers.
 
 On an external IdP the chart provisions **nothing** — you set it up yourself, per realm/tenant:
 
@@ -42,7 +46,7 @@ On an external IdP the chart provisions **nothing** — you set it up yourself, 
 - On the end-user side only: self-registration enabled **with email as the username**. Stratos keys both users and billing profiles by email — username-based registration breaks user creation and billing.
 - SMTP on the realm, so verification and reset mails actually send.
 
-The client IDs stay configurable through `ui.oauth2.clientId`, `admin.oauth2.clientId`, and `adminApi.oauth2.clientId`.
+The client IDs stay configurable through `auth.main.clientId`, `auth.admin.clientId`, and `auth.adminApi.clientId` (defaults `stratos-ui`, `stratos-admin`, `stratos-admin-api`).
 
 ## One identity across OpenStack too
 

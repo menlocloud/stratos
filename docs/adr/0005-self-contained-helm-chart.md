@@ -25,7 +25,7 @@ consumer can pull a versioned artifact instead of building from source.
 
 Ship a single **application** Helm chart, `deploy/chart`, that owns all of
 its own templates (`templates/`, with a local `_helpers.tpl`). It renders the
-API `StatefulSet`, the two UI `Deployment`s, their services/ingress/routes (the
+API `Deployment`, the two UI `Deployment`s, their services/ingress/routes (the
 ingress exposes the public API paths, including `/mcp`), the encryption secret,
 and the Keycloak realm config.
 
@@ -36,7 +36,7 @@ and the Keycloak realm config.
 | --------------- | ------------------------------------ | ----------------------------- |
 | PostgreSQL      | `postgresql` (`postgresql.enabled`)  | `externalPostgresql.*`        |
 | RabbitMQ        | `rabbitmq` (`rabbitmq.enabled`)      | `externalRabbitmq.*`          |
-| Keycloak        | `keycloakx` (`keycloakx.enabled`)     | `externalOpenid.*`            |
+| Keycloak        | `keycloakx` (`keycloakx.enabled`)     | `auth.*.issuer`               |
 
 Default values enable the bundled subcharts, so a plain install is complete. To
 use managed infrastructure, set `*.enabled: false` and fill in the matching

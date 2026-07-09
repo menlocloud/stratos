@@ -7,13 +7,17 @@ By default Stratos and OpenStack authenticate separately: Stratos against Keyclo
 Stratos always speaks OIDC, and the chart gives you two issuer "slots":
 
 ```yaml
-externalOpenid:
-  issuer:      "https://auth.example.com/realms/clients"       # customers
-  adminIssuer: "https://admin-auth.example.com/realms/master"  # operators
+auth:
+  main:
+    issuer: "https://auth.example.com/realms/clients"        # customers
+  admin:
+    issuer: "https://admin-auth.example.com/realms/master"   # operators
+  adminApi:
+    issuer: "https://admin-auth.example.com/realms/master"   # admin API
 ```
 
-- **`issuer`** authenticates customers (the portal, `stratos-ui` client).
-- **`adminIssuer`** authenticates operators (the admin console, `stratos-admin` / `stratos-admin-api` clients).
+- **`auth.main.issuer`** authenticates customers (the portal, `stratos-ui` client).
+- **`auth.admin.issuer`** authenticates operators (the admin console, `stratos-admin` client), and **`auth.adminApi.issuer`** guards the machine-to-machine admin API (`stratos-admin-api` client).
 
 They're independent by design: customer identity and staff identity usually live in different realms — often different domains — and only the customer realm should ever be federated toward OpenStack. With the bundled Keycloak these are the `clients` and `master` realms, and the split is wired up automatically.
 
@@ -38,8 +42,8 @@ Since Keycloak sits in front of everything, SSO extras are realm configuration, 
 - **Corporate directories** — federate the realm with LDAP / Active Directory or a SAML2 IdP; handy on the `master` realm so staff use corporate accounts for the admin console.
 - **2FA / passkeys** — enable TOTP or WebAuthn policies per realm.
 
-If you take over realm settings by hand after installation, note that the chart runs a config CLI job on upgrades that re-applies the provisioned realm state — disable it with `keycloak.keycloakConfigCli.enabled: false` once you own that configuration manually.
+If you take over realm settings by hand after installation, note that when `keycloakConfigCli.enabled: true` the chart runs a config-CLI job on install/upgrade that re-applies the provisioned realm state — set `keycloakConfigCli.enabled: false` once you own that configuration manually.
 
 ## Using an external IdP instead
 
-All of the above works just as well with an external Keycloak or another OIDC provider: set `keycloakx.enabled: false`, fill in `externalOpenid.issuer` / `adminIssuer`, create the clients yourself (see [How Identity Works](/docs/concepts/identity) for the exact client requirements), and federate Keystone against that provider's customer realm the same way.
+All of the above works just as well with an external Keycloak or another OIDC provider: set `keycloakx.enabled: false`, fill in `auth.main.issuer` / `auth.admin.issuer`, create the clients yourself (see [How Identity Works](/docs/concepts/identity) for the exact client requirements), and federate Keystone against that provider's customer realm the same way.

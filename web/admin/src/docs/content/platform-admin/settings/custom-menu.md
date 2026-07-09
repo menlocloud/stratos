@@ -14,9 +14,9 @@ Go to **System > Custom menu** in the admin portal and choose **Add menu item**.
 |---|---|---|
 | Display name | The label shown in the client sidebar. | `Support` |
 | URL | The link target, usually an external tool. | `https://support.example.com` |
-| Icon | A Font Awesome 5 (free) icon class rendered beside the label. | `fas fa-headset` |
+| Icon | An icon name / CSS-class string stored with the item. | `support` |
 
-Browse the available icons in the Font Awesome icon gallery; any class from the free set works.
+The icon value is saved with the menu item, but the client sidebar currently renders every custom menu item with a generic external-link icon and does not use the stored value, so this field has no visible effect for now.
 
 ## How it behaves
 

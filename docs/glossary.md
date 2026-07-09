@@ -29,7 +29,7 @@ the organization's billing profile.
 - **Member** — the link between a `sub` and an organization
   (`organization_members`) or, embedded, between a `sub` and a project
   (`Membership`). A member carries a **role**.
-- **Role** — a member's permission set. Built-in roles are `OWNER` and `MEMBER`;
+- **Role** — a member's permission set. Built-in roles are `OWNER`, `ADMIN`, and `MEMBER`;
   an organization can also define **custom roles** (`roleDefinition`) that name an
   explicit list of permissions. Policy resolves a caller's effective permissions
   from their role.

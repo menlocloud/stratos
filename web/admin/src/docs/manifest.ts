@@ -41,7 +41,6 @@ export const sections: DocSection[] = [
       { slug: "platform-admin/settings/flavor-categories", title: "Flavor Categories" },
       { slug: "platform-admin/settings/custom-menu", title: "Custom Menu Items" },
       { slug: "platform-admin/settings/login-branding", title: "Login Branding" },
-      { slug: "platform-admin/settings/conversion-tracking", title: "Conversion Tracking" },
     ],
   },
   {

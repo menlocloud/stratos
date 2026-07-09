@@ -451,15 +451,25 @@ func (h *Handler) externalServiceUpdateVhiOstor(w http.ResponseWriter, r *http.R
 		}
 		cfg := ensureConfig(doc)
 		cfg["vhiOstorConfig"] = rawJSON(body.VhiOstorConfig)
-		// When the body carries vhiOstorAuth, merge its non-blank keys into the secret.
+		// When the body carries vhiOstorAuth, merge its non-blank keys into the secret. Encrypt each
+		// newly-supplied value before it lands in the datastore (symmetric with the decrypt on read —
+		// externalservice.Service.decrypt), matching the create + connection-save secret paths above.
 		if body.VhiOstorAuth != nil {
 			secret := ensureMap(doc, "secret")
 			auth := ensureMap(secret, "vhiOstorAuth")
 			if body.VhiOstorAuth.AccessKey != "" {
-				auth["accessKey"] = body.VhiOstorAuth.AccessKey
+				if h.esSvc != nil {
+					auth["accessKey"] = h.esSvc.EncryptSecret(body.VhiOstorAuth.AccessKey)
+				} else {
+					auth["accessKey"] = body.VhiOstorAuth.AccessKey
+				}
 			}
 			if body.VhiOstorAuth.SecretKey != "" {
-				auth["secretKey"] = body.VhiOstorAuth.SecretKey
+				if h.esSvc != nil {
+					auth["secretKey"] = h.esSvc.EncryptSecret(body.VhiOstorAuth.SecretKey)
+				} else {
+					auth["secretKey"] = body.VhiOstorAuth.SecretKey
+				}
 			}
 		}
 		return nil

@@ -8,7 +8,8 @@ aimed at contributors working on the API, the admin surface, or the MCP endpoint
 Stratos **validates** access tokens; it does not **issue** them. Identity lives in
 an external OpenID Connect (OIDC) provider. The Helm chart bundles Keycloak by
 default (`keycloakx.enabled: true`), but any standards-compliant OIDC provider can
-be pointed at instead (`keycloakx.enabled: false` + `externalOpenid.*`).
+be pointed at instead (`keycloakx.enabled: false`, then point `auth.*.issuer` at
+that provider).
 
 At startup the API discovers each configured realm's OIDC metadata in the
 background, so the service never blocks on an unreachable issuer. Until discovery
@@ -236,10 +237,11 @@ Each realm is a pair of issuer URI + client id. They can be set via config file
 
 In Helm, when bringing your own OIDC provider (`keycloakx.enabled: false`), set:
 
-- `externalOpenid.issuer` → the **customer** (`clients`) realm issuer
-- `externalOpenid.adminIssuer` → the **operator** (`master`) realm issuer
-- client ids stay on `ui.oauth2.clientId` / `admin.oauth2.clientId` /
-  `adminApi.oauth2.clientId` (defaults `stratos-ui` / `stratos-admin` /
+- `auth.main.issuer` → the **customer** (`clients`) realm issuer
+- `auth.admin.issuer` → the **operator** (`master`) realm issuer
+- `auth.adminApi.issuer` → the machine **Admin API** realm issuer
+- client ids stay on `auth.main.clientId` / `auth.admin.clientId` /
+  `auth.adminApi.clientId` (defaults `stratos-ui` / `stratos-admin` /
   `stratos-admin-api`)
 
 The auth domain and admin domain are independent and may differ. On the external

@@ -88,7 +88,7 @@ sequenceDiagram
     participant Srv as http servers
 
     M->>Cfg: load YAML + env, Validate() (fail-closed)
-    M->>PG: pgdoc.Connect (dial + ping; fatal on failure)
+    M->>PG: pgdoc.Connect (dial + ping, fatal on failure)
     M->>BG: maintainRabbit (connect + auto-reconnect loop)
     M->>BG: oidc.Discover → authn.SetRealms (per-realm verifiers)
     M->>BG: openstack client.New → cloudCli.Store
@@ -352,7 +352,7 @@ flowchart TB
 
 | Module | Responsibility |
 |---|---|
-| `externalservice` | The `externalService` table backing each region's cloud connection, with a the encryptor-encrypted `secret` decrypted on read — the pod's source of OpenStack credentials. |
+| `externalservice` | The `externalService` table backing each region's cloud connection, with its encrypted-at-rest `secret` decrypted on read — the pod's source of OpenStack credentials. |
 | `internal/cloud/*` | The OpenStack subsystem (see §6): the client facade, resource providers, the resource cache + history, sync/metrics jobs, os-notification ingestion, and the cloud→billing bridge. |
 
 ### Platform & operations

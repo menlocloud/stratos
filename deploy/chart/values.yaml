@@ -117,6 +117,20 @@ api:
   #       value: https://keystone.example.com:5000/v3
   extraEnv: []
 
+  # Extra volumes / mounts on the api container. Use these to trust a private CA
+  # (mount the PEM into a dir and add it to SSL_CERT_DIR via extraEnv) or to mount
+  # any other file/secret. See docs: Self-hosting → Custom CA. Example:
+  #   extraVolumes:
+  #     - name: custom-ca
+  #       secret:
+  #         secretName: internal-ca      # key: ca.crt
+  #   extraVolumeMounts:
+  #     - name: custom-ca
+  #       mountPath: /etc/ssl/extra-certs
+  #       readOnly: true
+  extraVolumes: []
+  extraVolumeMounts: []
+
   service:
     type: ClusterIP
     port: 8080

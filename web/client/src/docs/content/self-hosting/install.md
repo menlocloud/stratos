@@ -26,24 +26,18 @@ Bundled dependencies, each swappable for an external instance:
 | RabbitMQ | `rabbitmq.enabled` | `externalRabbitmq.*` |
 | Keycloak | `keycloakx.enabled` (off by default) | any external IdP via `auth.*.issuer` (see [How Identity Works](/docs/concepts/identity)) |
 
-The application state lives in one PostgreSQL database (`stratos`), one document-per-aggregate in a `jsonb` column — see [The Data Model](/docs/concepts/data-model). The bundled PostgreSQL subchart creates the `stratos` role and database on first boot.
+The application state lives in one PostgreSQL database (`stratos`), one document-per-aggregate in a `jsonb` column. The bundled PostgreSQL subchart creates the `stratos` role and database on first boot.
 
 ## A minimal values file
 
 ```yaml
 # values.yaml
-global:
-  ingress:
-    enabled: true
-    hostname: "cloud.example.com"
-    ingressClassName: "nginx"
-    annotations:
-      cert-manager.io/cluster-issuer: letsencrypt
-    tls: true
-
 api:
   # Data-at-rest encryption key — CHANGE THIS and keep it safe (see Backup).
   encryptionKey: "<a long random string>"
+  # Public base URL the API embeds in mail links, redirects and MCP metadata.
+  selfUrls:
+    base: "https://cloud.example.com"
   # Mail gateway (optional here — you can also configure SMTP later under
   # Admin → Integrations → Mail, which is stored in the database and wins).
   mail:
@@ -54,9 +48,44 @@ api:
       username: mailer@example.com
       existingSecret: my-smtp-secret        # holds the SMTP password / API key
       passwordKey: STRATOS_MAIL_SMTP_PASSWORD
+  # Ingress is per-component; the three share one host, split by path.
+  ingress:
+    enabled: true
+    className: "nginx"
+    host: "cloud.example.com"
+    path: /api
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    tls:
+      - hosts: ["cloud.example.com"]
+        secretName: stratos-tls
+
+ui:
+  ingress:
+    enabled: true
+    className: "nginx"
+    host: "cloud.example.com"
+    path: /
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    tls:
+      - hosts: ["cloud.example.com"]
+        secretName: stratos-tls
+
+admin:
+  ingress:
+    enabled: true
+    className: "nginx"
+    host: "cloud.example.com"
+    path: /stratos_admin
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    tls:
+      - hosts: ["cloud.example.com"]
+        secretName: stratos-tls
 ```
 
-With ingress on, the API answers under `/api/v1`, `/admin-api/v1`, `/openapi.json` and `/.well-known`; the portal takes `/`, the admin console `/stratos_admin`, and a bundled Keycloak (if enabled) gets its own host at `auth.cloud.example.com`.
+With ingress on, the API answers under `/api/v1`, `/admin-api/v1`, `/openapi.json` and `/.well-known`; the portal takes `/`, the admin console `/stratos_admin`, and a bundled Keycloak (if enabled) is exposed on its own host via `keycloakx.ingress.*`.
 
 ## Running the install
 
@@ -86,19 +115,22 @@ To pin application versions explicitly (otherwise the chart's `appVersion` is us
 For a cluster on the Gateway API, turn classic ingress off and attach HTTPRoutes to your Gateway:
 
 ```yaml
-global:
-  ingress:
-    enabled: false
-  baseUrl: "https://cloud.example.com"   # public URL, since it can't be derived from ingress
+api:
+  selfUrls:
+    base: "https://cloud.example.com"   # public URL, since it can't be derived from ingress
 gateway:
   enabled: true
   parentRefs:
     - name: my-gateway
       namespace: gateways
       sectionName: https
+  hostnames:
+    api: api.cloud.example.com
+    ui: cloud.example.com
+    admin: admin.cloud.example.com
 ```
 
-When exposure isn't classic ingress, set `global.baseUrl` (and optionally the per-component `api.selfUrls.*`) so the API knows its public URLs.
+Leave the per-component `*.ingress.enabled` off (the default) and set `api.selfUrls.base` (and optionally `api.selfUrls.api`/`ui`/`admin`) so the API knows its public URLs.
 
 ## The encryption key — don't skip this
 
@@ -137,16 +169,16 @@ externalPostgresql:
 
 ```yaml
 api:
-  replicaCount: 3
+  replicas: 3
 ui:
-  replicaCount: 3
+  replicas: 3
 admin:
-  replicaCount: 3
+  replicas: 3
 ```
 
 For the datastore, either run the bundled PostgreSQL in a replicated architecture (`postgresql.architecture: replication`) or, better for production, point `externalPostgresql.*` at a managed/HA PostgreSQL that has its own backup and failover.
 
-Horizontal pod autoscaling is available per workload through `api.autoscaling.*` (and the equivalents for `ui` and `admin`).
+Scale each workload manually with `api.replicas` / `ui.replicas` / `admin.replicas`; the chart ships no HorizontalPodAutoscaler.
 
 ## Once it's installed
 

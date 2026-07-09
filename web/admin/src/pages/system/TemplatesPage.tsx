@@ -393,7 +393,7 @@ function PdfTemplatesTab() {
             <DialogTitle>Preview — {preview?.name}</DialogTitle>
             <DialogDescription>Rendered with sample data.</DialogDescription>
           </DialogHeader>
-          <iframe title="Template preview" srcDoc={preview?.html ?? ""} className="h-[70vh] w-full rounded-md border bg-white" />
+          <iframe title="Template preview" sandbox="" srcDoc={preview?.html ?? ""} className="h-[70vh] w-full rounded-md border bg-white" />
         </DialogContent>
       </Dialog>
 

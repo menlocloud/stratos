@@ -8,7 +8,7 @@ The Stratos Admin API is a machine-to-machine REST interface for managing users,
 
 ## Authentication at a glance
 
-Every request has to be signed with AWS SigV4 using an HMAC key pair — an access key id (`pk…`) and a secret key (`sk…`) — that you generate on the admin UI's **System → HMAC Keys** page. As an alternative, a bearer token from the dedicated admin-api OIDC realm is accepted. Requests that are unsigned or signed incorrectly get `401`; a bearer token from any other realm gets `403`.
+Every request has to be signed with AWS SigV4 using an HMAC key pair — an access key id (`pk…`) and a secret key (`sk…`) — that you generate on the admin UI's **System → API keys** page. As an alternative, a bearer token from the dedicated admin-api OIDC realm is accepted. Requests that are unsigned or signed incorrectly get `401`; a bearer token from any other realm gets `403`.
 
 ```bash
 curl --aws-sigv4 "aws:amz:us-east-1:execute-api" \

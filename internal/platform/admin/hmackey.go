@@ -61,7 +61,7 @@ func (h *Handler) hmacKeyGenerate(w http.ResponseWriter, r *http.Request) {
 	secret := "sk" + hex.EncodeToString(s[:])
 	now := time.Now().UTC()
 	// purpose:"admin-api" marks this as an Admin-API / MCP credential; the SigV4 verifier only
-	// resolves admin-api-purpose keys, so provider keys (which do NOT set purpose) can never
+	// resolves admin-api-purpose keys, so provider keys (which stamp purpose:"provider") can never
 	// authenticate to the Admin API.
 	doc := pgdoc.M{"_id": id, "secretKey": secret, "description": req.Description, "createdAt": now, "purpose": hmacKeyPurposeAdminAPI}
 	if err := h.repo.InsertDocKeepID(r.Context(), hmacKeyCollection, doc); httpx.WriteError(w, err) {

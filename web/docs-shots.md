@@ -6,8 +6,8 @@
 - [x] `/docs-img/validations-queue.png` — Validations page listing pending billing profile validations with Approve and Reject buttons — page: `administrators-manual/account-activation.md`
 - [x] `/docs-img/billing-profile-activate.png` — Billing profile detail page showing the Activate action on a non-active profile — page: `administrators-manual/account-activation.md`
 - [x] `/docs-img/price-plans-create.png` — Price plans page with the create dialog open, showing name, access mode and enabled fields — page: `administrators-manual/billing/price-plans.md`
-- [skip: no price plan exists on live system; creating one is a write] `/docs-img/price-plan-rules.png` — Price plan detail page listing pricing rules with resource type, priced attribute and time unit columns — page: `administrators-manual/billing/price-plans.md`
-- [skip: no price plan exists on live system; creating one is a write] `/docs-img/price-plan-rule-create.png` — Rule creation dialog with a resource type selected and its attribute list expanded — page: `administrators-manual/billing/price-plans.md`
+- [x] `/docs-img/price-plan-rules.png` — Price plan detail page listing pricing rules with resource type, priced attribute and time unit columns — page: `platform-admin/billing/price-plans.md` (captured on the live "Public rate card" plan, 2026-07-09)
+- [x] `/docs-img/price-plan-rule-create.png` — Rule creation dialog with a resource type selected and its attribute list expanded — page: `platform-admin/billing/price-plans.md` (Add-rule dialog, resource type `instance`, attributes expanded; dialog cancelled, no write)
 - [x] `/docs-img/billing-configuration-base-currency.png` — Billing configuration page, Business details tab, with the Base currency dropdown open — page: `administrators-manual/billing/currencies.md`
 - [x] `/docs-img/taxes-add-tax.png` — Taxes page with the add-tax dialog open, showing name, rate and country fields — page: `administrators-manual/billing/tax-rules.md`
 - [x] `/docs-img/billing-configuration-invoice-gateway.png` — Billing configuration page, Business details tab, showing the Invoice gateway selector — page: `administrators-manual/billing/configure-invoicing.md`
@@ -32,7 +32,7 @@
 - [x] `/docs-img/custom-menu-item-client-sidebar.png` — client portal: sidebar showing the custom menu section with the configured Support link and icon
 - [skip: no Keycloak admin console credentials provided] `/docs-img/customize-keycloak-theme-realm.png` — Keycloak admin console: Realm settings > Themes with the custom stratos theme selected as login theme
 - [x] `/docs-img/customize-keycloak-theme-login.png` — branded client login page rendered with the custom Keycloak theme
-- [skip: Google Tag Manager not accessible] `/docs-img/marketing-events-gtm-trigger.png` — Google Tag Manager: custom event trigger configured for the deposit event with data layer variables mapped
+- [removed] `/docs-img/marketing-events-gtm-trigger.png` — conversion-tracking.md page DELETED 2026-07-09 (GTM/dataLayer feature has no frontend implementation); shot obsolete
 
 ## client
 

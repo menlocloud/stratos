@@ -85,6 +85,11 @@ func (h *Handler) integrationCreate(w http.ResponseWriter, r *http.Request) {
 		description = fmt.Sprintf("%s Integration", req.ThirdParty)
 	}
 	doc := integrationDoc(name, description, req.ThirdParty, req.Config, req.Secret, req.Metadata)
+	// Encrypt the secret's textual leaves before it reaches the datastore (symmetric with the
+	// consumers' decrypt: mail SMTPFromStore + billing GetGateway). Mirrors externalServiceCreate.
+	if sec, ok := doc["secret"]; ok && h.esSvc != nil {
+		doc["secret"] = h.esSvc.EncryptSecret(sec)
+	}
 	saved, err := h.repo.InsertDoc(r.Context(), integrationCollection, doc)
 	if httpx.WriteError(w, err) {
 		return
@@ -128,7 +133,12 @@ func (h *Handler) integrationUpdate(w http.ResponseWriter, r *http.Request) {
 	// Secret: replace only when the request carries a non-empty secret all of whose fields are
 	// non-null (isNeededToUpdateSecret); otherwise the existing secret is retained.
 	if isNeededToUpdateSecret(req.Secret) {
-		existing["secret"] = req.Secret // SECRET note below: stored as-provided (encryptor not wired).
+		// Encrypt at rest (symmetric with the mail/billing consumers' decrypt). Mirrors create.
+		if h.esSvc != nil {
+			existing["secret"] = h.esSvc.EncryptSecret(req.Secret)
+		} else {
+			existing["secret"] = req.Secret
+		}
 	}
 	if err := h.repo.ReplaceDoc(r.Context(), integrationCollection, id, existing); httpx.WriteError(w, err) {
 		return
@@ -229,17 +239,14 @@ func integrationFields(name, description, thirdParty string, config any, metadat
 	return d
 }
 
-// integrationDoc builds the full stored doc for a create, including the secret. SECRET note: the
-// secret is meant to be stored ENCRYPTED at rest and decrypted on read,
-// but the response DTO always nulls the secret — so the wire shape is unaffected by encryption.
-// The admin.Handler has no encryptor dependency (and the strict file rules forbid adding one),
-// so the secret is stored as-provided (plaintext-at-rest, consistent with the existing plaintext-passthrough
-// externalService seed). To make at-rest encryption faithful, the integrator can inject a
-// *textcrypt.Encryptor (see 'needsHandlerDep'). config/secret/metadata are stored only when non-nil.
+// integrationDoc builds the full stored doc for a create, including the RAW secret. The caller
+// (integrationCreate) encrypts the secret at rest via h.esSvc.EncryptSecret before persisting — this
+// builder stays pure so the unit test can assert the plain shape. The response DTO always nulls the
+// secret regardless. config/secret/metadata are stored only when non-nil.
 func integrationDoc(name, description, thirdParty string, config, secret any, metadata map[string]any) pgdoc.M {
 	d := integrationFields(name, description, thirdParty, config, metadata)
 	if secret != nil {
-		d["secret"] = secret // TODO(secret): encrypt the secret at rest — encryptor not wired.
+		d["secret"] = secret // encrypted at rest by integrationCreate (esSvc.EncryptSecret).
 	}
 	return d
 }

@@ -33,8 +33,8 @@ type Gateway struct {
 	Secret     map[string]any
 }
 
-// SecretString reads a secret field (e.g. "privateKey"). Plaintext for now (encrypted
-// secrets pass through; decrypt is wired the same as the OpenStack ExternalService when needed).
+// SecretString reads a secret field (e.g. "privateKey"). The secret map is already decrypted at
+// load time (GetGateway → repo encryptor), so this is a plain field read.
 func (g *Gateway) SecretString(key string) string {
 	if g.Secret == nil {
 		return ""
@@ -151,6 +151,13 @@ func (r *Repo) GetGateway(ctx context.Context, id string) (*Gateway, error) {
 	found, err := r.gateways.Get(ctx, id, &doc)
 	if err != nil || !found {
 		return nil, err
+	}
+	// Decrypt the at-rest secret leaves (privateKey, …) with the wired encryptor. Nil-safe: no
+	// encryptor → return as-stored; textcrypt is fail-open so a legacy plaintext value round-trips.
+	if r.enc != nil {
+		if m, ok := r.enc.DecryptObject(doc.Secret).(map[string]any); ok {
+			doc.Secret = m
+		}
 	}
 	return &Gateway{ID: doc.ID, Name: doc.Name, ThirdParty: doc.ThirdParty, Config: doc.Config, Secret: doc.Secret}, nil
 }

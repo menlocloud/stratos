@@ -4,7 +4,7 @@ The Admin API authenticates each request with **AWS Signature Version 4** (SigV4
 
 ## 1. Create an HMAC key pair
 
-In the admin UI, open **System → HMAC Keys** and click **Generate key**. You get back:
+In the admin UI, open **System → API keys** and click **Generate key**. You get back:
 
 | Field | Format | Description |
 |---|---|---|

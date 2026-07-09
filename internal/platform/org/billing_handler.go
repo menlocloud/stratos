@@ -183,27 +183,6 @@ func (h *BillingHandler) orgCostInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// resolveProfileByMembership resolves a
-// member-owned org by billingProfileId (404 "Billing Profile not found" otherwise), then
-// load the profile by org.billingProfileId. Membership-gated only (no permission).
-func (h *BillingHandler) resolveProfileByMembership(w http.ResponseWriter, r *http.Request, u *user.User, bpID string) (*billing.BillingProfile, bool) {
-	o, err := h.svc.GetOrganizationForBillingProfile(r.Context(), bpID, u.Sub)
-	if err != nil {
-		fail(w, err)
-		return nil, false
-	}
-	bp, err := h.billing.FindByID(r.Context(), o.BillingProfileID)
-	if err != nil {
-		fail(w, err)
-		return nil, false
-	}
-	if bp == nil {
-		fail(w, httpx.NotFound(fmt.Sprintf("Billing profile with id %s not found. ", o.BillingProfileID)))
-		return nil, false
-	}
-	return bp, true
-}
-
 // bills lists a profile's bills (→ list envelope).
 // billInvoiceGateways handles GET /api/v1/bill/gateways →
 // the available invoice gateways: the invoice gateways the client Bill History
@@ -259,7 +238,7 @@ func (h *BillingHandler) collectTransactionsByBill(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	bp, ok := h.resolveProfileByMembership(w, r, u, chi.URLParam(r, "billingProfileId"))
+	bp, _, ok := h.requireBillingProfilePermission(w, r, u, chi.URLParam(r, "billingProfileId"), rbac.BillingProfileReadTransactions)
 	if !ok {
 		return
 	}
@@ -422,13 +401,13 @@ func (h *BillingHandler) savingsPlans(w http.ResponseWriter, r *http.Request) {
 }
 
 // accountCreditTransactions lists a profile's account-credit transactions
-// (?billingProfileId=; membership-gated; list envelope).
+// (?billingProfileId=; BILLING_PROFILE_READ_TRANSACTIONS-gated; list envelope).
 func (h *BillingHandler) accountCreditTransactions(w http.ResponseWriter, r *http.Request) {
 	u, ok := h.principal(w, r)
 	if !ok {
 		return
 	}
-	bp, ok := h.resolveProfileByMembership(w, r, u, r.URL.Query().Get("billingProfileId"))
+	bp, _, ok := h.requireBillingProfilePermission(w, r, u, r.URL.Query().Get("billingProfileId"), rbac.BillingProfileReadTransactions)
 	if !ok {
 		return
 	}
@@ -461,20 +440,20 @@ func (h *BillingHandler) accountCreditTransaction(w http.ResponseWriter, r *http
 	}
 	// access-check against the transaction's billing profile: a caller must be a reading member of the
 	// transaction's billing profile — mirrors collectTransactionByID (no cross-tenant txn read).
-	if _, ok := h.requireBillingProfileRead(w, r, u, txn.BillingProfileID); !ok {
+	if _, _, ok := h.requireBillingProfilePermission(w, r, u, txn.BillingProfileID, rbac.BillingProfileReadTransactions); !ok {
 		return
 	}
 	httpx.OK(w, billing.AccountCreditTransactionToDto(txn))
 }
 
 // collectTransactions lists a profile's collect transactions
-// (?billingProfileId=; membership-gated; list envelope).
+// (?billingProfileId=; BILLING_PROFILE_READ_TRANSACTIONS-gated; list envelope).
 func (h *BillingHandler) collectTransactions(w http.ResponseWriter, r *http.Request) {
 	u, ok := h.principal(w, r)
 	if !ok {
 		return
 	}
-	bp, ok := h.resolveProfileByMembership(w, r, u, r.URL.Query().Get("billingProfileId"))
+	bp, _, ok := h.requireBillingProfilePermission(w, r, u, r.URL.Query().Get("billingProfileId"), rbac.BillingProfileReadTransactions)
 	if !ok {
 		return
 	}
@@ -506,7 +485,7 @@ func (h *BillingHandler) collectTransactionByID(w http.ResponseWriter, r *http.R
 		fail(w, httpx.NotFound(fmt.Sprintf("Transaction %s not found ", id)))
 		return
 	}
-	if _, ok := h.requireBillingProfileRead(w, r, u, txn.BillingProfileID); !ok {
+	if _, _, ok := h.requireBillingProfilePermission(w, r, u, txn.BillingProfileID, rbac.BillingProfileReadTransactions); !ok {
 		return
 	}
 	httpx.OK(w, billing.CollectTransactionToDto(txn))
@@ -750,7 +729,7 @@ func (h *BillingHandler) getCardTransaction(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	bp, ok := h.requireBillingProfileRead(w, r, u, chi.URLParam(r, "billingProfileId"))
+	bp, _, ok := h.requireBillingProfilePermission(w, r, u, chi.URLParam(r, "billingProfileId"), rbac.BillingProfileReadTransactions)
 	if !ok {
 		return
 	}
@@ -787,7 +766,7 @@ func (h *BillingHandler) collectTxnDownload(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	bp, ok := h.requireBillingProfileRead(w, r, u, chi.URLParam(r, "billingProfileId"))
+	bp, _, ok := h.requireBillingProfilePermission(w, r, u, chi.URLParam(r, "billingProfileId"), rbac.BillingProfileReadTransactions)
 	if !ok {
 		return
 	}

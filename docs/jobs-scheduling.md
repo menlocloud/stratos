@@ -215,7 +215,8 @@ controlled first live run, or for driving a job deterministically in a drill.
 
 Exposed on the **management port** when `STRATOS_JOBS_SCHEDULER_ENABLED=true`
 **or** `STRATOS_JOBS_DEBUG_TRIGGERS=true` (`server.MgmtRouter(..., jobsDebug)`).
-Each is `GET /debug/<name>` and returns a small JSON result:
+Each is `POST /debug/<name>` and returns a small JSON result (the sole exception
+is the read-only `GET /debug/cloud` connectivity probe):
 
 | Trigger | Runs |
 |---|---|

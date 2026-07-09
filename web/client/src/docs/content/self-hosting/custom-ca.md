@@ -18,42 +18,39 @@ kubectl -n stratos create secret generic ca-root-secret \
 
 If the certificate came from cert-manager inside the cluster, a suitable secret with `ca.crt` may already exist — reuse it.
 
-Then mount it into the API container and point the `SSL_TRUST_CA_CERTS` environment variable at it, using the chart's extension hooks:
+Then mount that secret into the API container as a directory and add it to the certificate search path with `SSL_CERT_DIR`, using the chart's `api` extension hooks:
 
 ```yaml
 api:
-  extraEnvVars:
-    - name: SSL_TRUST_CA_CERTS
-      value: /opt/stratos/ca.crt
   extraVolumes:
     - name: ca-cert-volume
       secret:
         secretName: ca-root-secret
-        items:
-          - key: ca.crt
-            path: ca.crt
   extraVolumeMounts:
     - name: ca-cert-volume
-      mountPath: /opt/stratos/ca.crt
-      subPath: ca.crt
+      mountPath: /etc/ssl/extra-certs
       readOnly: true
+  extraEnv:
+    - name: SSL_CERT_DIR
+      value: /etc/ssl/certs:/etc/ssl/extra-certs
 ```
 
-Apply with `helm upgrade … -f values.yaml`. On startup the API adds the listed certificates to its trust store on top of the system defaults, so publicly-signed endpoints keep working right alongside your private ones.
+The mount surfaces each key in the secret (here `ca.crt`) as a file under `/etc/ssl/extra-certs`. `SSL_CERT_DIR` is the colon-separated list of directories the API's Go TLS stack scans for trusted certificates — keep the image's system directory `/etc/ssl/certs` first so the bundled public CAs still load, then your own directory. Every PEM found in either directory is trusted, so publicly-signed endpoints keep working right alongside your private ones. (No custom key is baked into the image; the runtime is `debian-slim` with `ca-certificates`, whose system trust store lives at `/etc/ssl/certs`.)
 
-To verify, check the API log after a restart — Keystone connectivity errors of the `x509: certificate signed by unknown authority` variety vanish once the CA is trusted. From inside the pod:
+Apply with `helm upgrade … -f values.yaml`. The pod restarts with the CA mounted.
+
+To verify, check the API log after the restart — Keystone connectivity errors of the `x509: certificate signed by unknown authority` variety vanish once the CA is trusted. You can confirm the file is in place from inside the pod:
 
 ```sh
-kubectl -n stratos exec deploy/stratos-api -- \
-  sh -c 'ls -l $SSL_TRUST_CA_CERTS'
+kubectl -n stratos exec deploy/stratos-api -- ls -l /etc/ssl/extra-certs
 ```
 
 ## TLS on the ingress with a private CA
 
 If your users' browsers should also see certificates from the private CA — common in air-gapped or lab setups:
 
-- With **cert-manager**, create a `ClusterIssuer` of type `ca` backed by your CA key pair, reference it in `global.ingress.annotations` (`cert-manager.io/cluster-issuer: <issuer>`), and keep `global.ingress.tls: true`.
-- Without cert-manager, create the TLS secret yourself and reference it via `global.ingress.secrets`.
+- With **cert-manager**, create a `ClusterIssuer` of type `ca` backed by your CA key pair, reference it in each component's ingress annotations (`api.ingress.annotations` / `ui.ingress.annotations` / `admin.ingress.annotations`, e.g. `cert-manager.io/cluster-issuer: <issuer>`), and set the per-component `*.ingress.tls` list.
+- Without cert-manager, create the TLS secret yourself and reference it by `secretName` in each component's `*.ingress.tls`.
 
 Remember that clients — browsers, but also any machine running the OpenStack CLI against a federated Keystone — need the CA in their own trust stores.
 

@@ -28,7 +28,7 @@ If your MCP client can't do dynamic client registration, a pre-registered public
 
 ### 2. API key (non-interactive)
 
-Create an HMAC key pair under **System → HMAC Keys** in the admin console (the secret is shown once). Then point the MCP client at the server with a static bearer header that joins the pair with a dot:
+Create an HMAC key pair under **System → API keys** in the admin console (the secret is shown once). Then point the MCP client at the server with a static bearer header that joins the pair with a dot:
 
 ```json
 {
@@ -44,7 +44,7 @@ Create an HMAC key pair under **System → HMAC Keys** in the admin console (the
 }
 ```
 
-API-key principals always get the **admin toolset**. Treat the pair like any admin credential: it's checked with a constant-time compare, but it rides in the header — use HTTPS only, and rotate it via System → HMAC Keys.
+API-key principals always get the **admin toolset**. Treat the pair like any admin credential: it's checked with a constant-time compare, but it rides in the header — use HTTPS only, and rotate it via System → API keys.
 
 ## The admin toolset
 
