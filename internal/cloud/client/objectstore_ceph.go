@@ -28,6 +28,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -41,6 +42,10 @@ import (
 
 // emptyPayloadHash is the SHA-256 of an empty body — the x-amz-content-sha256 for a bodyless admin call.
 const emptyPayloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// adminValueRe is the allow-list for RGW Admin Ops query VALUES (hex ids, S3 names, numbers, keywords).
+// adminDo rejects any value outside it so attacker-influenced input cannot shape the request URL.
+var adminValueRe = regexp.MustCompile(`^[A-Za-z0-9._-]*$`)
 
 // CephConfig carries the connection parameters for one ceph-s3 provider scope. Admin keys are always
 // present; project keys are empty on an admin-only client (sync/provision).
@@ -257,6 +262,18 @@ func (b *cephBackend) adminDo(ctx context.Context, method, path string, q url.Va
 		q = url.Values{}
 	}
 	q.Set("format", "json")
+	// Every Admin Ops query value we ever send is a hex id, an S3 name, a number, or a fixed keyword. Reject
+	// anything outside that allow-list BEFORE it reaches the request URL: the scheme+host+path come from
+	// operator config + constant literals, so once the values are constrained the request destination is
+	// fully determined by configuration and attacker-influenced input (bucket / key names, project-derived
+	// uids) cannot shape it (CWE-918 request-forgery). It also fails fast on a malformed name.
+	for k, vs := range q {
+		for _, v := range vs {
+			if !adminValueRe.MatchString(v) {
+				return fmt.Errorf("ceph-s3: refusing admin request: unsafe %s value %q", k, v)
+			}
+		}
+	}
 	// url.Values.Encode() sorts keys — SigV4's canonical query string requires sorted params, and RGW
 	// canonicalizes the received query the same way. (Signed values must also be space-free: Encode()
 	// emits "+" for a space where SigV4 canonicalization expects %20.)

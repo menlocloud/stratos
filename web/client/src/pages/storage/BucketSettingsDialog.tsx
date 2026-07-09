@@ -25,6 +25,17 @@ function bytesToGb(b: number): string {
   return b > 0 ? String(Math.round((b / GiB) * 100) / 100) : ""
 }
 
+// An empty quota field = unlimited; a non-empty one must parse to a finite, non-negative number.
+function quotaFieldValid(v: string): boolean {
+  if (v.trim() === "") return true
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0
+}
+
+function quotaFieldsValid(gb: string, objects: string): boolean {
+  return quotaFieldValid(gb) && quotaFieldValid(objects) && (gb.trim() !== "" || objects.trim() !== "")
+}
+
 type Props = {
   pid: string
   resourceId: string
@@ -161,12 +172,15 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
                   <Button
                     variant="outline"
                     size="sm"
+                    // These are plain text inputs, so guard against NaN/negatives before sending — an empty
+                    // field means "unlimited" (-1), anything else must be a non-negative number.
+                    disabled={!quotaFieldsValid(quotaGb, quotaObjects)}
                     onClick={() =>
                       run(
                         "SET_QUOTA",
                         {
-                          maxSizeBytes: quotaGb ? Math.round(Number(quotaGb) * GiB) : -1,
-                          maxObjects: quotaObjects ? Number(quotaObjects) : -1,
+                          maxSizeBytes: quotaGb.trim() ? Math.round(Number(quotaGb) * GiB) : -1,
+                          maxObjects: quotaObjects.trim() ? Number(quotaObjects) : -1,
                           enabled: true,
                         },
                         "Quota updated",

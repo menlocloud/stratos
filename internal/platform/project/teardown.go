@@ -136,7 +136,13 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 					stillLeft = append(stillLeft, *res)
 					continue
 				}
-				_ = h.cloud.DeleteAndArchive(ctx, res, now)
+				// The bucket is gone cloud-side; archiving the cache row can still fail. Keep it in
+				// `remaining` so teardown reports it (a re-run's ForceDeleteCephBucket is a no-op and retries
+				// the archive) rather than silently claiming success with a stale row left behind.
+				if aerr := h.cloud.DeleteAndArchive(ctx, res, now); aerr != nil {
+					slog.Error("teardown: archive ceph bucket row", "project", p.ID, "externalId", res.ExternalID, "err", aerr)
+					stillLeft = append(stillLeft, *res)
+				}
 			}
 			remaining = stillLeft
 			// Extra S3 keys are SEPARATE RGW users ("<projectUid>-<name>"); purging the project's own user

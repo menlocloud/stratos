@@ -261,6 +261,30 @@ func TestCephForceDeleteOwnBucket(t *testing.T) {
 	}
 }
 
+// A bucket/key name with characters outside the admin allow-list must be rejected BEFORE any network
+// call — attacker-influenced input must not shape the Admin Ops request URL (CWE-918). The mock server
+// fails the test if it is ever reached with such a name.
+func TestCephAdminRejectsUnsafeNameBeforeRequest(t *testing.T) {
+	reached := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/admin") {
+			reached = true
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	cc := newTestCeph(t, srv.URL, false)
+
+	for _, bad := range []string{"a b", "a/b", "a?x=1", "a#f", "http://evil", "a\r\nHost: x"} {
+		if _, err := cc.GetBucket(context.Background(), bad); err == nil || !strings.Contains(err.Error(), "unsafe") {
+			t.Errorf("GetBucket(%q): want an 'unsafe' rejection, got %v", bad, err)
+		}
+	}
+	if reached {
+		t.Fatal("an admin request was sent with an unsafe bucket name (guard did not fire before the network call)")
+	}
+}
+
 func TestCephListBucketObjects(t *testing.T) {
 	m := &mockRGW{}
 	srv := httptest.NewServer(m.handler(t))

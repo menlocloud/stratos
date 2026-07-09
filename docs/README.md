@@ -30,7 +30,8 @@ selling, billing, and operating OpenStack cloud capacity (a Go backend, two Reac
 - [billing.md](billing.md) — price plans and rules, rating and bills,
   transactions, account credit, savings, promotions, activation/suspension.
 - [cloud-integration.md](cloud-integration.md) — the OpenStack facade: external
-  services, the resource cache, sync, metrics, and notifications.
+  services, the resource cache, sync, metrics, and notifications; plus the
+  Ceph RGW S3 object-store backend that runs alongside it.
 - [openstack-notifications.md](openstack-notifications.md) — operator guide:
   wiring OpenStack/RabbitMQ events into the near-real-time notification webhook.
 - [jobs-scheduling.md](jobs-scheduling.md) — scheduled jobs, the PostgreSQL

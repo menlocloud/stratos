@@ -35,7 +35,7 @@ capabilities to AI agents.
 
 ## Features
 
-- **Self-service cloud** — provision and manage instances, volumes, networks, floating IPs, load balancers, object storage and shares against one or more OpenStack regions.
+- **Self-service cloud** — provision and manage instances, volumes, networks, floating IPs, load balancers, object storage and shares against one or more OpenStack regions, plus S3 object storage on Ceph RGW (buckets, per-key access, static websites).
 - **Usage-based billing** — metered consumption rated against configurable price plans, resource types, currencies and tax rules.
 - **Invoicing & payments** — automated invoices, account credits, card and bank-transfer payments (Stripe), and automated suspension for overdue accounts.
 - **Savings plans & promotions** — commitment discounts, promotional credits, and sign-up bonuses.

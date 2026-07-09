@@ -159,7 +159,8 @@ func (h *Handler) Routes(r chi.Router) {
 	// collide with /{resourceId}/action (chi: static "action" wins over the {resourceId} param).
 	r.Post("/project/{id}/cloud/action", h.cloudBulkAction)
 	// ceph-s3 per-project S3 access keys ("IAM keys"): the project's own credentials, plus extra keys
-	// that can be granted onto individual buckets. cloud-resource MANAGE gated (they return secrets).
+	// that can be granted onto individual buckets. These return/rotate live secrets, so each handler gates
+	// on project:cloud_resource:api_access (NOT :manage) — see cloud_bucket_settings.go.
 	r.Get("/project/{id}/s3-credentials", h.s3Credentials)
 	r.Post("/project/{id}/s3-credentials/rotate", h.s3CredentialsRotate)
 	r.Get("/project/{id}/s3-keys", h.s3KeyList)

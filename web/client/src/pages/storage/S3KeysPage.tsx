@@ -16,14 +16,20 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { apiFetch } from "@/lib/api"
+import { ApiError, apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useProjectId } from "@/lib/hooks"
 import { useS3Credentials, useS3Keys, type S3Key } from "@/lib/objectstore"
 
 async function copy(label: string, value: string) {
-  await navigator.clipboard.writeText(value)
-  toast.success(`${label} copied`)
+  // navigator.clipboard.writeText rejects on a non-secure context, denied permission, or an old browser.
+  // Callers use void copy(...), so an uncaught rejection would silently give the user no feedback.
+  try {
+    await navigator.clipboard.writeText(value)
+    toast.success(`${label} copied`)
+  } catch {
+    toast.error(`Couldn't copy ${label} — select and copy it manually`)
+  }
 }
 
 /** A secret is hidden until explicitly revealed — it stays out of screenshots and shoulder-surfing by default. */
@@ -88,12 +94,18 @@ export default function S3KeysPage() {
 
   const rotate = useMutation({
     mutationFn: (t: S3Key | "project") =>
-      apiFetch(
+      apiFetch<{ warning?: string }>(
         t === "project" ? `/project/${pid}/s3-credentials/rotate` : `/project/${pid}/s3-keys/${t.id}/rotate`,
         { method: "POST" },
       ),
-    onSuccess: () => {
-      toast.success("Key rotated — the previous key no longer works")
+    // The backend sets `warning` when the NEW key works but the old one could not be retired — in that case
+    // the previous key may still be live, so don't claim it stopped working.
+    onSuccess: (res) => {
+      if (res?.warning) {
+        toast.warning("New key issued, but the previous key could not be retired — revoke it manually.")
+      } else {
+        toast.success("Key rotated — the previous key no longer works")
+      }
       setRotateTarget(null)
       invalidate()
     },
@@ -110,16 +122,22 @@ export default function S3KeysPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  // The endpoints 400 when the project has no ceph-s3 service — that is a normal state, not an error page.
+  // A 400 means the project has no ceph-s3 service — a normal state, show the empty page. Any OTHER error
+  // (403 no permission, 5xx, network) is a real failure and must surface, not masquerade as "not available".
   if (creds.isError) {
+    const status = creds.error instanceof ApiError ? creds.error.status : 0
     return (
       <>
         <PageHeader title="S3 access keys" description="Use these credentials with the AWS CLI or any S3 client." />
-        <EmptyState
-          icon={KeyRound}
-          title="S3 access keys are not available"
-          hint="This project has no S3 (Ceph) object storage service. Swift buckets are managed through Stratos only."
-        />
+        {status === 400 ? (
+          <EmptyState
+            icon={KeyRound}
+            title="S3 access keys are not available"
+            hint="This project has no S3 (Ceph) object storage service. Swift buckets are managed through Stratos only."
+          />
+        ) : (
+          <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(creds.error as Error).message}</p>
+        )}
       </>
     )
   }

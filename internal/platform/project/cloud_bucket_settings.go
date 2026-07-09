@@ -279,6 +279,7 @@ func (h *Handler) bucketSettingsOK(w http.ResponseWriter, r *http.Request, proj 
 // --- project-scoped S3 keys ---
 
 // s3KeyDTO never leaks the secret except on the create response and the explicit credentials read.
+// Warning is set only by rotate when the NEW key works but the old one could not be retired.
 type s3KeyDTO struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -286,6 +287,7 @@ type s3KeyDTO struct {
 	AccessKey string `json:"accessKey"`
 	SecretKey string `json:"secretKey,omitempty"`
 	CreatedAt any    `json:"createdAt,omitempty"`
+	Warning   string `json:"warning,omitempty"`
 }
 
 // cephServiceOfProject resolves the project's ceph-s3 service for the S3-key endpoints.
@@ -526,11 +528,11 @@ func (h *Handler) s3KeyRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.projectAudit(u, proj, "CLOUD_RESOURCE_ACTION")
+	// One stable response shape: the key DTO, with `warning` set only when the old key could not be retired.
 	dto := s3KeyDTO{ID: key.ID, Name: key.Name, RGWUID: key.RGWUID,
 		AccessKey: key.AccessKey, SecretKey: key.SecretKey, CreatedAt: key.CreatedAt}
 	if rotErr != nil {
-		httpx.OK(w, map[string]any{"key": dto, "warning": rotErr.Error()})
-		return
+		dto.Warning = rotErr.Error()
 	}
 	httpx.OK(w, dto)
 }
