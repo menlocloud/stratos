@@ -262,22 +262,25 @@ func (b *cephBackend) adminDo(ctx context.Context, method, path string, q url.Va
 		q = url.Values{}
 	}
 	q.Set("format", "json")
-	// Every Admin Ops query value we ever send is a hex id, an S3 name, a number, or a fixed keyword. Reject
-	// anything outside that allow-list BEFORE it reaches the request URL: the scheme+host+path come from
-	// operator config + constant literals, so once the values are constrained the request destination is
-	// fully determined by configuration and attacker-influenced input (bucket / key names, project-derived
-	// uids) cannot shape it (CWE-918 request-forgery). It also fails fast on a malformed name.
+	// Rebuild the query from an ALLOW-LIST so the exact value strings that reach the request URL have each
+	// passed the barrier. Every Admin Ops query value we send is a hex id, an S3 name, a number, or a fixed
+	// keyword; the scheme+host+path come from operator config + constant literals, so with the values
+	// constrained the request destination is fully determined by configuration and attacker-influenced
+	// input (bucket / key names, project-derived uids) cannot shape it (CWE-918 request-forgery). Building a
+	// fresh url.Values keeps the barrier on the same data-flow node that reaches the sink.
+	safe := url.Values{}
 	for k, vs := range q {
 		for _, v := range vs {
 			if !adminValueRe.MatchString(v) {
 				return fmt.Errorf("ceph-s3: refusing admin request: unsafe %s value %q", k, v)
 			}
+			safe.Add(k, v)
 		}
 	}
 	// url.Values.Encode() sorts keys — SigV4's canonical query string requires sorted params, and RGW
 	// canonicalizes the received query the same way. (Signed values must also be space-free: Encode()
 	// emits "+" for a space where SigV4 canonicalization expects %20.)
-	req, err := http.NewRequestWithContext(ctx, method, b.adminURL+path+"?"+q.Encode(), bodyReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, b.adminURL+path+"?"+safe.Encode(), bodyReader(body))
 	if err != nil {
 		return err
 	}

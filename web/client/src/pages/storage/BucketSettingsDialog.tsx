@@ -25,11 +25,13 @@ function bytesToGb(b: number): string {
   return b > 0 ? String(Math.round((b / GiB) * 100) / 100) : ""
 }
 
-// An empty quota field = unlimited; a non-empty one must parse to a finite, non-negative number.
+// An empty quota field = unlimited; a non-empty one must parse to a finite number STRICTLY > 0. Zero (and
+// negatives) are rejected because the backend treats maxSizeBytes/maxObjects <= 0 as "unlimited", so a
+// literal 0 would silently mean unlimited rather than "block everything".
 function quotaFieldValid(v: string): boolean {
   if (v.trim() === "") return true
   const n = Number(v)
-  return Number.isFinite(n) && n >= 0
+  return Number.isFinite(n) && n > 0
 }
 
 function quotaFieldsValid(gb: string, objects: string): boolean {
@@ -155,7 +157,7 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
                     <Label className="text-xs text-muted-foreground">Max size (GB)</Label>
                     <Input
                       className="w-32"
-                      placeholder={s.quota.enabled ? bytesToGb(s.quota.maxSizeBytes) : "unlimited"}
+                      placeholder={s.quota.enabled && s.quota.maxSizeBytes > 0 ? bytesToGb(s.quota.maxSizeBytes) : "unlimited"}
                       value={quotaGb}
                       onChange={(e) => setQuotaGb(e.target.value)}
                     />

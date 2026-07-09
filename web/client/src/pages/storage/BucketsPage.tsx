@@ -26,7 +26,7 @@ import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useProjectId } from "@/lib/hooks"
 import { BACKEND_LABEL, bucketBackend, isS3Location, useBucketLocations } from "@/lib/objectstore"
-import type { CloudResource } from "@/lib/types"
+import type { CloudResource, Location } from "@/lib/types"
 import { BucketSettingsDialog } from "./BucketSettingsDialog"
 
 export function bucketName(r: CloudResource): string {
@@ -59,14 +59,19 @@ export default function BucketsPage() {
   const [deleteTarget, setDeleteTarget] = useState<CloudResource | null>(null)
   const [settingsTarget, setSettingsTarget] = useState<CloudResource | null>(null)
 
-  const keyOf = (i: number) => String(i)
-  const selectedLoc = locations[Number(locKey)] ?? locations[0]
+  // Key the store picker by serviceId+region, NOT the array index — useLocations returns the API array
+  // with no stable order, so an index could point at a different backend between renders and create the
+  // bucket on the wrong store.
+  const locKeyOf = (l: Location) => `${l.serviceId ?? ""}::${l.region ?? ""}`
+  const selectedLoc = locations.find((l) => locKeyOf(l) === locKey) ?? locations[0]
   const s3Selected = isS3Location(selectedLoc)
   const multipleStores = locations.length > 1
 
   useEffect(() => {
-    if (!locKey && locations.length) setLocKey("0")
-  }, [locations.length, locKey])
+    if (locations.length && !locations.some((l) => locKeyOf(l) === locKey)) {
+      setLocKey(locKeyOf(locations[0]))
+    }
+  }, [locations, locKey])
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["cloud", pid, "BUCKET"] })
 
@@ -221,8 +226,8 @@ export default function BucketsPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {locations.map((l, i) => (
-                      <SelectItem key={keyOf(i)} value={keyOf(i)}>
+                    {locations.map((l) => (
+                      <SelectItem key={locKeyOf(l)} value={locKeyOf(l)}>
                         {l.provider === "ceph-s3" ? BACKEND_LABEL.CEPH_S3 : BACKEND_LABEL.SWIFT}
                         {l.serviceName ? ` — ${l.serviceName}` : ""} ({l.region})
                       </SelectItem>
