@@ -180,13 +180,3 @@ and our [Code of Conduct](CODE_OF_CONDUCT.md). To report a security issue, see
 
 Stratos is licensed under the **GNU Affero General Public License v3.0**
 (AGPL-3.0-only). See [`LICENSE`](LICENSE).
-
-## Star History
-
-<a href="https://star-history.com/#menlocloud/stratos&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=menlocloud/stratos&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=menlocloud/stratos&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=menlocloud/stratos&type=Date" width="600" />
-  </picture>
-</a>

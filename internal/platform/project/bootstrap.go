@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/menlocloud/stratos/internal/cloud/cephcred"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
 )
@@ -40,18 +41,77 @@ func (h *Handler) enableAndBootstrap(ctx context.Context, p *Project) error {
 	if err != nil {
 		return err
 	}
-	var es *externalservice.ExternalService
+	var osES *externalservice.ExternalService
+	var cephES []*externalservice.ExternalService
 	for i := range services {
-		if services[i].IsNotDisabled() && services[i].Provider() == "openstack" {
-			es = &services[i]
-			break
+		if services[i].IsDisabled() {
+			continue
+		}
+		switch {
+		case services[i].Provider() == "openstack" && osES == nil:
+			osES = &services[i]
+		case services[i].IsCephS3():
+			cephES = append(cephES, &services[i])
 		}
 	}
-	if es == nil {
+	if osES == nil && len(cephES) == 0 {
 		return nil // no cloud provider configured → nothing to provision
 	}
 	p.Status = StatusEnabled
-	return h.BootstrapOnto(ctx, p, es, "")
+	// OpenStack tenant bootstrap (Keystone) — the primary compute/network anchor.
+	if osES != nil {
+		if err := h.BootstrapOnto(ctx, p, osES, ""); err != nil {
+			return err
+		}
+	}
+	// Ceph-s3 object-store bootstrap (no Keystone) — provision the project's RGW tenant-user per service.
+	for _, es := range cephES {
+		if err := h.BootstrapCephOnto(ctx, p, es); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// BootstrapCephOnto provisions the project onto a ceph-s3 object-store service (decision #2: no Keystone
+// tenant — rgwTenant is the sole anchor). It ensures the project's RGW tenant-user + quota via Admin Ops,
+// stores the generated S3 keys (encrypted) in the ceph credential store, and appends the ProjectExternal
+// service binding {serviceId, provider:"ceph-s3", region, rgwTenant, rgwUid}. Idempotent: a project
+// already attached to this service is saved as-is; ensureUser reuses an existing RGW user's keys.
+func (h *Handler) BootstrapCephOnto(ctx context.Context, p *Project, es *externalservice.ExternalService) error {
+	if p.HasService(es.ID) {
+		return h.svc.Save(ctx, p)
+	}
+	if h.cephCreds == nil {
+		return fmt.Errorf("bootstrap ceph: credential store not configured")
+	}
+	region := es.CephRegion()
+	if region == "" {
+		region = h.cloudRegion
+	}
+	uid := es.RGWUIDFor(p.ID) // uidPrefix + projectId — the one derivation
+	// Admin-keyed client (no project keys yet) drives the Admin Ops user create + quota.
+	adminCC, err := client.NewCephS3(ctx, es.CephConfig(region, "", "", uid))
+	if err != nil {
+		return fmt.Errorf("bootstrap ceph: build admin client: %w", err)
+	}
+	access, secret, err := adminCC.EnsureCephUser(ctx, "stratos-"+p.ID)
+	if err != nil {
+		return fmt.Errorf("bootstrap ceph: ensure rgw user: %w", err)
+	}
+	if err := h.cephCreds.Save(ctx, &cephcred.Credential{
+		ProjectID: p.ID, ServiceID: es.ID, RGWUID: uid,
+		AccessKey: access, SecretKey: secret,
+	}); err != nil {
+		return fmt.Errorf("bootstrap ceph: store credential: %w", err)
+	}
+	p.Services = append(p.Services, map[string]any{
+		"serviceId": es.ID,
+		"provider":  "ceph-s3",
+		"region":    region,
+		"rgwUid":    uid,
+	})
+	return h.svc.Save(ctx, p)
 }
 
 // BootstrapOnto provisions the project onto the GIVEN cloud service — the explicit-service leg of

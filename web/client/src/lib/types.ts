@@ -61,6 +61,9 @@ export type Location = {
   region?: string
   displayName?: string
   resourceTypes?: string[]
+  /** "openstack" (Swift object store) | "ceph-s3" — the two object stores run side by side. */
+  provider?: string
+  serviceName?: string
   [k: string]: unknown
 }
 

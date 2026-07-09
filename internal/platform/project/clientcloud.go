@@ -75,7 +75,9 @@ func (h *Handler) uiMenuItems(r *http.Request) map[string]any {
 	}
 	for i := range services {
 		es := &services[i]
-		if es.IsDisabled() || es.Provider() != "openstack" {
+		// OpenStack (compute/network/… + Swift object-store) AND ceph-s3 (object-store only) both
+		// contribute menu items — a ceph-only project must still get its Object Storage entry.
+		if es.IsDisabled() || (es.Provider() != "openstack" && !es.IsCephS3()) {
 			continue
 		}
 		svcMap, _ := es.Config["services"].(map[string]any)
@@ -291,8 +293,8 @@ func (h *Handler) projectCostInfo(w http.ResponseWriter, r *http.Request) {
 		"projects":               map[string]any{p.ID: projCostInfo},
 		"billingProfileCostInfo": bpCostInfo,
 		"balance":                balance, "dueAmount": due, "accountCredit": credit, "promotionalCredits": promo,
-		"currentMonthCosts":      projCostInfo["currentMonthCosts"], "lastMonthCosts": projCostInfo["lastMonthCosts"],
-		"proratedMonthEndCosts":  projCostInfo["currentMonthCosts"], "forecastedMonthEndCosts": projCostInfo["currentMonthCosts"],
+		"currentMonthCosts": projCostInfo["currentMonthCosts"], "lastMonthCosts": projCostInfo["lastMonthCosts"],
+		"proratedMonthEndCosts": projCostInfo["currentMonthCosts"], "forecastedMonthEndCosts": projCostInfo["currentMonthCosts"],
 	})
 }
 
@@ -318,12 +320,20 @@ func (h *Handler) projectLocations(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		regions, _ := es.Config["regions"].(map[string]any)
+		// A ceph-s3 provider is configured with a single config.region (its RGW zonegroup) rather than the
+		// OpenStack regions map. Without this the Location picker is empty and the create-bucket form can
+		// never send the x-service-id / x-region-id the write path needs.
+		if len(regions) == 0 && es.IsCephS3() {
+			if r := es.CephRegion(); r != "" {
+				regions = map[string]any{r: map[string]any{}}
+			}
+		}
 		for regionName, rcfgAny := range regions {
 			rcfg, _ := rcfgAny.(map[string]any)
 			country, _ := rcfg["country"].(string)
 			displayName, _ := rcfg["displayName"].(string)
 			out = append(out, map[string]any{
-				"name": es.Name, "serviceId": es.ID, "region": regionName,
+				"name": es.Name, "serviceId": es.ID, "region": regionName, "provider": es.Provider(),
 				"country": country, "displayName": displayName, "order": 0,
 			})
 		}
@@ -562,9 +572,12 @@ func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 	cfg := es.Config
 	get := func(k string) any { return cfg[k] }
 	return map[string]any{
-		"id":                es.ID,
-		"name":              es.Name,
-		"type":              es.Type,
+		"id":   es.ID,
+		"name": es.Name,
+		"type": es.Type,
+		// provider ("openstack" | "ceph-s3") lets the client UI label which object-store backend a
+		// service (and therefore its buckets) rides on — the two run side by side and never mix.
+		"provider":          es.Provider(),
 		"status":            es.Status,
 		"vhi":               boolOf(cfg["vhi"]),
 		"shared":            es.Shared(),

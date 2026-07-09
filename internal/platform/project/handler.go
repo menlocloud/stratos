@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/menlocloud/stratos/internal/cloud"
+	"github.com/menlocloud/stratos/internal/cloud/cephcred"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/internal/platform/billing"
@@ -50,10 +51,23 @@ type Handler struct {
 	// customMenu feeds admin Custom Menu items into the /init menu (nil-safe;
 	// merged into the menu build). Set via SetCustomMenu.
 	customMenu *CustomMenuReader
+	// cephCreds stores/reads per-project Ceph RGW (S3) credentials — required to build a project-keyed
+	// ceph client for bucket + object I/O, and written by the ceph bootstrap. Set via SetCephCreds
+	// (nil = ceph-s3 provisioning + writes are unavailable).
+	cephCreds *cephcred.Repo
+	// cephKeys stores the project's EXTRA S3 access keys (each is its own RGW user, granted onto buckets
+	// via bucket policy). Set via SetCephCreds (nil = the S3-key surface is unavailable).
+	cephKeys *cephcred.KeyRepo
 }
 
 // SetCustomMenu wires the customMenuItem reader into the /init menu build.
 func (h *Handler) SetCustomMenu(r *CustomMenuReader) { h.customMenu = r }
+
+// SetCephCreds wires the ceph credential + S3-key stores (enables ceph-s3 provisioning, bucket writes and
+// the per-project S3 access keys).
+func (h *Handler) SetCephCreds(r *cephcred.Repo, keys *cephcred.KeyRepo) {
+	h.cephCreds, h.cephKeys = r, keys
+}
 
 // SetDownloads wires the cloud-download token repo + the api base URL for the object DOWNLOAD action.
 func (h *Handler) SetDownloads(d *cloud.DownloadRepo, apiBaseURL string) {
@@ -144,6 +158,14 @@ func (h *Handler) Routes(r chi.Router) {
 	// (PUBLIC_IMAGES, LIST_AVAILABILITY_ZONES) — must precede no static segment so it doesn't
 	// collide with /{resourceId}/action (chi: static "action" wins over the {resourceId} param).
 	r.Post("/project/{id}/cloud/action", h.cloudBulkAction)
+	// ceph-s3 per-project S3 access keys ("IAM keys"): the project's own credentials, plus extra keys
+	// that can be granted onto individual buckets. cloud-resource MANAGE gated (they return secrets).
+	r.Get("/project/{id}/s3-credentials", h.s3Credentials)
+	r.Post("/project/{id}/s3-credentials/rotate", h.s3CredentialsRotate)
+	r.Get("/project/{id}/s3-keys", h.s3KeyList)
+	r.Post("/project/{id}/s3-keys", h.s3KeyCreate)
+	r.Post("/project/{id}/s3-keys/{keyId}/rotate", h.s3KeyRotate)
+	r.Delete("/project/{id}/s3-keys/{keyId}", h.s3KeyDelete)
 }
 
 // billingSummary returns the project's billing-profile summary. Project-membership-gated via

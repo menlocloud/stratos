@@ -42,11 +42,11 @@ func (v ProjectView) MarshalJSON() ([]byte, error) {
 		rc = []ResourceCount{}
 	}
 	return json.Marshal(struct {
-		ID               string          `json:"id,omitempty"`
-		Name             string          `json:"name"`
-		Status           string          `json:"status"`
-		BillingProfileID string          `json:"billingProfileId,omitempty"`
-		OrganizationID   string          `json:"organizationId"`
+		ID                    string          `json:"id,omitempty"`
+		Name                  string          `json:"name"`
+		Status                string          `json:"status"`
+		BillingProfileID      string          `json:"billingProfileId,omitempty"`
+		OrganizationID        string          `json:"organizationId"`
 		Memberships           []Membership    `json:"memberships"`
 		CreatedAt             *time.Time      `json:"createdAt,omitempty"`
 		ResourcesCount        []ResourceCount `json:"resourcesCount"`

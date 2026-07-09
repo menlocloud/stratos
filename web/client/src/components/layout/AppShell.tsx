@@ -48,6 +48,7 @@ function navGroups(pid: string): Group[] {
         { to: `${p}/volumes`, label: "Volumes", icon: HardDrive, service: "volumev3" },
         { to: `${p}/snapshots`, label: "Snapshots", icon: Camera, service: "volumev3" },
         { to: `${p}/object-storage`, label: "Object storage", icon: Database, service: "object-store" },
+        { to: `${p}/s3-keys`, label: "S3 access keys", icon: KeyRound, service: "object-store" },
         { to: `${p}/shares`, label: "File shares", icon: Share2, service: "sharev2" },
       ],
     },

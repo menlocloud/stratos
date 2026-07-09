@@ -1,0 +1,468 @@
+import { useState } from "react"
+import { toast } from "sonner"
+import { ExternalLink, ShieldAlert } from "lucide-react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
+import { useS3Keys, useBucketSettings, useBucketSettingsMutation, type BucketGrant } from "@/lib/objectstore"
+
+const GiB = 1024 ** 3
+
+function bytesToGb(b: number): string {
+  return b > 0 ? String(Math.round((b / GiB) * 100) / 100) : ""
+}
+
+type Props = {
+  pid: string
+  resourceId: string
+  bucketName: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
+export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpenChange }: Props) {
+  const { data: s, isLoading, isError, error } = useBucketSettings(pid, resourceId, open)
+  const { data: keys } = useS3Keys(pid, open)
+  const mut = useBucketSettingsMutation(pid, resourceId)
+
+  const run = (action: string, data?: Record<string, unknown>, msg?: string) =>
+    mut.mutate({ action, data }, {
+      onSuccess: () => msg && toast.success(msg),
+      onError: (e: Error) => toast.error(e.message),
+    })
+
+  // local edit state, seeded from the server on each open
+  const [quotaGb, setQuotaGb] = useState("")
+  const [quotaObjects, setQuotaObjects] = useState("")
+  const [indexDoc, setIndexDoc] = useState("index.html")
+  const [errorDoc, setErrorDoc] = useState("")
+  // null = untouched (show the live policy, Save disabled). A string = the user has edited it.
+  const [policy, setPolicy] = useState<string | null>(null)
+  const [grantKey, setGrantKey] = useState("")
+  const [grantPerm, setGrantPerm] = useState<BucketGrant["permission"]>("READ")
+
+  const keyByUid = new Map((keys ?? []).map((k) => [k.rgwUid, k]))
+  const ungranted = (keys ?? []).filter((k) => !s?.grants?.some((g) => g.uid === k.rgwUid))
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Bucket settings — {bucketName}</DialogTitle>
+          <DialogDescription>Configuration for this S3 bucket.</DialogDescription>
+        </DialogHeader>
+
+        {isLoading ? (
+          <Skeleton className="h-72" />
+        ) : isError ? (
+          <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
+        ) : !s ? null : (
+          <Tabs defaultValue="general">
+            <TabsList>
+              <TabsTrigger value="general">General</TabsTrigger>
+              <TabsTrigger value="website">Website</TabsTrigger>
+              <TabsTrigger value="access">Access</TabsTrigger>
+              <TabsTrigger value="lifecycle">Lifecycle</TabsTrigger>
+              <TabsTrigger value="policy">Policy</TabsTrigger>
+            </TabsList>
+
+            {/* --- general: versioning, object lock, quota, placement --- */}
+            <TabsContent value="general" className="grid gap-5 pt-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label>Versioning</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Keeps previous versions of every object. Old versions still count towards storage you are billed
+                    for. Once enabled it can only be suspended, never fully turned off.
+                  </p>
+                </div>
+                <Switch
+                  checked={s.versioning === "Enabled"}
+                  onCheckedChange={(v) => run("SET_VERSIONING", { enabled: v }, v ? "Versioning enabled" : "Versioning suspended")}
+                />
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label>Object lock</Label>
+                {s.objectLock?.enabled ? (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Enabled at creation. Retention: {s.objectLock.mode || "—"}{" "}
+                      {s.objectLock.days ? `· ${s.objectLock.days} day(s)` : ""}
+                    </p>
+                    <div className="flex items-end gap-2">
+                      <div className="grid gap-1">
+                        <Label className="text-xs text-muted-foreground">Default retention (days)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          defaultValue={s.objectLock.days || 1}
+                          className="w-32"
+                          id="lock-days"
+                        />
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const el = document.getElementById("lock-days") as HTMLInputElement | null
+                          run("SET_OBJECT_LOCK", { mode: "GOVERNANCE", days: Number(el?.value || 1) }, "Retention updated")
+                        }}
+                      >
+                        Apply
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Only GOVERNANCE retention is offered. COMPLIANCE would make objects — and this project —
+                      impossible to delete until retention expires.
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Not enabled. Object lock can only be turned on when the bucket is created.
+                  </p>
+                )}
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label>Quota</Label>
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="grid gap-1">
+                    <Label className="text-xs text-muted-foreground">Max size (GB)</Label>
+                    <Input
+                      className="w-32"
+                      placeholder={s.quota.enabled ? bytesToGb(s.quota.maxSizeBytes) : "unlimited"}
+                      value={quotaGb}
+                      onChange={(e) => setQuotaGb(e.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs text-muted-foreground">Max objects</Label>
+                    <Input
+                      className="w-32"
+                      placeholder={s.quota.enabled && s.quota.maxObjects > 0 ? String(s.quota.maxObjects) : "unlimited"}
+                      value={quotaObjects}
+                      onChange={(e) => setQuotaObjects(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      run(
+                        "SET_QUOTA",
+                        {
+                          maxSizeBytes: quotaGb ? Math.round(Number(quotaGb) * GiB) : -1,
+                          maxObjects: quotaObjects ? Number(quotaObjects) : -1,
+                          enabled: true,
+                        },
+                        "Quota updated",
+                      )
+                    }
+                  >
+                    Apply
+                  </Button>
+                  {s.quota.enabled ? (
+                    <Button variant="ghost" size="sm" onClick={() => run("SET_QUOTA", { maxSizeBytes: -1, maxObjects: -1, enabled: false }, "Quota removed")}>
+                      Remove quota
+                    </Button>
+                  ) : null}
+                </div>
+                <p className="text-xs text-muted-foreground">Leave a field empty for unlimited.</p>
+              </div>
+
+              <div className="flex gap-6 text-xs text-muted-foreground">
+                <span>Index type: {s.indexType || "—"}</span>
+                <span>Placement: {s.placementRule || "—"}</span>
+              </div>
+            </TabsContent>
+
+            {/* --- website --- */}
+            <TabsContent value="website" className="grid gap-4 pt-4">
+              {s.website?.enabled ? (
+                <Alert variant="destructive">
+                  <ShieldAlert className="size-4" />
+                  <AlertTitle>This bucket is public</AlertTitle>
+                  <AlertDescription>
+                    Every object in <strong>{bucketName}</strong> can be read by anyone on the internet. Turning the
+                    website off removes public access again.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Alert>
+                  <ShieldAlert className="size-4" />
+                  <AlertTitle>Enabling a website makes every object public</AlertTitle>
+                  <AlertDescription>
+                    Stratos adds a bucket policy allowing anonymous read of all objects. Do not enable it on a bucket
+                    holding private data.
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {s.website?.enabled && s.website.url ? (
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Website URL</Label>
+                  <a
+                    className="flex items-center gap-1 text-sm text-primary hover:underline"
+                    href={s.website.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {s.website.url} <ExternalLink className="size-3" />
+                  </a>
+                </div>
+              ) : null}
+
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="idx">Index document</Label>
+                  <Input id="idx" value={indexDoc} onChange={(e) => setIndexDoc(e.target.value)} />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="err">Error document (optional)</Label>
+                  <Input id="err" placeholder="error.html" value={errorDoc} onChange={(e) => setErrorDoc(e.target.value)} />
+                </div>
+              </div>
+
+              {s.website?.enabled ? (
+                <Button variant="destructive" onClick={() => run("DISABLE_WEBSITE", undefined, "Website disabled; public access removed")}>
+                  Disable website
+                </Button>
+              ) : (
+                <Button
+                  onClick={() =>
+                    run("ENABLE_WEBSITE", { indexDocument: indexDoc, errorDocument: errorDoc }, "Website enabled — bucket is now public")
+                  }
+                >
+                  Enable website (makes objects public)
+                </Button>
+              )}
+            </TabsContent>
+
+            {/* --- access: per-key grants --- */}
+            <TabsContent value="access" className="grid gap-4 pt-4">
+              <p className="text-xs text-muted-foreground">
+                Grant one of this project’s S3 access keys permission on this bucket. The project’s own credentials
+                always have full access.
+              </p>
+
+              {s.grants.length ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Key</TableHead>
+                      <TableHead>Permission</TableHead>
+                      <TableHead className="w-24" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {s.grants.map((g) => (
+                      <TableRow key={g.uid}>
+                        <TableCell className="font-medium">{keyByUid.get(g.uid)?.name ?? g.uid}</TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{g.permission.replace("_", " ")}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive"
+                            onClick={() => {
+                              const k = keyByUid.get(g.uid)
+                              if (k) run("REVOKE_KEY", { keyId: k.id }, "Access revoked")
+                              else toast.error("This grant refers to a key that no longer exists")
+                            }}
+                          >
+                            Revoke
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <p className="text-sm text-muted-foreground">No keys have access to this bucket.</p>
+              )}
+
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="grid gap-1">
+                  <Label className="text-xs text-muted-foreground">Access key</Label>
+                  <Select value={grantKey} onValueChange={setGrantKey}>
+                    <SelectTrigger className="w-56">
+                      <SelectValue placeholder={ungranted.length ? "Select a key" : "No keys available"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ungranted.map((k) => (
+                        <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1">
+                  <Label className="text-xs text-muted-foreground">Permission</Label>
+                  <Select value={grantPerm} onValueChange={(v) => setGrantPerm(v as BucketGrant["permission"])}>
+                    <SelectTrigger className="w-44">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="READ">Read</SelectItem>
+                      <SelectItem value="READ_WRITE">Read &amp; write</SelectItem>
+                      <SelectItem value="FULL">Full control</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!grantKey}
+                  onClick={() => {
+                    run("GRANT_KEY", { keyId: grantKey, permission: grantPerm }, "Access granted")
+                    setGrantKey("")
+                  }}
+                >
+                  Grant
+                </Button>
+              </div>
+            </TabsContent>
+
+            {/* --- lifecycle --- */}
+            <TabsContent value="lifecycle" className="grid gap-4 pt-4">
+              <p className="text-xs text-muted-foreground">
+                Automatically delete objects after a number of days. Useful for logs and temporary files — expired
+                objects stop being billed.
+              </p>
+              {s.lifecycle.length ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Rule</TableHead>
+                      <TableHead>Prefix</TableHead>
+                      <TableHead>Expire after</TableHead>
+                      <TableHead className="w-24" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {s.lifecycle.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="font-medium">{r.id}</TableCell>
+                        <TableCell className="font-mono text-xs">{r.prefix || "(all objects)"}</TableCell>
+                        <TableCell>{r.expirationDays ? `${r.expirationDays} days` : "—"}</TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive"
+                            onClick={() =>
+                              run("SET_LIFECYCLE", { rules: s.lifecycle.filter((x) => x.id !== r.id) }, "Rule removed")
+                            }
+                          >
+                            Remove
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <p className="text-sm text-muted-foreground">No lifecycle rules.</p>
+              )}
+              <LifecycleAdd
+                onAdd={(rule) => run("SET_LIFECYCLE", { rules: [...s.lifecycle, rule] }, "Rule added")}
+                existing={s.lifecycle.map((r) => r.id)}
+              />
+            </TabsContent>
+
+            {/* --- raw policy --- */}
+            <TabsContent value="policy" className="grid gap-3 pt-4">
+              <p className="text-xs text-muted-foreground">
+                Advanced. Stratos-managed statements (website public-read and key grants) are preserved automatically
+                and cannot be edited here.
+              </p>
+              <Textarea
+                rows={12}
+                className="font-mono text-xs"
+                placeholder="No policy set"
+                // Seeded from the LIVE policy. If this were only a placeholder, pressing Save without
+                // retyping would submit "" and wipe the customer's statements.
+                value={policy ?? s.policyJson ?? ""}
+                onChange={(e) => setPolicy(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={policy === null}
+                  onClick={() => run("SET_POLICY", { policyJson: policy ?? "" }, "Policy saved")}
+                >
+                  Save policy
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setPolicy("")
+                    run("SET_POLICY", { policyJson: "" }, "Custom policy cleared")
+                  }}
+                >
+                  Clear custom policy
+                </Button>
+              </div>
+              {policy === null ? (
+                <p className="text-xs text-muted-foreground">Edit the document to enable Save.</p>
+              ) : null}
+            </TabsContent>
+          </Tabs>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function LifecycleAdd({ onAdd, existing }: { onAdd: (r: Record<string, unknown>) => void; existing: string[] }) {
+  const [id, setId] = useState("")
+  const [prefix, setPrefix] = useState("")
+  const [days, setDays] = useState("30")
+  const dup = existing.includes(id.trim())
+  return (
+    <div className="flex flex-wrap items-end gap-2">
+      <div className="grid gap-1">
+        <Label className="text-xs text-muted-foreground">Rule name</Label>
+        <Input className="w-40" value={id} onChange={(e) => setId(e.target.value)} placeholder="expire-logs" />
+      </div>
+      <div className="grid gap-1">
+        <Label className="text-xs text-muted-foreground">Prefix (optional)</Label>
+        <Input className="w-40" value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="logs/" />
+      </div>
+      <div className="grid gap-1">
+        <Label className="text-xs text-muted-foreground">Expire after (days)</Label>
+        <Input className="w-32" type="number" min={1} value={days} onChange={(e) => setDays(e.target.value)} />
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={!id.trim() || dup || Number(days) < 1}
+        onClick={() => {
+          onAdd({ id: id.trim(), prefix, enabled: true, expirationDays: Number(days) })
+          setId("")
+          setPrefix("")
+        }}
+      >
+        Add rule
+      </Button>
+      {dup ? <span className="text-xs text-destructive">Name already used</span> : null}
+    </div>
+  )
+}
