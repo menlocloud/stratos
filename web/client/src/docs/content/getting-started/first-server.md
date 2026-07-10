@@ -60,7 +60,7 @@ Open **step 7, Access**. There are two ways to log in:
 - **SSH key pair (recommended)** — choose the key pair you made in Step 2. Most secure, and no password to manage.
 - **Password** — set a **username** and **password**. With a username, the portal creates a sudo login user for you via cloud-init (works on any Ubuntu image). The screenshot below uses this method.
 
-Ports are controlled by **Security groups**. To reach the server over SSH it needs a group that allows **inbound port 22**. Pick a group you know opens 22 — or create one under **Network → Security groups** first. Don't assume the `default` group allows it; on many setups it blocks inbound SSH until you add a rule. **User data** is optional: paste a cloud-init script to run on first boot (install packages, create users), or leave it blank.
+Ports are controlled by **Security groups**. To reach the server over SSH it needs a group that allows **inbound port 22**. The screenshots use the **allow-all** group, which opens all traffic — fine while you're getting started; for a longer-lived server, create a group under **Network → Security groups** that opens only the ports you need. **User data** is optional: paste a cloud-init script to run on first boot (install packages, create users), or leave it blank.
 
 ![Choosing a login method and a security group that allows SSH](/docs-img/first-server-create-access.png)
 
