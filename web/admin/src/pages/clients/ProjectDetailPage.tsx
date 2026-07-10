@@ -41,7 +41,8 @@ type ProjectDoc = {
   organizationId?: string
   billingProfileId?: string
   memberships?: Array<{ sub?: string; role?: string }>
-  services?: Array<{ serviceId?: string; externalProjectId?: string }>
+  // ceph-s3 bindings carry provider/region/rgwUid instead of an (OpenStack) externalProjectId.
+  services?: Array<{ serviceId?: string; externalProjectId?: string; provider?: string; region?: string; rgwUid?: string }>
   // absent/null = all external networks allowed; array = allow-list of Neutron network ids.
   publicNetworkIds?: string[] | null
   // false/absent = the client can't choose an external network (server auto-picks); true = client picks.
@@ -147,10 +148,16 @@ export default function ProjectDetailPage() {
   const [memberChoice, setMemberChoice] = useState("")
   const [memberRole, setMemberRole] = useState("MEMBER")
   const [memberToRemove, setMemberToRemove] = useState<MemberUser | null>(null)
+  const [attachOpen, setAttachOpen] = useState(false)
+  const [attachChoice, setAttachChoice] = useState("")
 
   const bps = useAdminList<BillingProfile>("/admin/billing-profile", bpOpen)
   const orgsList = useAdminList<{ id: string; name?: string }>("/admin/organizations", orgOpen)
   const users = useAdminList<AdminUser>("/admin/user", addMemberOpen)
+  const providers = useAdminList<{ id: string; name?: string; status?: string; config?: { provider?: string } }>(
+    "/admin/service",
+    attachOpen,
+  )
 
   const externalServiceId = project?.services?.find((s) => s.serviceId)?.serviceId ?? ""
   const publicNets = useAdminList<PublicNetwork>(
@@ -194,6 +201,20 @@ export default function ProjectDetailPage() {
     onSuccess: (_d, status) => {
       toast.success(status === "ENABLED" ? "Project enabled" : "Project disabled")
       setStatusConfirm(null)
+      invalidateProject()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  // GET /admin/project/{id}/external-service/{esid} (projectmut.go projectAddExternalService):
+  // bootstraps the project onto that provider — a Keystone tenant for openstack, an RGW user +
+  // stored S3 credential for ceph-s3. Idempotent, so a re-attach is safe.
+  const attachService = useMutation({
+    mutationFn: (esID: string) => apiFetch(`${projectPath}/external-service/${esID}`),
+    onSuccess: () => {
+      toast.success("Cloud provider attached")
+      setAttachOpen(false)
+      setAttachChoice("")
       invalidateProject()
     },
     onError: (e: Error) => toast.error(e.message),
@@ -461,8 +482,11 @@ export default function ProjectDetailPage() {
             </Card>
 
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-base">Cloud services</CardTitle>
+                <Button variant="outline" size="sm" onClick={() => setAttachOpen(true)}>
+                  <Plus className="size-4" /> Attach provider
+                </Button>
               </CardHeader>
               <CardContent>
                 {(project?.services ?? []).length === 0 ? (
@@ -475,10 +499,17 @@ export default function ProjectDetailPage() {
                           <span className="text-xs text-muted-foreground">Service: </span>
                           <span className="font-mono text-xs">{s.serviceId ?? "—"}</span>
                         </span>
-                        <span>
-                          <span className="text-xs text-muted-foreground">External project: </span>
-                          <span className="font-mono text-xs">{s.externalProjectId ?? "—"}</span>
-                        </span>
+                        {s.rgwUid ? (
+                          <span>
+                            <span className="text-xs text-muted-foreground">RGW user: </span>
+                            <span className="font-mono text-xs">{s.rgwUid}</span>
+                          </span>
+                        ) : (
+                          <span>
+                            <span className="text-xs text-muted-foreground">External project: </span>
+                            <span className="font-mono text-xs">{s.externalProjectId ?? "—"}</span>
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -853,6 +884,49 @@ export default function ProjectDetailPage() {
             </Button>
             <Button disabled={!bpChoice || changeBp.isPending} onClick={() => changeBp.mutate()}>
               {changeBp.isPending ? "Saving…" : "Assign billing profile"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={attachOpen}
+        onOpenChange={(o) => {
+          setAttachOpen(o)
+          if (!o) setAttachChoice("")
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Attach cloud provider</DialogTitle>
+            <DialogDescription>
+              Provisions this project on the provider: a Keystone tenant for OpenStack, a dedicated RGW user for
+              Ceph S3. Projects created after a provider was added pick it up on their own — this is for the ones
+              that already existed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Select value={attachChoice} onValueChange={setAttachChoice}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={providers.isLoading ? "Loading providers…" : "Pick a provider"} />
+              </SelectTrigger>
+              <SelectContent>
+                {(providers.data?.data ?? [])
+                  .filter((p) => p.id && !(project?.services ?? []).some((s) => s.serviceId === p.id))
+                  .map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {`${p.name ?? p.id} · ${p.config?.provider ?? "openstack"}`}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAttachOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={!attachChoice || attachService.isPending} onClick={() => attachService.mutate(attachChoice)}>
+              {attachService.isPending ? "Attaching…" : "Attach provider"}
             </Button>
           </DialogFooter>
         </DialogContent>
