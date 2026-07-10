@@ -158,7 +158,8 @@ function cephFormToBody(f: CephFormState) {
       ...(f.defaultQuotaGiB.trim() ? { defaultQuotaGiB: Number(f.defaultQuotaGiB) } : {}),
       services: { "object-store": { [region]: true } },
     },
-    secret: { adminAccessKey: f.adminAccessKey.trim(), adminSecretKey: f.adminSecretKey },
+    // Trim BOTH keys — a pasted secret with a trailing newline would validate but break SigV4.
+    secret: { adminAccessKey: f.adminAccessKey.trim(), adminSecretKey: f.adminSecretKey.trim() },
   }
 }
 

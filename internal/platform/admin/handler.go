@@ -1094,12 +1094,15 @@ func (h *Handler) projectsByBillingProfile(w http.ResponseWriter, r *http.Reques
 	if httpx.WriteError(w, err) {
 		return
 	}
+	orgIDs := make([]any, 0, len(orgs))
 	for i := range orgs {
-		orgID, _ := orgs[i]["_id"].(string)
-		if orgID == "" {
-			continue
+		if orgID, _ := orgs[i]["_id"].(string); orgID != "" {
+			orgIDs = append(orgIDs, orgID)
 		}
-		projs, err := h.repo.ListRawFiltered(r.Context(), "project", map[string]any{"organizationId": orgID})
+	}
+	if len(orgIDs) > 0 {
+		projs, err := h.repo.ListRawFiltered(r.Context(), "project",
+			map[string]any{"organizationId": map[string]any{"$in": orgIDs}})
 		if httpx.WriteError(w, err) {
 			return
 		}
