@@ -1,48 +1,105 @@
 # Launch Your First Server
 
-This walkthrough takes you from an empty account to a running virtual machine. It assumes you've already [activated billing](/docs/getting-started/account-setup) — without an active profile the create buttons stay disabled.
+This walkthrough takes you from an empty project to a running virtual machine you can log into — and then safely tears it back down. It assumes you've already [signed in and activated billing](/docs/getting-started/account-setup); until a billing profile is active, the **Create** buttons stay disabled.
 
-## Step 1 — Have a project to work in
+Here's the whole loop: pick a project, make an SSH key, fill the launch form, watch the server boot, connect, and clean up. Ten minutes, start to finish.
 
-You're always inside a project, and your first sign-in gave you a default one, so you can start there. If you'd rather keep things separate, create a fresh one:
+## Step 1 — Pick a project to work in
 
-1. Open the project switcher at the top of the sidebar and choose to create a new project (or go to **Organization → Projects**).
-2. Give it a name that tells you what it holds — `demo`, `staging`, a client name.
-3. The new project becomes your active context; the sidebar now scopes to it.
+Everything you create lives inside a **project** — it scopes your servers, networks, teammates and billing. Your first sign-in created a default project, so you can start there. To keep work separate, open the **project switcher** at the top of the sidebar and create a new one (name it for what it holds — `demo`, `staging`, a client name). Whatever the switcher shows is your active context; every resource below lands in that project.
 
-Projects also anchor teamwork and billing: members are added per project, and costs roll up per project. To pull colleagues in, see [Teammates and Invitations](/docs/guides/team-members).
+New to projects and organizations? See [Meet the Stratos Portal](/docs/getting-started/overview).
 
-## Step 2 — Line up what the server needs
+## Step 2 — Create an SSH key pair
 
-A server is assembled from a few smaller pieces. You can create them as you go through the launch form, but it helps to know what they are:
+A key pair is how you log into a Linux server without a password. Make it before you launch so it's ready to attach.
 
-- **Image** — the operating system the machine boots from. Browse **Compute → Images** to see what's available.
-- **Flavor** — the size (vCPUs, RAM, root disk). You pick this in the launch form.
-- **Network** — the private network the server attaches to. If the project has none yet, create one under **Network → Networks**.
-- **Key pair** — the SSH key you'll log in with. Under **Compute → Key pairs**, upload a public key you already have or let the portal generate one and download the private half. You can't retrieve a generated private key later, so save it immediately.
-- **Security group** — the firewall around the server. A default group usually exists; open **Network → Security groups** to allow the ports you need (for example SSH on 22).
+1. Go to **Compute → Key pairs** and choose **Create keypair**.
+2. Give it a name (for example `my-first-key`). If you already have an SSH key, paste its **public** half (`ssh-ed25519 …` or `ssh-rsa …`) into **Public key**. To have one generated for you, leave that field empty.
 
-## Step 3 — Launch the server
+   ![The Create keypair dialog](/docs-img/first-server-keypair-create.png)
 
-1. Go to **Compute → Servers** and start a new server.
-2. Name it, then choose the **image** and **flavor**.
-3. Attach it to a **network** and select the **key pair** from Step 2.
-4. Assign a **security group** that opens the ports you'll use.
-5. Leave **Assign floating IP** on (the default) to have a public address attached automatically shortly after the server comes up.
-6. Confirm, and Stratos provisions the machine on the underlying cloud. It moves through build states and settles on **ACTIVE** once it's up. (For what's happening behind that, see [How Provisioning Works](/docs/concepts/provisioning).)
+3. If you let the cloud generate the key, the **private key is shown exactly once**. Download the `.pem` (or copy it) and store it somewhere safe — it is never shown again, and without it you can't SSH in.
 
-## Step 4 — Reach it from the internet
+   ![The private key is shown only once — download it now](/docs-img/first-server-keypair-private.png)
 
-If you left **Assign floating IP** on in the launch form, the server picks up a public address on its own shortly after going **ACTIVE** — skip to the SSH step. To attach one by hand instead:
+> Lock the private key down before using it — on macOS/Linux run `chmod 600 my-first-key.pem`. If you lose it, you can't SSH into any server that was launched with it — deleting the key pair won't bring that access back. Create a new key pair for future servers. To regain access to a server you've already launched, either rebuild it with the new key or set a password under **More actions → Set password** and log in with that instead.
 
-1. Under **Network → Floating IPs**, allocate a floating IP.
-2. Associate that IP with your server.
-3. SSH in with the private key from your key pair — for example `ssh -i mykey.pem <user>@<floating-ip>`. The default login user depends on the image you chose.
+## Step 3 — Open the launch form
 
-## Step 5 — Operate and tidy up
+Head to **Compute → Servers** — this is where your virtual machines live. Choose **Create server** in the top-right.
 
-From the server's page you can run power actions — soft or hard reboot, stop, start — and, when you're finished, delete it. Deleting releases the compute so it stops accruing charges; release the floating IP too if you no longer need it.
+![The Servers page with the Create server button](/docs-img/first-server-servers-header.png)
 
-You can drive these same actions from an AI assistant instead of the console — see [AI Agent Access](/docs/guides/ai-agents).
+The launch form is one page of numbered steps. Work down it top to bottom.
 
-That's the full loop: project, building blocks, launch, connect, operate. The [task guides](/docs/guides/servers) go deeper on each resource type.
+## Step 4 — Choose location, image and flavor
+
+**Location & availability zone (steps 1–2).** Pick the region your server runs in. If only one is offered it's already selected; leave the availability zone on its default unless you have a reason to pin one.
+
+**Image (step 3).** The image is the operating system the server boots from. The exact catalog depends on your operator; for a first server a small, well-documented Linux image is easiest. The screenshots below use **Ubuntu Server 24.04 LTS**, and the SSH examples later assume an Ubuntu image.
+
+![Selecting the Ubuntu Server 24.04 image](/docs-img/first-server-create-image.png)
+
+**Flavor (step 4).** The flavor is the hardware size — vCPUs, RAM and root disk — grouped into families (which families and names exist depend on your operator). A first server doesn't need much: pick one of the smallest sizes. The screenshots use **t3.small** (2 vCPU / 2 GB), which is plenty and inexpensive; anything comparable works, and you can resize later.
+
+![Selecting the t3.small flavor](/docs-img/first-server-create-flavor.png)
+
+## Step 5 — Attach a network and a public IP
+
+**Network (step 5).** Check the private network your server should join. Most projects already have one; if the list is empty, create a network under **Network → Networks** first, then come back. Leave **Fixed IP** blank to let the network assign one automatically.
+
+![Selecting the project network](/docs-img/first-server-create-network.png)
+
+**Public IP (step 6).** Leave **Assign floating IP** on (the default) so the server picks up a public address on its own shortly after it boots — that's the address you'll SSH to. You can also attach one by hand later from **Network → Floating IPs**.
+
+## Step 6 — Set up access
+
+Open **step 7, Access**. There are two ways to log in:
+
+- **SSH key pair (recommended)** — choose the key pair you made in Step 2. Most secure, and no password to manage.
+- **Password** — set a **username** and **password**. With a username, the portal creates a sudo login user for you via cloud-init (works on any cloud-init image). The screenshot below uses this method.
+
+Ports are controlled by **Security groups**. To reach the server over SSH it needs a group that allows **inbound port 22**. The screenshots use the **allow-all** group to keep the demo simple, but that opens *every* port to the whole internet — only acceptable for a throwaway test server. For anything you'll keep, create a group under **Network → Security groups** that allows just port 22, ideally restricted to your own IP address. **User data** is optional: paste a cloud-init script to run on first boot (install packages, create users), or leave it blank.
+
+![Choosing a login method and a security group that allows SSH](/docs-img/first-server-create-access.png)
+
+## Step 7 — Name it and launch
+
+Give the server a name in **step 8** (for example `my-first-server`), then choose **Create server**.
+
+![Naming the server](/docs-img/first-server-create-name.png)
+
+The portal hands the request to the underlying cloud and drops you back on the Servers list, where your new machine appears in a **Build** state with no address yet.
+
+![A newly launched server in the Build state](/docs-img/first-server-building.png)
+
+It moves through provisioning and settles on **Active** — usually under a minute for a small flavor — and picks up its IP addresses. (Curious what happens in between? See [How Provisioning Works](/docs/concepts/provisioning).)
+
+## Step 8 — Connect and operate
+
+Click the server's name to open its detail page. The header shows its size and IP addresses, a live status, power buttons (**Start / Stop / Reboot**) and a **More actions** menu; the tabs below cover Network, Security, Volumes, Events, Snapshots, Console log and Metadata.
+
+![The server detail page, now Active with its IP addresses](/docs-img/first-server-detail.png)
+
+Find the server's **public (floating) IP** here — in the header or the **Network** tab — then connect over SSH with whichever access method you chose in Step 6:
+
+```
+# If you attached an SSH key pair:
+ssh -i my-first-key.pem <user>@<floating-ip>
+
+# If you set a username and password (as the screenshots do):
+ssh <username>@<floating-ip>
+```
+
+For the key-pair command, `<user>` is the image's default account — for Ubuntu that's `ubuntu`. For the password command, use the username you set and enter the password when prompted. If the connection times out, confirm the server's security group allows port 22.
+
+Everything else lives under **More actions**: **Rename, Resize, Rebuild, Rescue, Set password, Console (VNC),** and **Delete**.
+
+![The More actions menu on a running server](/docs-img/first-server-actions.png)
+
+## Step 9 — Clean up
+
+When you're done, open **More actions → Delete** (or the ⋯ menu on the Servers list) and confirm. Deleting releases the compute so it stops accruing charges. If you assigned a floating IP and no longer need it, release it too from **Network → Floating IPs** — an idle floating IP can still cost a small amount.
+
+That's the full loop: project → key → launch → connect → operate → clean up. To go deeper on any resource, see [Working with Servers](/docs/guides/servers) and [Networking](/docs/guides/networks) — or drive all of it from an assistant with [AI Agent Access](/docs/guides/ai-agents).
