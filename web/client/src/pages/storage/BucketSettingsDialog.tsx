@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { ExternalLink, ShieldAlert } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -57,7 +57,7 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
       onError: (e: Error) => toast.error(e.message),
     })
 
-  // local edit state, seeded from the server on each open
+  // local edit state, seeded from the server once per open (see the effect below)
   const [quotaGb, setQuotaGb] = useState("")
   const [quotaObjects, setQuotaObjects] = useState("")
   const [indexDoc, setIndexDoc] = useState("index.html")
@@ -66,6 +66,27 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
   const [policy, setPolicy] = useState<string | null>(null)
   const [grantKey, setGrantKey] = useState("")
   const [grantPerm, setGrantPerm] = useState<BucketGrant["permission"]>("READ")
+
+  // Seed/reset the editable fields from the live settings ONCE per open per bucket: reopening (or a parent
+  // that reuses this dialog for another bucket) must not show the previous edits, and a bucket with an
+  // existing website config must show its real index/error documents, not the hard-coded defaults.
+  // seededFor clears on close, so in-progress edits are never clobbered while the dialog is open.
+  const [seededFor, setSeededFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (!open) {
+      setSeededFor(null)
+      return
+    }
+    if (!s || seededFor === resourceId) return
+    setQuotaGb("")
+    setQuotaObjects("")
+    setIndexDoc(s.website?.indexDocument || "index.html")
+    setErrorDoc(s.website?.errorDocument || "")
+    setPolicy(null)
+    setGrantKey("")
+    setGrantPerm("READ")
+    setSeededFor(resourceId)
+  }, [open, s, seededFor, resourceId])
 
   const keyByUid = new Map((keys ?? []).map((k) => [k.rgwUid, k]))
   const ungranted = (keys ?? []).filter((k) => !s?.grants?.some((g) => g.uid === k.rgwUid))

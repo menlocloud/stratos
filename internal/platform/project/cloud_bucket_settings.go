@@ -327,7 +327,8 @@ func (h *Handler) cephServiceOfProject(ctx context.Context, w http.ResponseWrite
 }
 
 // s3Credentials handles GET /project/{id}/s3-credentials → the project's OWN S3 keys + endpoints, i.e. the
-// credentials the customer points aws-cli at. Gated on cloud-resource MANAGE: this returns a secret key.
+// credentials the customer points aws-cli at. Gated on project:cloud_resource:api_access — the credentials
+// gate, deliberately NOT :manage (F2) — even though it returns a secret key.
 func (h *Handler) s3Credentials(w http.ResponseWriter, r *http.Request) {
 	u, ok := h.principal(w, r)
 	if !ok {
@@ -359,7 +360,7 @@ func (h *Handler) s3Credentials(w http.ResponseWriter, r *http.Request) {
 }
 
 // s3KeyList handles GET /project/{id}/s3-keys → the project's EXTRA keys (secrets included: the customer
-// owns them, and the gate is cloud-resource MANAGE).
+// owns them, and the gate is project:cloud_resource:api_access, same as s3Credentials).
 func (h *Handler) s3KeyList(w http.ResponseWriter, r *http.Request) {
 	u, ok := h.principal(w, r)
 	if !ok {

@@ -277,13 +277,19 @@ func (b *cephBackend) adminDo(ctx context.Context, method, path string, q url.Va
 			safe.Add(k, v)
 		}
 	}
-	// url.Values.Encode() sorts keys — SigV4's canonical query string requires sorted params, and RGW
-	// canonicalizes the received query the same way. (Signed values must also be space-free: Encode()
-	// emits "+" for a space where SigV4 canonicalization expects %20.)
-	req, err := http.NewRequestWithContext(ctx, method, b.adminURL+path+"?"+safe.Encode(), bodyReader(body))
+	// The request URL handed to NewRequest is built from operator config + the constant path ONLY; the
+	// checked values go in via RawQuery afterwards. A query string cannot change the scheme/host/path of
+	// the request, so attacker-influenced input can never redirect it (CWE-918) — and the taint never
+	// reaches the URL argument.
+	req, err := http.NewRequestWithContext(ctx, method, b.adminURL+path, bodyReader(body))
 	if err != nil {
 		return err
 	}
+	// url.Values.Encode() sorts keys — SigV4's canonical query string requires sorted params, and RGW
+	// canonicalizes the received query the same way. (Signed values must also be space-free: Encode()
+	// emits "+" for a space where SigV4 canonicalization expects %20.) Set BEFORE SignHTTP so the
+	// signature covers the query.
+	req.URL.RawQuery = safe.Encode()
 	payloadHash := emptyPayloadHash
 	if len(body) > 0 {
 		sum := sha256.Sum256(body)

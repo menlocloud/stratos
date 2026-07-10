@@ -94,10 +94,12 @@ func (r *KeyRepo) GetOwned(ctx context.Context, id, projectID, serviceID string)
 	return k, nil
 }
 
-// List returns the project's extra keys on a service, decrypted, oldest first.
+// List returns the project's extra keys on a service, decrypted, oldest first (createdAt, with the
+// deterministic _id as tiebreaker — _id alone is name order, not creation order).
 func (r *KeyRepo) List(ctx context.Context, projectID, serviceID string) ([]S3Key, error) {
 	var keys []S3Key
-	err := r.col.Find(ctx, pgdoc.M{"projectId": projectID, "serviceId": serviceID}, &keys, pgdoc.Sort(pgdoc.Asc("_id")))
+	err := r.col.Find(ctx, pgdoc.M{"projectId": projectID, "serviceId": serviceID}, &keys,
+		pgdoc.Sort(pgdoc.Asc("createdAt"), pgdoc.Asc("_id")))
 	if err != nil {
 		return nil, err
 	}

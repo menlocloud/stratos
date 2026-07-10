@@ -37,7 +37,6 @@ Open a bucket's menu and choose **Settings** (S3 buckets only):
 - **Object lock** — protect objects from deletion for a retention period (write-once-read-many). This can only be chosen **when the bucket is created**, and it turns on versioning.
 - **Quota** — cap a bucket's size and/or object count.
 - **Lifecycle** — automatically delete objects after a number of days, optionally by key prefix. Useful for logs and temporary files — expired objects stop being billed.
-- **CORS** — allow browser apps on other origins to call the bucket directly.
 - **Policy** — advanced: paste a raw S3 bucket policy for fine-grained rules.
 
 ## Public buckets and static websites
