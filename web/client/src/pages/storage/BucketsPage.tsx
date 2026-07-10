@@ -50,7 +50,10 @@ export default function BucketsPage() {
   const navigate = useNavigate()
   const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "BUCKET")
   // Swift and S3 are separate stores with separate bucket sets — the user picks which one to create in.
-  const { locations } = useBucketLocations(pid)
+  const { locations: rawLocations } = useBucketLocations(pid)
+  // Show S3 (Ceph) first and default to it when a project has it: devs reach for S3 far more often than
+  // Swift, and the API array order is not stable. Swift stays available, just second.
+  const locations = [...rawLocations].sort((a, b) => Number(isS3Location(b)) - Number(isS3Location(a)))
 
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
