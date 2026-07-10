@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Per-provider usage-metrics source for traffic billing (`config.metrics.source`: `gnocchi` default, `prometheus`, or `none`): a Prometheus-compatible endpoint (Prometheus, Mimir `X-Scope-OrgID`, VictoriaMetrics, Thanos) can now feed the hourly `instance_traffic` ingestion. Three metric schemas (`libvirt-exporter`, `ceilometer-pushgateway`, `ceilometer-exporter`), basic/bearer/custom-header auth, custom CA / insecure TLS. New admin endpoints `PUT /api/v1/admin/service/{id}/metrics-config` and `POST .../metrics-test` (live probe: liveness, schema series count, month-start retention) + admin MCP tools `set_metrics_config` / `test_metrics_config`. Billing math is gnocchi-parity (per-series max−min over the month window, decimal64 — no PromQL `increase()` extrapolation).
+
 ## [0.3.26] - 2026-07-09
 
 The first public release of **Stratos** — a multi-tenant self-service and billing

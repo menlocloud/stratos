@@ -2,6 +2,8 @@
 
 Stratos can show per-instance utilization charts — CPU, memory, and network — inside the client portal. The numbers come from OpenStack's telemetry stack: Ceilometer samples the hypervisors, Gnocchi stores the resulting time series, and Stratos queries Gnocchi to draw the graphs.
 
+> **Billing usage source is a separate, per-provider knob.** The hourly traffic-billing ingestion reads Gnocchi by default, but a provider can be switched to a Prometheus-compatible endpoint (Prometheus, Mimir, VictoriaMetrics, Thanos) or opted out entirely via `PUT /api/v1/admin/service/{id}/metrics-config` (`source`: `gnocchi` | `prometheus` | `none`; admin MCP tools `set_metrics_config` / `test_metrics_config`). Three metric schemas are supported: `libvirt-exporter` (kolla's prometheus-libvirt-exporter), `ceilometer-pushgateway`, and `ceilometer-exporter`. Always run the live probe (`POST .../metrics-test`) after changing it — a mis-configured source fails as silently-unbilled traffic.
+
 ## What OpenStack needs first
 
 - **Ceilometer** running and polling compute metrics.
