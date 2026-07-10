@@ -1101,15 +1101,20 @@ func (h *Handler) projectsByBillingProfile(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if len(orgIDs) > 0 {
-		projs, err := h.repo.ListRawFiltered(r.Context(), "project",
-			map[string]any{"organizationId": map[string]any{"$in": orgIDs}})
+		// One query, predicate pushed down: org projects that bill HERE — own id blank/absent (the
+		// org fallback) or explicitly this profile. Projects billed to a different profile never load.
+		projs, err := h.repo.ListRawFiltered(r.Context(), "project", map[string]any{
+			"organizationId": map[string]any{"$in": orgIDs},
+			"$or": []any{
+				map[string]any{"billingProfileId": map[string]any{"$exists": false}},
+				map[string]any{"billingProfileId": ""},
+				map[string]any{"billingProfileId": bpID},
+			},
+		})
 		if httpx.WriteError(w, err) {
 			return
 		}
 		for _, p := range projs {
-			if own, _ := p["billingProfileId"].(string); own != "" && own != bpID {
-				continue // explicitly billed to a different profile
-			}
 			id, _ := p["_id"].(string)
 			if id == "" || seen[id] {
 				continue

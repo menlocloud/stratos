@@ -380,7 +380,19 @@ export default function CloudProvidersPage() {
         </Card>
       )}
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog
+        open={createOpen}
+        onOpenChange={(o) => {
+          setCreateOpen(o)
+          // Clear BOTH forms on every close (Cancel, Esc, overlay) — the ceph form holds admin keys,
+          // which must not sit in state and re-appear on the next open.
+          if (!o) {
+            setForm(emptyForm)
+            setCephForm(emptyCephForm)
+            setKind("openstack")
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add cloud provider</DialogTitle>
