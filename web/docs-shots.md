@@ -56,7 +56,7 @@ Captured 2026-07-10 on the live `menlo.ai` project (light theme). Dialog/step-ca
 - [x] `/docs-img/first-server-create-image.png` — Create-server step 3 Image table with Ubuntu Server 24.04 LTS selected
 - [x] `/docs-img/first-server-create-flavor.png` — Create-server step 4 Flavor table with t3.small selected (general/burstable families visible)
 - [x] `/docs-img/first-server-create-network.png` — Create-server step 5 Network with the project network checked and Fixed IP field revealed
-- [x] `/docs-img/first-server-create-access.png` — Create-server step 7 Access: Password login (username + password) and the allow-all security group checked
+- [x] `/docs-img/first-server-create-access.png` — Create-server step 7 Access: Password login (username + password) and the allow-all security group checked (allow-all is used for demo simplicity only — not a recommended default; real servers should use an SSH-only group scoped to the user's IP)
 - [x] `/docs-img/first-server-create-name.png` — Create-server step 8 Name with `my-first-server` entered
 - [x] `/docs-img/first-server-building.png` — Server detail page for `my-first-server` in the Build state (no addresses yet)
 - [x] `/docs-img/first-server-detail.png` — Server detail page for `my-first-server` now Active, showing IP addresses, power buttons and tabs

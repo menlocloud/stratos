@@ -23,7 +23,7 @@ A key pair is how you log into a Linux server without a password. Make it before
 
 ![The private key is shown only once — download it now](/docs-img/first-server-keypair-private.png)
 
-> Lock the private key down before using it — on macOS/Linux run `chmod 600 my-first-key.pem`. If you lose it, you can't SSH into any server that was launched with it — deleting the key pair won't bring that access back. Create a new key pair for future servers, and for an existing server rebuild it or add your new key another way (for example set a password under **More actions → Set password**).
+> Lock the private key down before using it — on macOS/Linux run `chmod 600 my-first-key.pem`. If you lose it, you can't SSH into any server that was launched with it — deleting the key pair won't bring that access back. Create a new key pair for future servers. To regain access to a server you've already launched, either rebuild it with the new key or set a password under **More actions → Set password** and log in with that instead.
 
 ## Step 3 — Open the launch form
 
@@ -60,7 +60,7 @@ Open **step 7, Access**. There are two ways to log in:
 - **SSH key pair (recommended)** — choose the key pair you made in Step 2. Most secure, and no password to manage.
 - **Password** — set a **username** and **password**. With a username, the portal creates a sudo login user for you via cloud-init (works on any Ubuntu image). The screenshot below uses this method.
 
-Ports are controlled by **Security groups**. To reach the server over SSH it needs a group that allows **inbound port 22**. The screenshots use the **allow-all** group, which opens all traffic — fine while you're getting started; for a longer-lived server, create a group under **Network → Security groups** that opens only the ports you need. **User data** is optional: paste a cloud-init script to run on first boot (install packages, create users), or leave it blank.
+Ports are controlled by **Security groups**. To reach the server over SSH it needs a group that allows **inbound port 22**. The screenshots use the **allow-all** group to keep the demo simple, but that opens *every* port to the whole internet — only acceptable for a throwaway test server. For anything you'll keep, create a group under **Network → Security groups** that allows just port 22, ideally restricted to your own IP address. **User data** is optional: paste a cloud-init script to run on first boot (install packages, create users), or leave it blank.
 
 ![Choosing a login method and a security group that allows SSH](/docs-img/first-server-create-access.png)
 
@@ -82,13 +82,17 @@ Click the server's name to open its detail page. The header shows its size and I
 
 ![The server detail page, now Active with its IP addresses](/docs-img/first-server-detail.png)
 
-Find the server's **public (floating) IP** here — in the header or the **Network** tab — and SSH in with the key from Step 2:
+Find the server's **public (floating) IP** here — in the header or the **Network** tab — then connect over SSH with whichever access method you chose in Step 6:
 
 ```
+# If you attached an SSH key pair:
 ssh -i my-first-key.pem <user>@<floating-ip>
+
+# If you set a username and password (as the screenshots do):
+ssh <username>@<floating-ip>
 ```
 
-The default `<user>` depends on the image — for Ubuntu it's `ubuntu`, or the username you set if you chose Password login. If the connection times out, confirm the server's security group allows port 22.
+For the key-pair command, `<user>` is the image's default account — for Ubuntu that's `ubuntu`. For the password command, use the username you set and enter the password when prompted. If the connection times out, confirm the server's security group allows port 22.
 
 Everything else lives under **More actions**: **Rename, Resize, Rebuild, Rescue, Set password, Console (VNC),** and **Delete**.
 
