@@ -58,7 +58,7 @@ The launch form is one page of numbered steps. Work down it top to bottom.
 Open **step 7, Access**. There are two ways to log in:
 
 - **SSH key pair (recommended)** — choose the key pair you made in Step 2. Most secure, and no password to manage.
-- **Password** — set a **username** and **password**. With a username, the portal creates a sudo login user for you via cloud-init (works on any Ubuntu image). The screenshot below uses this method.
+- **Password** — set a **username** and **password**. With a username, the portal creates a sudo login user for you via cloud-init (works on any cloud-init image). The screenshot below uses this method.
 
 Ports are controlled by **Security groups**. To reach the server over SSH it needs a group that allows **inbound port 22**. The screenshots use the **allow-all** group to keep the demo simple, but that opens *every* port to the whole internet — only acceptable for a throwaway test server. For anything you'll keep, create a group under **Network → Security groups** that allows just port 22, ideally restricted to your own IP address. **User data** is optional: paste a cloud-init script to run on first boot (install packages, create users), or leave it blank.
 
