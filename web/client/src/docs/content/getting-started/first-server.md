@@ -17,11 +17,11 @@ A key pair is how you log into a Linux server without a password. Make it before
 1. Go to **Compute → Key pairs** and choose **Create keypair**.
 2. Give it a name (for example `my-first-key`). If you already have an SSH key, paste its **public** half (`ssh-ed25519 …` or `ssh-rsa …`) into **Public key**. To have one generated for you, leave that field empty.
 
-![The Create keypair dialog](/docs-img/first-server-keypair-create.png)
+   ![The Create keypair dialog](/docs-img/first-server-keypair-create.png)
 
 3. If you let the cloud generate the key, the **private key is shown exactly once**. Download the `.pem` (or copy it) and store it somewhere safe — it is never shown again, and without it you can't SSH in.
 
-![The private key is shown only once — download it now](/docs-img/first-server-keypair-private.png)
+   ![The private key is shown only once — download it now](/docs-img/first-server-keypair-private.png)
 
 > Lock the private key down before using it — on macOS/Linux run `chmod 600 my-first-key.pem`. If you lose it, you can't SSH into any server that was launched with it — deleting the key pair won't bring that access back. Create a new key pair for future servers. To regain access to a server you've already launched, either rebuild it with the new key or set a password under **More actions → Set password** and log in with that instead.
 
