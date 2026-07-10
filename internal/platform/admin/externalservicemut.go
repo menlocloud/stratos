@@ -544,6 +544,9 @@ func (h *Handler) applyMetricsConfig(req *http.Request, doc pgdoc.M) *httpx.HTTP
 		default:
 			return httpx.BadRequest("prometheus.schema must be one of: libvirt-exporter, ceilometer-pushgateway, ceilometer-exporter")
 		}
+		if p.TimeoutSeconds < 0 {
+			return httpx.BadRequest("prometheus.timeoutSeconds must be zero (default) or positive")
+		}
 		headers := pgdoc.M{}
 		for k, v := range p.Headers {
 			if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Proxy-Authorization") {

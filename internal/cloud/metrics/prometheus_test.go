@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -35,10 +36,13 @@ func promVector(samples ...map[string]any) string {
 }
 
 // fakeProm dispatches on substrings of the PromQL query. It also records every request's
-// headers for the auth assertions.
+// headers for the auth assertions — written from the handler goroutine, read from the test
+// goroutine, so access goes through the mutex.
 type fakeProm struct {
-	t        *testing.T
-	respond  func(query string) string
+	t       *testing.T
+	respond func(query string) string
+
+	mu       sync.Mutex
 	lastHead http.Header
 	lastPath string
 }
@@ -46,13 +50,28 @@ type fakeProm struct {
 func (f *fakeProm) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
-			f.t.Fatalf("parse form: %v", err)
+			f.t.Errorf("parse form: %v", err)
+			return
 		}
+		f.mu.Lock()
 		f.lastHead = r.Header.Clone()
 		f.lastPath = r.URL.Path
+		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, f.respond(r.PostFormValue("query")))
 	}
+}
+
+func (f *fakeProm) head() http.Header {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastHead
+}
+
+func (f *fakeProm) path() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastPath
 }
 
 // TestPrometheusLibvirtSchema drives the full MeasureFetcher contract against a faked
@@ -197,13 +216,13 @@ func TestPrometheusAuthHeaders(t *testing.T) {
 		if err := p.Ping(context.Background()); err != nil {
 			t.Fatalf("ping: %v", err)
 		}
-		if f.lastPath != "/prometheus/api/v1/query" {
-			t.Fatalf("path prefix lost: %s", f.lastPath)
+		if got := f.path(); got != "/prometheus/api/v1/query" {
+			t.Fatalf("path prefix lost: %s", got)
 		}
-		if f.lastHead.Get("X-Scope-OrgID") != "openstack" {
+		if f.head().Get("X-Scope-OrgID") != "openstack" {
 			t.Fatalf("tenant header missing")
 		}
-		user, pass, ok := (&http.Request{Header: f.lastHead}).BasicAuth()
+		user, pass, ok := (&http.Request{Header: f.head()}).BasicAuth()
 		if !ok || user != "u" || pass != "pw" {
 			t.Fatalf("basic auth missing/wrong: %v %s %s", ok, user, pass)
 		}
@@ -217,7 +236,7 @@ func TestPrometheusAuthHeaders(t *testing.T) {
 		if err := p.Ping(context.Background()); err != nil {
 			t.Fatalf("ping: %v", err)
 		}
-		if got := f.lastHead.Get("Authorization"); got != "Bearer tok123" {
+		if got := f.head().Get("Authorization"); got != "Bearer tok123" {
 			t.Fatalf("bearer missing: %q", got)
 		}
 	})

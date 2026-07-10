@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,11 +41,11 @@ func TestMetricsJobPrometheusSource(t *testing.T) {
 	metricsRepo := metrics.NewRepo(db)
 	esSvc := externalservice.NewService(externalservice.NewRepo(db), textcrypt.New("k"))
 
-	var sawTenantHeader bool
+	var sawTenantHeader atomic.Bool // written from the httptest handler goroutine
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		if r.Header.Get("X-Scope-OrgID") == "openstack" {
-			sawTenantHeader = true
+			sawTenantHeader.Store(true)
 		}
 		q := r.PostFormValue("query")
 		var result []map[string]any
@@ -118,7 +119,7 @@ func TestMetricsJobPrometheusSource(t *testing.T) {
 		t.Fatalf("buckets wrong: in=%s out=%s tot=%s",
 			d.IncomingPublicTrafficMb, d.OutgoingPublicTrafficMb, d.TotalTrafficMb)
 	}
-	if !sawTenantHeader {
+	if !sawTenantHeader.Load() {
 		t.Fatal("X-Scope-OrgID header never reached the prometheus endpoint")
 	}
 	t.Logf("prometheus source: server %s → %s MB via %s", srv.ID, d.TotalTrafficMb, fake.URL)

@@ -765,17 +765,37 @@ function MetricsTab({ id, provider }: TabProps) {
     onError: (e) => toast.error(errMsg(e)),
   })
   const submit = () => {
-    let headers: Obj = {}
-    if (headersText.trim() !== "" && headersText.trim() !== "{}") {
-      try {
-        headers = JSON.parse(headersText)
-      } catch {
-        toast.error("Headers must be a JSON object, e.g. {\"X-Scope-OrgID\": \"tenant\"}")
+    const body: Obj = { source }
+    // Only send the prometheus block when prometheus is the selected source: the backend
+    // merges config, so a source-only toggle must not re-validate (or clobber) the stored
+    // connection config — a stale URL would otherwise block switching away.
+    if (source === "prometheus") {
+      let headers: Obj = {}
+      if (headersText.trim() !== "" && headersText.trim() !== "{}") {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(headersText)
+        } catch {
+          toast.error("Headers must be a JSON object, e.g. {\"X-Scope-OrgID\": \"tenant\"}")
+          return
+        }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          toast.error("Headers must be a JSON object, e.g. {\"X-Scope-OrgID\": \"tenant\"}")
+          return
+        }
+        for (const v of Object.values(parsed)) {
+          if (typeof v !== "string") {
+            toast.error("Header values must all be strings")
+            return
+          }
+        }
+        headers = parsed as Obj
+      }
+      const timeout = Number(timeoutSeconds) || 0
+      if (timeout < 0) {
+        toast.error("Timeout must be zero or positive")
         return
       }
-    }
-    const body: Obj = { source }
-    if (source === "prometheus" || url) {
       body.prometheus = {
         url,
         schema,
@@ -783,7 +803,7 @@ function MetricsTab({ id, provider }: TabProps) {
         basicUser,
         insecureTls,
         caCert,
-        timeoutSeconds: Number(timeoutSeconds) || 0,
+        timeoutSeconds: timeout,
       }
     }
     if (basicPassword || bearerToken) body.prometheusAuth = { basicPassword, bearerToken }
@@ -900,9 +920,16 @@ function MetricsTab({ id, provider }: TabProps) {
               {save.isPending ? "Saving…" : "Save metrics config"}
             </Button>
             {source === "prometheus" && (
-              <Button variant="outline" onClick={() => test.mutate()} disabled={test.isPending}>
+              <Button
+                variant="outline"
+                onClick={() => test.mutate()}
+                disabled={test.isPending || stored.source !== "prometheus"}
+              >
                 {test.isPending ? "Testing…" : "Test connection"}
               </Button>
+            )}
+            {source === "prometheus" && stored.source !== "prometheus" && (
+              <span className="text-xs text-muted-foreground">Save the config first — the probe tests the stored settings.</span>
             )}
           </div>
           {r && (
