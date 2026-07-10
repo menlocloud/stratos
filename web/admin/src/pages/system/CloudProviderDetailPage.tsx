@@ -201,6 +201,30 @@ function ConnectionTab({ id, provider }: TabProps) {
     },
     onError: (e) => toast.error(errMsg(e)),
   })
+  // ceph-s3: no Keystone — show the S3/Admin Ops config instead of the identity card. There is no
+  // backend test endpoint for RGW (the connection is exercised by bootstrap/sync), so no Test button.
+  if (provider.config?.provider === "ceph-s3") {
+    const c = asObj(provider.config)
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Ceph RGW (S3) connection</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Row label="S3 endpoint" value={str(c.s3Endpoint)} />
+          <Row label="Admin Ops URL" value={str(c.adminApiUrl)} />
+          <Row label="Website endpoint" value={str(c.s3WebsiteEndpoint)} />
+          <Row label="Region (zonegroup)" value={str(c.region)} />
+          <Row label="RGW uid prefix" value={str(c.uidPrefix)} />
+          <Row label="Default quota (GiB)" value={c.defaultQuotaGiB != null ? String(c.defaultQuotaGiB) : ""} />
+          <p className="mt-4 text-sm text-muted-foreground">
+            Projects are provisioned as dedicated RGW users on entry (or via the project's "attach external
+            service" action). The admin keys are stored encrypted and never returned by the API.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
   return (
     <Card>
       <CardHeader>
@@ -1096,6 +1120,10 @@ const TAB_DEFS = [
   { v: "share-protocols", label: "Share protocols" },
 ]
 
+// A ceph-s3 provider serves ONLY object-store over S3/Admin Ops — every other tab is Keystone/OpenStack
+// machinery (quota, features, volume types, AZs, …) with nothing to configure on RGW.
+const CEPH_TAB_KEYS = new Set(["connection", "services", "configuration"])
+
 export default function CloudProviderDetailPage() {
   const { id = "" } = useParams()
   const { data, isLoading, error } = useAdminGet<CloudProvider>(`/admin/service/${id}`)
@@ -1117,6 +1145,7 @@ export default function CloudProviderDetailPage() {
     )
   }
   const p = data
+  const tabs = p.config?.provider === "ceph-s3" ? TAB_DEFS.filter((t) => CEPH_TAB_KEYS.has(t.v)) : TAB_DEFS
 
   return (
     <>
@@ -1128,7 +1157,7 @@ export default function CloudProviderDetailPage() {
       <Tabs defaultValue="connection">
         <div className="overflow-x-auto">
           <TabsList>
-            {TAB_DEFS.map((t) => (
+            {tabs.map((t) => (
               <TabsTrigger key={t.v} value={t.v}>
                 {t.label}
               </TabsTrigger>

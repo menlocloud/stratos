@@ -1070,14 +1070,50 @@ func (h *Handler) projectsByOrganization(w http.ResponseWriter, r *http.Request)
 	httpx.List(w, items)
 }
 
-// projectsByBillingProfile lists projects for a billing profile.
+// projectsByBillingProfile lists the projects that BILL against a profile. Billing resolves the
+// EFFECTIVE profile as the project's own billingProfileId, falling back to the owning org's
+// (project.resolveBillingProfileID) — and greenfield projects carry a BLANK own id — so matching the
+// project field alone misses them: also include the projects of every org attached to this profile
+// whose own billingProfileId is blank.
 func (h *Handler) projectsByBillingProfile(w http.ResponseWriter, r *http.Request) {
 	if !h.require(w, r, "admin:project:read") {
 		return
 	}
-	items, err := h.repo.ListRawFiltered(r.Context(), "project", map[string]any{"billingProfileId": chi.URLParam(r, "billingProfileId")})
+	bpID := chi.URLParam(r, "billingProfileId")
+	items, err := h.repo.ListRawFiltered(r.Context(), "project", map[string]any{"billingProfileId": bpID})
 	if httpx.WriteError(w, err) {
 		return
+	}
+	seen := make(map[string]bool, len(items))
+	for _, p := range items {
+		if id, _ := p["_id"].(string); id != "" {
+			seen[id] = true
+		}
+	}
+	orgs, err := h.repo.ListRawFiltered(r.Context(), "organization", map[string]any{"billingProfileId": bpID})
+	if httpx.WriteError(w, err) {
+		return
+	}
+	for i := range orgs {
+		orgID, _ := orgs[i]["_id"].(string)
+		if orgID == "" {
+			continue
+		}
+		projs, err := h.repo.ListRawFiltered(r.Context(), "project", map[string]any{"organizationId": orgID})
+		if httpx.WriteError(w, err) {
+			return
+		}
+		for _, p := range projs {
+			if own, _ := p["billingProfileId"].(string); own != "" && own != bpID {
+				continue // explicitly billed to a different profile
+			}
+			id, _ := p["_id"].(string)
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			items = append(items, p)
+		}
 	}
 	httpx.List(w, items)
 }
