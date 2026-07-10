@@ -92,6 +92,74 @@ func (h *Handler) projectAudit(u *user.User, p *Project, action string) {
 	h.audit.LogAsync(ev)
 }
 
+// cloudResourceAudit emits a client cloud-resource event that carries the RESOURCE's own
+// identity (kind, id, name) rather than only the project's — so the event is findable by
+// searching for the bucket/server/etc. The coarse action (CLOUD_RESOURCE_CREATE/DELETE/ACTION)
+// stays for backward-compatible filtering; the specific verb (e.g. MAKE_BUCKET_PUBLIC, REBOOT)
+// goes in resourceMetadata. project/org ids still scope the event for the org-audit reader.
+// A nil cr degrades to a project-scoped event (never drops the audit).
+func (h *Handler) cloudResourceAudit(u *user.User, p *Project, action, verb string, cr *cloud.CloudResource) {
+	if cr == nil {
+		h.projectAudit(u, p, action)
+		return
+	}
+	h.audit.LogAsync(newCloudResourceEvent(u, p, action, verb, cr))
+}
+
+// newCloudResourceEvent builds the cloud-resource audit event (pure — no I/O, unit-testable).
+func newCloudResourceEvent(u *user.User, p *Project, action, verb string, cr *cloud.CloudResource) audit.AuditEvent {
+	ev := audit.ClientUserEvent(u.Sub, u.FullName())
+	ev.EventContext = audit.ContextProject
+	ev.Action = action
+	ev.ResourceType = cloudAuditKind(cr.Type)
+	ev.ResourceID = cloudAuditID(cr)
+	ev.ResourceDisplayName = cloudResourceName(cr)
+	ev.OrganizationID = p.OrganizationID
+	ev.ProjectID = p.ID
+	meta := map[string]any{"projectName": p.Name, "resourceType": cr.Type, "cacheId": cr.ID}
+	if cr.ExternalID != "" {
+		meta["externalId"] = cr.ExternalID
+	}
+	if verb != "" && verb != action {
+		meta["verb"] = verb
+	}
+	ev.ResourceMetadata = meta
+	ev.Outcome = audit.OutcomeSuccess
+	return ev
+}
+
+// cloudAuditKind maps a cloud resource type to an audit resourceType, defaulting to a generic
+// CLOUD_RESOURCE for types with no dedicated audit constant.
+func cloudAuditKind(t string) string {
+	if t == "" {
+		return "CLOUD_RESOURCE"
+	}
+	return t
+}
+
+// cloudAuditID prefers the OpenStack/RGW external id (what an operator sees in the cloud) and
+// falls back to the stratos cache id.
+func cloudAuditID(cr *cloud.CloudResource) string {
+	if cr.ExternalID != "" {
+		return cr.ExternalID
+	}
+	return cr.ID
+}
+
+// cloudResourceName is the human name of a cloud resource for the audit display column:
+// bucketName for buckets, else name/displayName from Data, else the external id.
+func cloudResourceName(cr *cloud.CloudResource) string {
+	for _, k := range []string{"bucketName", "name", "displayName"} {
+		if s, ok := cr.Data[k].(string); ok && s != "" {
+			return s
+		}
+	}
+	if cr.ExternalID != "" {
+		return cr.ExternalID
+	}
+	return cr.ID
+}
+
 // Routes registers the project endpoints under the /api/v1 group (the platform
 // subset; cloud/billing-usage endpoints are deferred).
 func (h *Handler) Routes(r chi.Router) {
