@@ -90,10 +90,10 @@ func TestPrometheusLibvirtSchema(t *testing.T) {
 				map[string]any{"domain": "instance-0001", "instance": "host-b:9177", "__value__": "1"},
 			)
 		case strings.Contains(q, "count by (target_device)"):
-			if !strings.Contains(q, `domain=~"instance-0001"`) {
+			if !strings.Contains(q, `domain=~"^(?:instance-0001)$"`) {
 				t.Fatalf("device query missing domain selector: %s", q)
 			}
-			if !strings.Contains(q, `instance=~"host-a:9177|host-b:9177"`) {
+			if !strings.Contains(q, `instance=~"^(?:host-a:9177|host-b:9177)$"`) {
 				t.Fatalf("device query missing host pin: %s", q)
 			}
 			return promVector(
@@ -136,7 +136,7 @@ func TestPrometheusLibvirtSchema(t *testing.T) {
 	if !strings.Contains(inRef, `target_device="tapA"`) {
 		t.Fatalf("selector missing device pin: %s", inRef)
 	}
-	if !strings.Contains(inRef, `instance=~"host-a:9177|host-b:9177"`) {
+	if !strings.Contains(inRef, `instance=~"^(?:host-a:9177|host-b:9177)$"`) {
 		t.Fatalf("selector missing host pin (cross-cell collision guard): %s", inRef)
 	}
 

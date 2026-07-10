@@ -791,9 +791,9 @@ function MetricsTab({ id, provider }: TabProps) {
         }
         headers = parsed as Obj
       }
-      const timeout = Number(timeoutSeconds) || 0
-      if (timeout < 0) {
-        toast.error("Timeout must be zero or positive")
+      const timeout = timeoutSeconds.trim() === "" ? 0 : Number(timeoutSeconds)
+      if (!Number.isInteger(timeout) || timeout < 0) {
+        toast.error("Timeout must be a whole number of seconds (0 = default)")
         return
       }
       body.prometheus = {
@@ -806,7 +806,11 @@ function MetricsTab({ id, provider }: TabProps) {
         timeoutSeconds: timeout,
       }
     }
-    if (basicPassword || bearerToken) body.prometheusAuth = { basicPassword, bearerToken }
+    // Credential fields are only visible for the prometheus source — never apply leftover
+    // typed-but-hidden values on a gnocchi/none save (invisible side effects on secrets).
+    if (source === "prometheus" && (basicPassword || bearerToken)) {
+      body.prometheusAuth = { basicPassword, bearerToken }
+    }
     save.mutate({ path: `/admin/service/${id}/metrics-config`, body })
   }
   const r = test.data

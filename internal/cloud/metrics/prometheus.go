@@ -399,13 +399,20 @@ func appendUnique(list []string, v string) []string {
 	return append(list, v)
 }
 
-// regexAlternation builds a safe PromQL regex matching any of the values exactly.
+// regexAlternation builds a PromQL regex matching any of the values EXACTLY. Prometheus
+// anchors label-matcher regexes itself, but the explicit ^(?:…)$ keeps the exact-match
+// guarantee on any "compatible" backend that might not (double anchoring is harmless RE2) —
+// without it, `instance-0001` would also match `instance-00010` there and pull another
+// domain's traffic into the bill. Empty input stays "" so callers can omit the matcher.
 func regexAlternation(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
 	quoted := make([]string, len(values))
 	for i, v := range values {
 		quoted[i] = regexp.QuoteMeta(v)
 	}
-	return strings.Join(quoted, "|")
+	return "^(?:" + strings.Join(quoted, "|") + ")$"
 }
 
 // tapNameFrom extracts the tap device from a ceilometer interface resource id (which embeds
