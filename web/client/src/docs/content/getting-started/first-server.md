@@ -23,7 +23,7 @@ A key pair is how you log into a Linux server without a password. Make it before
 
 ![The private key is shown only once — download it now](/docs-img/first-server-keypair-private.png)
 
-> Lock the private key down before using it — on macOS/Linux run `chmod 600 my-first-key.pem`. If you ever lose it, delete the key pair and create a new one.
+> Lock the private key down before using it — on macOS/Linux run `chmod 600 my-first-key.pem`. If you lose it, you can't SSH into any server that was launched with it — deleting the key pair won't bring that access back. Create a new key pair for future servers, and for an existing server rebuild it or add your new key another way (for example set a password under **More actions → Set password**).
 
 ## Step 3 — Open the launch form
 
@@ -37,11 +37,11 @@ The launch form is one page of numbered steps. Work down it top to bottom.
 
 **Location & availability zone (steps 1–2).** Pick the region your server runs in. If only one is offered it's already selected; leave the availability zone on its default unless you have a reason to pin one.
 
-**Image (step 3).** The image is the operating system the server boots from. For a first server, pick **Ubuntu Server 24.04 LTS** — it's small, widely documented, and every example below assumes it.
+**Image (step 3).** The image is the operating system the server boots from. The exact catalog depends on your operator; for a first server a small, well-documented Linux image is easiest. The screenshots below use **Ubuntu Server 24.04 LTS**, and the SSH examples later assume an Ubuntu image.
 
 ![Selecting the Ubuntu Server 24.04 image](/docs-img/first-server-create-image.png)
 
-**Flavor (step 4).** The flavor is the hardware size — vCPUs, RAM and root disk — grouped into families (GPU, general purpose, compute, memory, burstable). A first server doesn't need much: a small burstable size like **t3.small** (2 vCPU / 2 GB) is plenty and inexpensive. You can resize later.
+**Flavor (step 4).** The flavor is the hardware size — vCPUs, RAM and root disk — grouped into families (which families and names exist depend on your operator). A first server doesn't need much: pick one of the smallest sizes. The screenshots use **t3.small** (2 vCPU / 2 GB), which is plenty and inexpensive; anything comparable works, and you can resize later.
 
 ![Selecting the t3.small flavor](/docs-img/first-server-create-flavor.png)
 
@@ -60,7 +60,7 @@ Open **step 7, Access**. There are two ways to log in:
 - **SSH key pair (recommended)** — choose the key pair you made in Step 2. Most secure, and no password to manage.
 - **Password** — set a **username** and **password**. With a username, the portal creates a sudo login user for you via cloud-init (works on any Ubuntu image). The screenshot below uses this method.
 
-Ports are controlled by **Security groups**. To reach the server over SSH it needs a group that opens **port 22** — the `default` group or an `allow-all` group both work while you're getting started. **User data** is optional: paste a cloud-init script to run on first boot (install packages, create users), or leave it blank.
+Ports are controlled by **Security groups**. To reach the server over SSH it needs a group that allows **inbound port 22**. Pick a group you know opens 22 — or create one under **Network → Security groups** first. Don't assume the `default` group allows it; on many setups it blocks inbound SSH until you add a rule. **User data** is optional: paste a cloud-init script to run on first boot (install packages, create users), or leave it blank.
 
 ![Choosing a login method and a security group that allows SSH](/docs-img/first-server-create-access.png)
 
