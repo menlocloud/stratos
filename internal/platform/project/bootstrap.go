@@ -120,6 +120,12 @@ func (h *Handler) BootstrapCephOnto(ctx context.Context, p *Project, es *externa
 // save. Does NOT flip status (the bootstrap never does; enableAndBootstrap sets ENABLED itself
 // before calling). Idempotent: a project already attached to this service is saved as-is.
 func (h *Handler) BootstrapOnto(ctx context.Context, p *Project, es *externalservice.ExternalService, adoptExternalProjectID string) error {
+	// A ceph-s3 service has no Keystone at all — route to the RGW-user bootstrap. This is what lets the
+	// admin "attach external service" leg onboard EXISTING projects onto a newly added ceph provider
+	// (enableAndBootstrap only provisions projects that have no service attached yet).
+	if es.IsCephS3() {
+		return h.BootstrapCephOnto(ctx, p, es)
+	}
 	if p.HasService(es.ID) {
 		return h.svc.Save(ctx, p)
 	}

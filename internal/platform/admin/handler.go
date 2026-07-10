@@ -1070,14 +1070,58 @@ func (h *Handler) projectsByOrganization(w http.ResponseWriter, r *http.Request)
 	httpx.List(w, items)
 }
 
-// projectsByBillingProfile lists projects for a billing profile.
+// projectsByBillingProfile lists the projects that BILL against a profile. Billing resolves the
+// EFFECTIVE profile as the project's own billingProfileId, falling back to the owning org's
+// (project.resolveBillingProfileID) — and greenfield projects carry a BLANK own id — so matching the
+// project field alone misses them: also include the projects of every org attached to this profile
+// whose own billingProfileId is blank.
 func (h *Handler) projectsByBillingProfile(w http.ResponseWriter, r *http.Request) {
 	if !h.require(w, r, "admin:project:read") {
 		return
 	}
-	items, err := h.repo.ListRawFiltered(r.Context(), "project", map[string]any{"billingProfileId": chi.URLParam(r, "billingProfileId")})
+	bpID := chi.URLParam(r, "billingProfileId")
+	items, err := h.repo.ListRawFiltered(r.Context(), "project", map[string]any{"billingProfileId": bpID})
 	if httpx.WriteError(w, err) {
 		return
+	}
+	seen := make(map[string]bool, len(items))
+	for _, p := range items {
+		if id, _ := p["_id"].(string); id != "" {
+			seen[id] = true
+		}
+	}
+	orgs, err := h.repo.ListRawFiltered(r.Context(), "organization", map[string]any{"billingProfileId": bpID})
+	if httpx.WriteError(w, err) {
+		return
+	}
+	orgIDs := make([]any, 0, len(orgs))
+	for i := range orgs {
+		if orgID, _ := orgs[i]["_id"].(string); orgID != "" {
+			orgIDs = append(orgIDs, orgID)
+		}
+	}
+	if len(orgIDs) > 0 {
+		// One query, predicate pushed down: org projects that bill HERE — own id blank/absent (the
+		// org fallback) or explicitly this profile. Projects billed to a different profile never load.
+		projs, err := h.repo.ListRawFiltered(r.Context(), "project", map[string]any{
+			"organizationId": map[string]any{"$in": orgIDs},
+			"$or": []any{
+				map[string]any{"billingProfileId": map[string]any{"$exists": false}},
+				map[string]any{"billingProfileId": ""},
+				map[string]any{"billingProfileId": bpID},
+			},
+		})
+		if httpx.WriteError(w, err) {
+			return
+		}
+		for _, p := range projs {
+			id, _ := p["_id"].(string)
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			items = append(items, p)
+		}
 	}
 	httpx.List(w, items)
 }
