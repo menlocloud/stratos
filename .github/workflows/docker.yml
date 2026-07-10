@@ -159,7 +159,7 @@ jobs:
           # commit/PR notes (--generate-notes).
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Stratos $GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
             --notes-file /tmp/notes.md \
             --generate-notes \
             --verify-tag \
