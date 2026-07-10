@@ -741,6 +741,224 @@ function AdvancedTab({ id, provider }: TabProps) {
   )
 }
 
+// ── 8b. Metrics (usage source for traffic billing: gnocchi | prometheus | none) ──
+type MetricsTestResp = { ok: boolean; error?: string; trafficSeries?: number; monthStartSeries?: number; warnings?: string[] }
+function MetricsTab({ id, provider }: TabProps) {
+  const stored = asObj(asObj((provider.config as Obj)?.metrics))
+  const prom = asObj(stored.prometheus)
+  const [source, setSource] = useState(String(stored.source ?? "gnocchi"))
+  const [url, setUrl] = useState(String(prom.url ?? ""))
+  const [schema, setSchema] = useState(String(prom.schema ?? "libvirt-exporter"))
+  const [headersText, setHeadersText] = useState(JSON.stringify(asObj(prom.headers), null, 2))
+  const [basicUser, setBasicUser] = useState(String(prom.basicUser ?? ""))
+  const [basicPassword, setBasicPassword] = useState("")
+  const [bearerToken, setBearerToken] = useState("")
+  const [insecureTls, setInsecureTls] = useState(prom.insecureTls === true)
+  const [caCert, setCaCert] = useState(String(prom.caCert ?? ""))
+  const [timeoutSeconds, setTimeoutSeconds] = useState(String(prom.timeoutSeconds ?? ""))
+  const save = useEsSave(id, () => {
+    setBasicPassword("")
+    setBearerToken("")
+  })
+  const test = useMutation({
+    mutationFn: () => apiFetch<MetricsTestResp>(`/admin/service/${id}/metrics-test`, { method: "POST" }),
+    onError: (e) => toast.error(errMsg(e)),
+  })
+  const submit = () => {
+    const body: Obj = { source }
+    // Only send the prometheus block when prometheus is the selected source: the backend
+    // merges config, so a source-only toggle must not re-validate (or clobber) the stored
+    // connection config — a stale URL would otherwise block switching away.
+    if (source === "prometheus") {
+      let headers: Obj = {}
+      if (headersText.trim() !== "" && headersText.trim() !== "{}") {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(headersText)
+        } catch {
+          toast.error("Headers must be a JSON object, e.g. {\"X-Scope-OrgID\": \"tenant\"}")
+          return
+        }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          toast.error("Headers must be a JSON object, e.g. {\"X-Scope-OrgID\": \"tenant\"}")
+          return
+        }
+        for (const v of Object.values(parsed)) {
+          if (typeof v !== "string") {
+            toast.error("Header values must all be strings")
+            return
+          }
+        }
+        headers = parsed as Obj
+      }
+      const timeout = timeoutSeconds.trim() === "" ? 0 : Number(timeoutSeconds)
+      if (!Number.isInteger(timeout) || timeout < 0) {
+        toast.error("Timeout must be a whole number of seconds (0 = default)")
+        return
+      }
+      body.prometheus = {
+        url,
+        schema,
+        headers,
+        basicUser,
+        insecureTls,
+        caCert,
+        timeoutSeconds: timeout,
+      }
+    }
+    // Credential fields are only visible for the prometheus source — never apply leftover
+    // typed-but-hidden values on a gnocchi/none save (invisible side effects on secrets).
+    if (source === "prometheus" && (basicPassword || bearerToken)) {
+      body.prometheusAuth = { basicPassword, bearerToken }
+    }
+    save.mutate({ path: `/admin/service/${id}/metrics-config`, body })
+  }
+  const r = test.data
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Usage metrics source</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Where the hourly traffic-billing job reads per-instance network usage from. Gnocchi (Ceilometer) is the
+            default; a Prometheus-compatible endpoint (Prometheus, Mimir, VictoriaMetrics, Thanos) can be used instead;
+            &quot;None&quot; disables usage ingestion for this provider. Gnocchi granularity stays under Advanced.
+          </p>
+          <div className="grid max-w-xs gap-2">
+            <Label>Source</Label>
+            <Select value={source} onValueChange={setSource}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="gnocchi">Gnocchi (Ceilometer, default)</SelectItem>
+                <SelectItem value="prometheus">Prometheus-compatible</SelectItem>
+                <SelectItem value="none">None (disable usage metrics)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {source === "prometheus" && (
+            <>
+              <div className="grid gap-2">
+                <Label>Endpoint URL (base up to /api/v1)</Label>
+                <Input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://mimir.example/prometheus"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Mimir: append <code>/prometheus</code>. VictoriaMetrics cluster:{" "}
+                  <code>/select/&lt;tenant&gt;/prometheus</code>. Vanilla Prometheus/Thanos: plain host:port.
+                </p>
+              </div>
+              <div className="grid max-w-md gap-2">
+                <Label>Metric schema</Label>
+                <Select value={schema} onValueChange={setSchema}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="libvirt-exporter">libvirt-exporter (kolla prometheus-libvirt-exporter)</SelectItem>
+                    <SelectItem value="ceilometer-pushgateway">ceilometer-pushgateway (bare names, resource_id)</SelectItem>
+                    <SelectItem value="ceilometer-exporter">ceilometer-exporter / sg-core (ceilometer_ prefix)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Extra headers (JSON object; e.g. Mimir tenant)</Label>
+                <Textarea
+                  rows={3}
+                  value={headersText}
+                  onChange={(e) => setHeadersText(e.target.value)}
+                  className="font-mono text-xs"
+                  placeholder='{"X-Scope-OrgID": "openstack"}'
+                />
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <div className="grid gap-1">
+                  <Label className="text-xs">Basic auth user</Label>
+                  <Input value={basicUser} onChange={(e) => setBasicUser(e.target.value)} autoComplete="off" />
+                </div>
+                <div className="grid gap-1">
+                  <Label className="text-xs">Basic auth password (blank keeps, &quot;-&quot; clears)</Label>
+                  <Input
+                    type="password"
+                    value={basicPassword}
+                    onChange={(e) => setBasicPassword(e.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <Label className="text-xs">Bearer token (blank keeps, &quot;-&quot; clears)</Label>
+                  <Input
+                    type="password"
+                    value={bearerToken}
+                    onChange={(e) => setBearerToken(e.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <Switch checked={insecureTls} onCheckedChange={setInsecureTls} />
+                <Label>Skip TLS verification (insecure)</Label>
+              </div>
+              <div className="grid gap-2">
+                <Label>Custom CA bundle (PEM, optional)</Label>
+                <Textarea
+                  rows={3}
+                  value={caCert}
+                  onChange={(e) => setCaCert(e.target.value)}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <div className="grid max-w-xs gap-2">
+                <Label>Query timeout (seconds, 0 = default 30)</Label>
+                <Input type="number" value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} />
+              </div>
+            </>
+          )}
+          <div className="flex items-center gap-3">
+            <Button onClick={submit} disabled={save.isPending}>
+              {save.isPending ? "Saving…" : "Save metrics config"}
+            </Button>
+            {source === "prometheus" && (
+              <Button
+                variant="outline"
+                onClick={() => test.mutate()}
+                disabled={test.isPending || stored.source !== "prometheus"}
+              >
+                {test.isPending ? "Testing…" : "Test connection"}
+              </Button>
+            )}
+            {source === "prometheus" && stored.source !== "prometheus" && (
+              <span className="text-xs text-muted-foreground">Save the config first — the probe tests the stored settings.</span>
+            )}
+          </div>
+          {r && (
+            <div className="space-y-1 text-sm">
+              {r.ok ? (
+                <p>
+                  Connected — {r.trafficSeries ?? 0} traffic series (last hour), {r.monthStartSeries ?? 0} at month
+                  start.
+                </p>
+              ) : (
+                <p className="text-destructive">Probe failed: {r.error}</p>
+              )}
+              {(r.warnings ?? []).map((w) => (
+                <p key={w} className="text-destructive">
+                  ⚠ {w}
+                </p>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
 // ── 9. Volume types (live GET + per-type enable/display-name per region) ──────
 type VolumeTypesResp = { region: string; volumeTypes: string[] }[]
 type VtState = Record<string, Record<string, { enabled: boolean; displayName: string }>>
@@ -1111,6 +1329,7 @@ const TAB_DEFS = [
   { v: "quota", label: "Quota" },
   { v: "gpu", label: "GPU" },
   { v: "vhi-ostor", label: "VHI-ostor" },
+  { v: "metrics", label: "Metrics" },
   { v: "advanced", label: "Advanced" },
   { v: "volume-types", label: "Volume types" },
   { v: "placement", label: "Placement" },
@@ -1188,6 +1407,9 @@ export default function CloudProviderDetailPage() {
         </TabsContent>
         <TabsContent value="vhi-ostor" className="mt-4">
           <VhiOstorTab id={id} provider={p} />
+        </TabsContent>
+        <TabsContent value="metrics" className="mt-4">
+          <MetricsTab id={id} provider={p} />
         </TabsContent>
         <TabsContent value="advanced" className="mt-4">
           <AdvancedTab id={id} provider={p} />

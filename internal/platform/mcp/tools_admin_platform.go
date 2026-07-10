@@ -99,6 +99,25 @@ var adminPlatformTools = []toolDef{
 		},
 	},
 	{
+		name:   "set_metrics_config",
+		desc:   "Set the provider's usage-metrics source for traffic billing: gnocchi (default), prometheus, or none (skip metrics entirely). config.metrics is MERGED — a source-only toggle keeps the stored prometheus connection config. prometheus = {url: base up to /api/v1 (e.g. https://mimir.example/prometheus), schema: libvirt-exporter|ceilometer-pushgateway|ceilometer-exporter, headers: extra request headers (e.g. {\"X-Scope-OrgID\": \"tenant\"} for Mimir), basicUser, insecureTls, caCert, timeoutSeconds}. Credentials go in prometheusAuth = {basicPassword, bearerToken} — encrypted at rest, never returned; blank keeps the stored value, \"-\" clears it. Authorization headers and URL userinfo are rejected (use prometheusAuth).",
+		method: "PUT",
+		path:   "/api/v1/admin/service/{id}/metrics-config",
+		params: []param{
+			{name: "id", typ: "string", desc: "Cloud provider id.", required: true, in: "path"},
+			{name: "source", typ: "string", desc: "gnocchi | prometheus | none.", required: true, in: "body"},
+			{name: "prometheus", typ: "object", desc: "Prometheus connection config (see tool description).", in: "body"},
+			{name: "prometheusAuth", typ: "object", desc: "{basicPassword, bearerToken} — stored encrypted, never returned.", in: "body"},
+		},
+	},
+	{
+		name:   "test_metrics_config",
+		desc:   "Live-probe the provider's configured prometheus metrics source (read-only): liveness, traffic-series count over the last hour (proves the schema matches the endpoint), and the same count at month start (proves retention covers the billing window). Returns {ok, trafficSeries, monthStartSeries, warnings}.",
+		method: "POST",
+		path:   "/api/v1/admin/service/{id}/metrics-test",
+		params: []param{{name: "id", typ: "string", desc: "Cloud provider id.", required: true, in: "path"}},
+	},
+	{
 		name:   "get_gpu_capacity",
 		desc:   "Cluster-wide GPU capacity per model from Placement, per region: [{region, gpus: [{name, total, inUse}]}]. Model names are the shared alias vocabulary (nvidia-a6000, nvidia-pro-6000, ...).",
 		method: "GET",

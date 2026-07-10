@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/menlocloud/stratos/internal/cloud/client"
+	"github.com/menlocloud/stratos/internal/cloud/metrics"
 )
 
 // ExternalServiceType values. Only CLOUD matters to the cloud slice.
@@ -159,6 +160,60 @@ func (e *ExternalService) GnocchiGranularity() int {
 		return g
 	}
 	return defaultGnocchiGranularity
+}
+
+// Metrics-source values (config.metrics.source). Absent/blank = gnocchi — the pre-existing
+// behavior for every provider that predates the knob. "none" is an explicit opt-out: the
+// metrics job skips the provider's servers silently instead of failing per-server per-hour
+// against a telemetry-less cloud.
+const (
+	MetricsSourceGnocchi    = "gnocchi"
+	MetricsSourcePrometheus = "prometheus"
+	MetricsSourceNone       = "none"
+)
+
+// metricsConfig returns the config.metrics sub-map (nil-safe).
+func (e *ExternalService) metricsConfig() map[string]any {
+	m, _ := e.Config["metrics"].(map[string]any)
+	return m
+}
+
+// MetricsSource returns config.metrics.source, defaulting to gnocchi.
+func (e *ExternalService) MetricsSource() string {
+	if s := str(e.metricsConfig()["source"]); s != "" {
+		return s
+	}
+	return MetricsSourceGnocchi
+}
+
+// PrometheusMetricsConfig assembles the Prometheus usage-source config from
+// config.metrics.prometheus.* plus the DECRYPTED credential leaves
+// (secret.prometheusBasicPassword / secret.prometheusBearerToken — encrypted at rest and
+// stripped from admin reads like every other secret field; the basic-auth USERNAME is not a
+// secret and lives in config).
+func (e *ExternalService) PrometheusMetricsConfig() metrics.PrometheusConfig {
+	p, _ := e.metricsConfig()["prometheus"].(map[string]any)
+	headers := map[string]string{}
+	if hs, ok := p["headers"].(map[string]any); ok {
+		for k, v := range hs {
+			if s := str(v); k != "" && s != "" {
+				headers[k] = s
+			}
+		}
+	}
+	timeout, _ := intFrom(p["timeoutSeconds"])
+	secret := e.secretMap()
+	return metrics.PrometheusConfig{
+		URL:            str(p["url"]),
+		Schema:         str(p["schema"]),
+		Headers:        headers,
+		BasicUser:      str(p["basicUser"]),
+		BasicPassword:  str(secret["prometheusBasicPassword"]),
+		BearerToken:    str(secret["prometheusBearerToken"]),
+		InsecureTLS:    boolean(p["insecureTls"]),
+		CACert:         str(p["caCert"]),
+		TimeoutSeconds: timeout,
+	}
 }
 
 // RegionNames returns the keys of config.regions (the regions this service serves).

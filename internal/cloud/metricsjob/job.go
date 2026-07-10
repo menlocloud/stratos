@@ -101,6 +101,11 @@ func (j *Job) processServer(ctx context.Context, server *cloud.CloudResource, po
 		j.log.Error("metricsjob: resolve external service", "server", server.ID, "serviceId", server.ServiceID, "err", err)
 		return
 	}
+	// Explicit opt-out (config.metrics.source == "none"): skip silently — a provider without
+	// telemetry should not generate per-server error noise every hour.
+	if es.MetricsSource() == externalservice.MetricsSourceNone {
+		return
+	}
 	fetcher, err := j.fetcherFor(ctx, es, server.Region)
 	if err != nil {
 		j.log.Error("metricsjob: build fetcher", "server", server.ID, "err", err)
@@ -128,8 +133,13 @@ func (j *Job) externalService(ctx context.Context, cache map[string]*externalser
 	return es, nil
 }
 
-// liveFetcherFactory builds an authenticated gnocchi client from the external service.
+// liveFetcherFactory builds the usage-source MeasureFetcher selected by
+// config.metrics.source: prometheus → a Prometheus-compatible query client (no keystone
+// involved), anything else → the authenticated gnocchi client (the pre-knob default).
 func liveFetcherFactory(ctx context.Context, es *externalservice.ExternalService, region string) (metrics.MeasureFetcher, error) {
+	if es.MetricsSource() == externalservice.MetricsSourcePrometheus {
+		return metrics.NewPrometheus(es.PrometheusMetricsConfig())
+	}
 	cc, err := client.New(ctx, es.ClientConfig(region))
 	if err != nil {
 		return nil, err
