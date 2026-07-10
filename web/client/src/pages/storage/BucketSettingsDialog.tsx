@@ -34,8 +34,16 @@ function quotaFieldValid(v: string): boolean {
   return Number.isFinite(n) && n > 0
 }
 
+// Max objects is an int64 server-side — a decimal like "1.5" would fail the JSON decode, so unlike the
+// GB field (rounded to bytes) it must be a whole number.
+function quotaObjectsValid(v: string): boolean {
+  if (v.trim() === "") return true
+  const n = Number(v)
+  return Number.isInteger(n) && n > 0
+}
+
 function quotaFieldsValid(gb: string, objects: string): boolean {
-  return quotaFieldValid(gb) && quotaFieldValid(objects) && (gb.trim() !== "" || objects.trim() !== "")
+  return quotaFieldValid(gb) && quotaObjectsValid(objects) && (gb.trim() !== "" || objects.trim() !== "")
 }
 
 type Props = {
@@ -153,7 +161,13 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
                         size="sm"
                         onClick={() => {
                           const el = document.getElementById("lock-days") as HTMLInputElement | null
-                          run("SET_OBJECT_LOCK", { mode: "GOVERNANCE", days: Number(el?.value || 1) }, "Retention updated")
+                          // The backend expects an integer day count — reject decimals/NaN up front.
+                          const days = Number(el?.value)
+                          if (!Number.isInteger(days) || days < 1) {
+                            toast.error("Retention must be a whole number of days (1 or more)")
+                            return
+                          }
+                          run("SET_OBJECT_LOCK", { mode: "GOVERNANCE", days }, "Retention updated")
                         }}
                       >
                         Apply
@@ -474,6 +488,9 @@ function LifecycleAdd({ onAdd, existing }: { onAdd: (r: Record<string, unknown>)
   const [prefix, setPrefix] = useState("")
   const [days, setDays] = useState("30")
   const dup = existing.includes(id.trim())
+  // expirationDays is an integer server-side — reject decimals/NaN, not just < 1.
+  const dayCount = Number(days)
+  const daysValid = Number.isInteger(dayCount) && dayCount >= 1
   return (
     <div className="flex flex-wrap items-end gap-2">
       <div className="grid gap-1">
@@ -491,9 +508,9 @@ function LifecycleAdd({ onAdd, existing }: { onAdd: (r: Record<string, unknown>)
       <Button
         variant="outline"
         size="sm"
-        disabled={!id.trim() || dup || Number(days) < 1}
+        disabled={!id.trim() || dup || !daysValid}
         onClick={() => {
-          onAdd({ id: id.trim(), prefix, enabled: true, expirationDays: Number(days) })
+          onAdd({ id: id.trim(), prefix, enabled: true, expirationDays: dayCount })
           setId("")
           setPrefix("")
         }}
