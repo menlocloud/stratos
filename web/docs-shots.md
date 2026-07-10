@@ -45,3 +45,20 @@
 - [x] `/docs-img/invite-member.png` — Organization > Members page with the email invite field and Send invite button, plus the existing-member "Add to project" picker — page: `client-manual/user-invitation.md`
 - [skip: needs a live invite token; sending an invite is a write] `/docs-img/join-project-accept.png` — The /join-project screen showing the pending invitation with Accept invite and Decline buttons — page: `client-manual/user-invitation.md`
 - [x] `/docs-img/admin-console-first-login.png` — Stratos admin console right after first sign-in on a fresh install — page: `operators-manual/kubernetes-install.md`
+
+## client-first-server
+
+Captured 2026-07-10 on the live `menlo.ai` project (light theme). Dialog/step-card shots are element-scoped (no top-bar/email chrome); the server detail/actions shots are viewport shots of the real `my-first-server` VM that was created and then deleted. Page: `getting-started/first-server.md`.
+
+- [x] `/docs-img/first-server-keypair-create.png` — Compute → Key pairs, Create keypair dialog with a name filled and the "private key shown only once" hint
+- [x] `/docs-img/first-server-keypair-private.png` — "Save your private key" one-time dialog with Copy / Download .pem (throwaway generated key, keypair since removed)
+- [x] `/docs-img/first-server-servers-header.png` — Servers page header cropped to the title + Create server button
+- [x] `/docs-img/first-server-create-image.png` — Create-server step 3 Image table with Ubuntu Server 24.04 LTS selected
+- [x] `/docs-img/first-server-create-flavor.png` — Create-server step 4 Flavor table with t3.small selected (general/burstable families visible)
+- [x] `/docs-img/first-server-create-network.png` — Create-server step 5 Network with the project network checked and Fixed IP field revealed
+- [x] `/docs-img/first-server-create-access.png` — Create-server step 7 Access: Password login (username + password) and the allow-all security group checked
+- [x] `/docs-img/first-server-create-name.png` — Create-server step 8 Name with `my-first-server` entered
+- [x] `/docs-img/first-server-building.png` — Server detail page for `my-first-server` in the Build state (no addresses yet)
+- [x] `/docs-img/first-server-detail.png` — Server detail page for `my-first-server` now Active, showing IP addresses, power buttons and tabs
+- [x] `/docs-img/first-server-actions.png` — Server detail with the More actions menu open (Rename, Resize, Rebuild, Rescue, Set password, Console (VNC), Delete)
+- [skip: element shot kept catching the sticky top bar; step described in prose] `/docs-img/first-server-create-publicip.png` — Create-server step 6 Public IP with the Assign floating IP toggle on
