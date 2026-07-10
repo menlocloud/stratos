@@ -9,6 +9,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -75,12 +76,25 @@ func (c Config) authOptions() gophercloud.AuthOptions {
 	return opts
 }
 
+// ErrNotOpenStack is returned by every OpenStack-backed method when it is called on a ceph-s3 client.
+// A ceph-s3 provider serves ONLY the object-store surface (buckets + objects); it has no Keystone
+// catalog, so compute/network/image/volume calls have nothing to resolve against.
+var ErrNotOpenStack = errors.New("cloud: not an OpenStack client (ceph-s3 object store)")
+
+// IsCephS3 reports whether this client is backed by a Ceph RGW object store rather than OpenStack.
+// Callers that need an OpenStack surface must check this (or handle ErrNotOpenStack).
+func (c *Client) IsCephS3() bool { return c.ceph != nil }
+
 // Client is the authenticated facade over one OpenStack scope.
 type Client struct {
 	provider  *gophercloud.ProviderClient
 	region    string
 	projectID string // the scoped tenant — used to project-filter neutron list calls (the
 	// service account is cloud-admin, so unfiltered neutron lists return ALL tenants' resources).
+	// ceph, when non-nil, is a Ceph RGW (S3) object-store backend (provider:"ceph-s3"). The bucket +
+	// object surface (objectstore.go) routes to it instead of Swift; every OTHER method assumes an
+	// OpenStack provider and is never called on a ceph-only client (built via NewCephS3, provider=nil).
+	ceph *cephBackend
 }
 
 // New authenticates against Keystone v3 and returns the facade. The ProviderClient

@@ -107,7 +107,7 @@ type Writer interface {
 	GetSecret(ctx context.Context, id string) (map[string]any, error)
 	ListSecrets(ctx context.Context) ([]map[string]any, error)
 	DeleteSecret(ctx context.Context, id string) error
-	CreateBucket(ctx context.Context, name string) (map[string]any, error)
+	CreateBucket(ctx context.Context, o client.CreateBucketOpts) (map[string]any, error)
 	GetBucket(ctx context.Context, name string) (map[string]any, error)
 	ListBuckets(ctx context.Context) ([]map[string]any, error)
 	DeleteBucket(ctx context.Context, name string) error
@@ -513,13 +513,17 @@ func (s *WriteService) Create(ctx context.Context, serviceID, region, projectID,
 		cr.Data = map[string]any{"secret": secret}
 
 	case cloud.TypeBucket:
-		// Swift bucket. FE: data{bucketName}. externalId =
-		// the bucket name; data = DataBucket{bucketName, objectCount:0, sizeInGb:0, sizeInBytes:0}.
+		// Bucket (Swift container or ceph-s3 bucket). FE: data{bucketName, objectLockEnabled?}.
+		// externalId = the bucket name; data = DataBucket{bucketName, objectCount:0, sizeInGb:0,
+		// sizeInBytes:0, storageBackend}. objectLockEnabled is CREATE-TIME ONLY (S3 forbids enabling it
+		// later) and is rejected on Swift.
 		name := mstr(d, "bucketName")
 		if name == "" {
 			return nil, fmt.Errorf("bucket name is required")
 		}
-		bucket, err := s.w.CreateBucket(ctx, name)
+		bucket, err := s.w.CreateBucket(ctx, client.CreateBucketOpts{
+			Name: name, ObjectLockEnabled: mbool(d, "objectLockEnabled"),
+		})
 		if err != nil {
 			return nil, err
 		}

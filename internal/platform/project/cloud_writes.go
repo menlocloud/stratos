@@ -3,6 +3,8 @@ package project
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/providers"
+	"github.com/menlocloud/stratos/internal/platform/externalservice"
 	"github.com/menlocloud/stratos/internal/platform/rbac"
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
@@ -33,24 +36,47 @@ func (h *Handler) resolveServiceID(r *http.Request, p *Project) string {
 	if q := r.URL.Query().Get("serviceId"); q != "" && p.HasService(q) {
 		return q
 	}
-	if ids := p.ServiceIDs(); len(ids) > 0 {
-		return ids[0]
+	ids := p.ServiceIDs()
+	if len(ids) == 0 {
+		return ""
 	}
-	return ""
+	// No explicit service → prefer an OpenStack one. A ceph-s3 provider serves ONLY object-store, so the
+	// generic cloud reads that fall through here (images, flavors, ports, security groups) would get
+	// ErrNotOpenStack from it. Object-store callers either send x-service-id (from the Location picker)
+	// or resolve the service from the resource itself.
+	for _, id := range ids {
+		if es, err := h.esSvc.Get(r.Context(), id); err == nil && es != nil && !es.IsCephS3() {
+			return id
+		}
+	}
+	return ids[0] // ceph-only project
 }
 
 // tenantWriteService builds a WriteService over a cloud client scoped to the project's provisioned
 // OpenStack tenant (externalProjectId) using the external service's admin creds — so resources are
 // created INSIDE the customer's tenant, not the admin project. region is the provisioned region.
 func (h *Handler) tenantWriteService(ctx context.Context, w http.ResponseWriter, p *Project, svcID string) (*providers.WriteService, string, bool) {
-	extProjID := p.ExternalProjectID(svcID)
-	if extProjID == "" {
-		h.fail(w, httpx.BadRequest("Project is not provisioned on the cloud service"))
-		return nil, "", false
-	}
 	es, err := h.esSvc.Get(ctx, svcID)
 	if err != nil || es == nil {
 		httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud service not available")
+		return nil, "", false
+	}
+	region := p.ServiceRegion(svcID)
+	if region == "" {
+		region = h.cloudRegion
+	}
+	// ceph-s3: no Keystone tenant — build a client from the project's stored RGW keys instead.
+	if es.IsCephS3() {
+		cc, err := h.cephClientForProject(ctx, es, p, region)
+		if err != nil {
+			httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud client not ready")
+			return nil, "", false
+		}
+		return providers.NewWriteService(cc, h.cloud), region, true
+	}
+	extProjID := p.ExternalProjectID(svcID)
+	if extProjID == "" {
+		h.fail(w, httpx.BadRequest("Project is not provisioned on the cloud service"))
 		return nil, "", false
 	}
 	// App-cred tokens are keystone-locked to one project and can't be re-scoped to extProjID —
@@ -59,16 +85,39 @@ func (h *Handler) tenantWriteService(ctx context.Context, w http.ResponseWriter,
 		httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "provider uses application-credential auth which cannot be scoped to a tenant project")
 		return nil, "", false
 	}
-	region := p.ServiceRegion(svcID)
-	if region == "" {
-		region = h.cloudRegion
-	}
 	cc, err := client.New(ctx, es.ClientConfigForProject(region, extProjID))
 	if err != nil {
 		httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud client not ready")
 		return nil, "", false
 	}
 	return providers.NewWriteService(cc, h.cloud), region, true
+}
+
+// failWebsite maps the static-website surface's errors: asking a Swift bucket for a website is a client
+// mistake (400 with the reason), not a server fault. Everything else goes through the normal error path.
+func (h *Handler) failWebsite(w http.ResponseWriter, err error) {
+	if errors.Is(err, client.ErrWebsiteUnsupported) {
+		h.fail(w, httpx.BadRequest("Static website hosting is only available on S3 (Ceph) object storage"))
+		return
+	}
+	h.fail(w, err)
+}
+
+// cephClientForProject builds a ceph-s3 CloudClient scoped to the project's RGW tenant-user, using the
+// project's stored S3 keys (cephcred) for data I/O + the provider's admin keys for stats. Errors when the
+// project has no stored credential (not provisioned onto this ceph service) or the store is unwired.
+func (h *Handler) cephClientForProject(ctx context.Context, es *externalservice.ExternalService, p *Project, region string) (*client.Client, error) {
+	if h.cephCreds == nil {
+		return nil, fmt.Errorf("ceph credential store not configured")
+	}
+	cred, err := h.cephCreds.Get(ctx, p.ID, es.ID)
+	if err != nil {
+		return nil, err
+	}
+	if cred == nil {
+		return nil, fmt.Errorf("project is not provisioned on the ceph object-store service")
+	}
+	return client.NewCephS3(ctx, es.CephConfig(region, cred.AccessKey, cred.SecretKey, cred.RGWUID))
 }
 
 // cloudResourceList handles POST /api/v1/project/{id}/resource?type=
@@ -412,22 +461,30 @@ func (h *Handler) cloudGet(w http.ResponseWriter, r *http.Request) {
 // tryTenantClient builds a tenant-scoped cloud client, returning ok=false (no error written) on any
 // failure — for best-effort live reads where the cached resource is the fallback.
 func (h *Handler) tryTenantClient(ctx context.Context, p *Project, svcID string) (*client.Client, bool) {
-	extProjID := p.ExternalProjectID(svcID)
-	if extProjID == "" {
-		return nil, false
-	}
 	es, err := h.esSvc.Get(ctx, svcID)
 	if err != nil || es == nil {
+		return nil, false
+	}
+	region := p.ServiceRegion(svcID)
+	if region == "" {
+		region = h.cloudRegion
+	}
+	// ceph-s3: no Keystone tenant — build from the project's stored RGW keys.
+	if es.IsCephS3() {
+		cc, err := h.cephClientForProject(ctx, es, p, region)
+		if err != nil {
+			return nil, false
+		}
+		return cc, true
+	}
+	extProjID := p.ExternalProjectID(svcID)
+	if extProjID == "" {
 		return nil, false
 	}
 	// App-cred tokens can't be re-scoped to extProjID (keystone-locked to one project) — a client
 	// built here would read/write the app-cred's own project, not this tenant. Fail closed.
 	if es.IsAppCred() {
 		return nil, false
-	}
-	region := p.ServiceRegion(svcID)
-	if region == "" {
-		region = h.cloudRegion
 	}
 	cc, err := client.New(ctx, es.ClientConfigForProject(region, extProjID))
 	if err != nil {
@@ -662,6 +719,13 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	cr, err := ws.Create(r.Context(), svcID, region, proj.ID, uid, req)
 	if err != nil {
+		// The ceph-s3 bucket namespace is GLOBAL (no RGW tenants — see client.CephConfig), so a name may
+		// already be owned by this or another project. That is a client-correctable conflict, not a 500.
+		if errors.Is(err, client.ErrBucketNameTaken) {
+			h.fail(w, httpx.NewError(http.StatusConflict, http.StatusConflict,
+				"Bucket name is already taken — S3 bucket names are globally unique"))
+			return
+		}
 		h.fail(w, err)
 		return
 	}
@@ -732,22 +796,30 @@ func (h *Handler) cloudDelete(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, httpx.BadRequest("Project has no cloud service"))
 		return
 	}
-	ws, _, ok := h.tenantWriteService(r.Context(), w, proj, svcID)
-	if !ok {
-		return
-	}
 	// The FE passes the cloudResource CACHE id. §7: require an OWNED cache row and delete by ITS
 	// externalId — never fall back to the raw param, or a caller could delete another project's
 	// resource (WriteService.Delete resolves by {serviceId, externalId} with no project filter).
 	resourceID := chi.URLParam(r, "resourceId")
-	cr, ok := h.ownedResource(r.Context(), resourceID, proj)
-	if ok {
+	if cr, ok := h.ownedResource(r.Context(), resourceID, proj); ok {
+		// Delete against the resource's OWN service (see cloudAction) — a header-resolved id could name
+		// the other object-store backend, and WriteService.Delete keys on {serviceId, externalId}.
+		if cr.ServiceID != "" {
+			svcID = cr.ServiceID
+		}
+		ws, _, ok := h.tenantWriteService(r.Context(), w, proj, svcID)
+		if !ok {
+			return
+		}
 		if err := ws.Delete(r.Context(), svcID, cr.ExternalID); err != nil {
 			h.fail(w, err)
 			return
 		}
 		h.projectAudit(u, proj, "CLOUD_RESOURCE_DELETE")
 		httpx.Accepted(w)
+		return
+	}
+	ws, _, ok := h.tenantWriteService(r.Context(), w, proj, svcID)
+	if !ok {
 		return
 	}
 	// Live-listed types (floating IPs, ports, security groups) have no cache row — the FE id is the
@@ -1111,6 +1183,13 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, httpx.NotFound("Resource not found"))
 		return
 	}
+	// The action targets THIS resource, so it must run against the service the resource actually lives on
+	// — not whatever x-service-id the request happened to carry. Swift and ceph-s3 object stores run side
+	// by side permanently, so a header-resolved service can point at the wrong object-store backend (and
+	// for a ceph client every OpenStack action would return ErrNotOpenStack).
+	if cr.ServiceID != "" {
+		svcID = cr.ServiceID
+	}
 	externalID := cr.ExternalID
 	var req struct {
 		Action string         `json:"action"`
@@ -1119,6 +1198,12 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.fail(w, httpx.BadRequest("invalid request body"))
+		return
+	}
+
+	// ceph-s3 bucket configuration + per-key grants (GET_SETTINGS, SET_VERSIONING, SET_QUOTA, …).
+	// Handled first: they act on THIS bucket and already run against cr.ServiceID.
+	if h.bucketSettingsAction(w, r, proj, svcID, externalID, req.Action, req.Data) {
 		return
 	}
 
@@ -1237,6 +1322,21 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.OK(w, map[string]any{"result": map[string]any{"swiftApis": swiftApis, "s3Apis": s3Apis}})
 		return
+	case "GET_WEBSITE":
+		// Object-storage (ceph-s3 only): the bucket's static-website state
+		// {enabled, indexDocument, errorDocument, url, publicObjects}. Swift → 400 (no s3website API).
+		cc, ok := h.tryTenantClient(r.Context(), proj, svcID)
+		if !ok {
+			httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud client not ready")
+			return
+		}
+		site, err := cc.GetBucketWebsite(r.Context(), externalID)
+		if err != nil {
+			h.failWebsite(w, err)
+			return
+		}
+		httpx.OK(w, map[string]any{"result": site})
+		return
 	case "DOWNLOAD":
 		// Object-storage: mint a short-lived download token (DOWNLOAD) + return its URL. The FE
 		// opens result.url → GET /api/v1/download/{token} streams the object.
@@ -1268,6 +1368,39 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		httpx.OK(w, map[string]any{"result": map[string]any{}})
+		return
+	case "ENABLE_WEBSITE":
+		// Object-storage (ceph-s3 only): serve the bucket as a static website.
+		// data{indexDocument?, errorDocument?} (index defaults to index.html).
+		// ⚠ This ALSO makes every object in the bucket anonymously readable (bucket policy on
+		// s3:GetObject) — the result carries publicObjects:true so the UI states it plainly.
+		cc, ok := h.tryTenantClient(r.Context(), proj, svcID)
+		if !ok {
+			httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud client not ready")
+			return
+		}
+		site, err := cc.EnableBucketWebsite(r.Context(), externalID,
+			strAny(req.Data["indexDocument"]), strAny(req.Data["errorDocument"]))
+		if err != nil {
+			h.failWebsite(w, err)
+			return
+		}
+		h.projectAudit(u, proj, "CLOUD_RESOURCE_ACTION")
+		httpx.OK(w, map[string]any{"result": site})
+		return
+	case "DISABLE_WEBSITE":
+		// Object-storage (ceph-s3 only): stop serving the website AND remove the public-read policy.
+		cc, ok := h.tryTenantClient(r.Context(), proj, svcID)
+		if !ok {
+			httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud client not ready")
+			return
+		}
+		if err := cc.DisableBucketWebsite(r.Context(), externalID); err != nil {
+			h.failWebsite(w, err)
+			return
+		}
+		h.projectAudit(u, proj, "CLOUD_RESOURCE_ACTION")
+		httpx.OK(w, map[string]any{"result": &client.BucketWebsite{}})
 		return
 	case "DELETE_OBJECT":
 		// Object-storage: delete an object (or folder + contents) by name (DELETE_OBJECT,

@@ -91,7 +91,8 @@ free-form; typed accessors over the known keys live on the struct:
 | Accessor | Config key | Meaning |
 |---|---|---|
 | `IdentityURL()` | `config.identityUrl` | Keystone auth URL, normalized to end in `/v3` |
-| `Provider()` | `config.provider` | e.g. `openstack` |
+| `Provider()` | `config.provider` | `openstack` (Keystone-backed) **or** `ceph-s3` (see [Ceph RGW S3](#ceph-rgw-s3-object-storage-a-second-object-store-backend)) |
+| `IsCephS3()` | `config.provider == "ceph-s3"` | a Keystone-free object-store-only provider |
 | `Shared()` | `config.shared` | region shared with other tenants (affects the portal menu) |
 | `GnocchiGranularity()` | `config.gnocchiGranularity` | measure granularity, default `300` |
 | `RegionNames()` | keys of `config.regions` | the regions this service serves |
@@ -123,11 +124,14 @@ tenant.
 drives what the customer sees. `uiMenuItems` in
 `internal/platform/project/clientcloud.go` builds the portal's left-nav menu:
 
-- for each **non-disabled** CLOUD service with `Provider() == "openstack"`,
+- for each **non-disabled** CLOUD service whose `Provider()` is `openstack`
+  **or** `ceph-s3`,
 - for each `config.services[name]` that has **at least one region set to
   `true`**, emit a menu item for that service-name (compute/nova,
   volume/cinder, network/neutron, load-balancer/octavia, shares/manila,
-  object-store/swift-or-RGW, dns/designate, orchestration, container-infra, …).
+  object-store/swift, dns/designate, orchestration, container-infra, …). A
+  `ceph-s3` service serves only `object-store`, so it contributes just the
+  Object storage entry.
 
 Consequences a contributor should know:
 
@@ -422,6 +426,133 @@ missed.
 
 ---
 
+## Ceph RGW S3 object storage (a second object-store backend)
+
+Everything above describes an **OpenStack** provider (`config.provider == "openstack"`),
+where object storage rides on Swift inside a Keystone tenant. Stratos also supports a
+second, independent object-store backend: **Ceph RGW over the S3 API**
+(`config.provider == "ceph-s3"`). The two run **side by side, permanently** — they are two
+disjoint sets of buckets, never migrated between — so the UI labels every bucket with its
+backend (`data.storageBackend` = `SWIFT` | `CEPH_S3`) and the create form makes the user pick
+one. Code: `internal/cloud/client/objectstore_ceph*.go`, `internal/cloud/cephcred/`,
+`internal/platform/project/cloud_bucket_settings.go`.
+
+### No Keystone; the RGW user is the per-project anchor
+
+A `ceph-s3` project has **no Keystone tenant and no `externalProjectId`**. The per-project
+anchor is a dedicated **RGW user**, `rgwUid = config.uidPrefix + <stratosProjectId>`, created
+in RGW's **default tenant**. We deliberately do **not** use RGW multi-tenancy: a tenanted
+bucket cannot be reached from the s3website endpoint (a DNS hostname cannot encode a tenant),
+which would make static website hosting impossible. The trade-offs:
+
+- **Isolation** = bucket **ownership** + S3 default-deny, plus the admin-ops `uid` filter that
+  scopes the sync/billing list. A project's data-plane keys can only touch buckets it owns.
+- **Global bucket namespace** (exactly like AWS S3). A name taken by any project fails with
+  `409` (`client.ErrBucketNameTaken`). If collisions bite, add a per-provider `bucketPrefix`
+  (not built).
+
+### Provider config
+
+A `ceph-s3` external service is created through the same admin `POST /service` path (no special
+casing — the create path persists arbitrary `config` + encrypts `secret`). Shape:
+
+```jsonc
+{
+  "type": "CLOUD", "status": "PUBLIC", "name": "ceph-s3",
+  "config": {
+    "provider": "ceph-s3",
+    "s3Endpoint":        "https://s3.example",            // S3 data endpoint
+    "adminApiUrl":       "https://s3.example/admin",       // RGW Admin Ops
+    "s3WebsiteEndpoint": "https://s3-website.example",     // optional (static websites)
+    "region":            "us-east-1",                       // RGW zonegroup, for SigV4
+    "uidPrefix":         "dev_",                            // optional prefix on the RGW uid
+    "defaultQuotaGiB":   100,                               // per-project user quota
+    "services": { "object-store": { "us-east-1": true } }
+  },
+  "secret": { "adminAccessKey": "…", "adminSecretKey": "…" }  // an RGW admin user, caps users=*;buckets=*;usage=*
+}
+```
+
+Accessors: `IsCephS3`, `S3Endpoint`, `AdminAPIURL`, `S3WebsiteEndpoint`, `CephRegion`,
+`UIDPrefix`, `RGWUIDFor(projectID)`, `DefaultQuotaGiB`, and `CephConfig(...)` which assembles a
+`client.CephConfig` for `client.NewCephS3`.
+
+### Two credential planes
+
+`client.NewCephS3` builds a `*client.Client` with **no gophercloud provider** — every OpenStack
+method returns `ErrNotOpenStack` (a stub `EndpointLocator`, so a mis-routed call errors instead
+of panicking). It carries up to two S3/admin clients:
+
+- **Admin keys** (Admin Ops, SigV4-signed REST): provision the RGW user + quota, list buckets
+  with stats for the sync/billing meter, read one bucket's owner/stats. An *admin-only* client
+  (no project keys) can do these but no data I/O.
+- **Project keys** (aws-sdk-go-v2 S3): bucket + object CRUD, ACL, website, policy — run **as the
+  project's own RGW user**. Stored encrypted per project in the `cephRgwCredential` collection
+  (`internal/cloud/cephcred`), kept **off** the project document (which is serialized to the
+  client, so the secret would leak).
+
+Admin Ops quirks that only a live cluster surfaced (see `tasks/lessons.md`): every request needs
+an explicit `X-Amz-Content-Sha256` header; the query must be sorted (SigV4 canonicalization);
+`PUT /admin/user?key` returns a **bare array**; `max-buckets=-1` **forbids** a user from creating
+buckets (the opposite of the usual convention).
+
+### Ownership guard — every admin-by-name op verifies the live owner
+
+The admin key can address **any** bucket by name, and the namespace is global. So a stale cache
+row whose name was recreated by another project must never be read, requota'd, or purged as if it
+were ours. `adminBucketInfo` / `bucketOwner` fetch the live `owner` and refuse a bucket the
+project does not own (`ErrBucketNotOwned`); `getBucket`, `SetBucketQuota`, and
+`ForceDeleteCephBucket` all funnel through it. Cached `ProjectID` is **not** proof of live
+ownership.
+
+### Lifecycle
+
+- **Bootstrap** (`project/bootstrap.go: BootstrapCephOnto`) — ensure the RGW user (idempotent),
+  set quota, store the keys in `cephRgwCredential`, append the binding
+  `{serviceId, provider:"ceph-s3", region, rgwUid}`. `enableAndBootstrap` provisions ceph-s3
+  services alongside the OpenStack one on project entry.
+- **Client build** — the handler seams (`tryTenantClient`, `tenantWriteService`) branch on
+  `IsCephS3()` and build a project-keyed ceph client from `cephRgwCredential` (bypassing the
+  Keystone `externalProjectId` gate). Bucket actions resolve the backend from the **resource's**
+  `serviceId`, never the request header — Swift and ceph coexist.
+- **Sync** (`syncjob.go: syncCephService`) — admin-keyed client, `uid`-scoped bucket list with
+  stats → the `BUCKET` cache carries `{objectCount, sizeInBytes, sizeInGb}` (logical `size`, to
+  match Swift), which the existing `"bucket"` pricing rules rate unchanged. The `uid` filter IS
+  the leak-guard.
+- **Teardown** (`project/teardown.go`) — force-delete this project's ceph buckets via Admin Ops
+  `purge-objects` (owner-checked), purge each child-key user then the parent user, and drop the
+  stored credentials. **Fail closed:** a local key/credential record is deleted only after its
+  RGW user is actually purged, so a transient purge failure never orphans a live key with no
+  inventory left to revoke.
+
+### Customer surface
+
+Beyond bucket + object CRUD (the same CloudClient methods Swift uses), ceph-s3 buckets expose an
+S3 feature surface, all gated and live-verified:
+
+- **S3 access keys** (`/project/{id}/s3-credentials`, `/s3-keys`) — the project's own credentials
+  plus extra keys for aws-cli / any S3 client, with **rotation** and delete. Each extra key is
+  its own RGW user (`<projectUid>-<name>`, `max-buckets=-1` so it cannot create unmetered
+  buckets); it gets access only through explicit **bucket grants** (READ / READ_WRITE / FULL, via
+  bucket policy). These endpoints require `project:cloud_resource:api_access`, not `manage` —
+  they hand out live credentials.
+- **Bucket settings** (cloud actions on the BUCKET resource) — versioning, object lock
+  (create-time, **GOVERNANCE only** so teardown can still purge), per-bucket quota, lifecycle,
+  CORS, tagging, raw bucket-policy passthrough, read-only index-type/placement.
+- **Static website** — `PutBucketWebsite` + an anonymous-read bucket **policy** (not just an ACL;
+  an ACL grants bucket *listing*, not object reads). Enabling exposes every object publicly, and
+  the response says so (`publicObjects: true`).
+
+Stratos **owns** the bucket policy document and merges by `Sid` (`StratosPublicWebsiteRead`,
+`StratosPublicRead`, `StratosGrant-<uid>`), preserving foreign statements byte-for-byte — so the
+website toggle and per-key grants never clobber each other or a customer's own statements.
+
+**Not built** (blocked by infra, not code): server-side encryption (needs a KMS/Vault backend —
+`PutBucketEncryption` returns 200 but then bricks writes without one), cross-zone replication
+(single-zone cluster), MFA delete. See `tasks/ceph-s3-object-storage-plan.md` §10.
+
+---
+
 ## Source files
 
 **Cloud domain and cache:**
@@ -436,6 +567,8 @@ missed.
 - `internal/cloud/client/client.go` — Keystone auth + Nova/Neutron/Glance + direct-REST `Do`
 - `internal/cloud/client/identity.go` — Keystone admin project/user/role ops
 - `internal/cloud/client/{loadbalancer,share,dns,objectstore,stack,magnum,barbican,vpn,baremetal}*.go` — per-service clients
+- `internal/cloud/client/objectstore_ceph{,_policy,_settings}.go` — the Ceph RGW S3 backend (S3 + Admin Ops, policy document, bucket settings)
+- `internal/cloud/cephcred/{cephcred,s3key}.go` — per-project RGW credentials + extra S3 keys (encrypted)
 
 **Providers and sync:**
 
@@ -464,4 +597,6 @@ missed.
 
 - `internal/platform/project/clientcloud.go` — UI menu + attached services
 - `internal/platform/project/cloud_writes.go` — client cloud create/action/delete
-- `cmd/api/main.go` — wiring (external services, cloud client, notification fetcher/resolver, jobs)
+- `internal/platform/project/cloud_bucket_settings.go` — ceph-s3 bucket settings + S3-key routes
+- `internal/platform/project/{bootstrap,teardown}.go` — ceph provision + deprovision branches
+- `cmd/api/main.go` — wiring (external services, cloud client, cephcred, notification fetcher/resolver, jobs)

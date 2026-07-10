@@ -35,7 +35,7 @@ capabilities to AI agents.
 
 ## Features
 
-- **Self-service cloud** — provision and manage instances, volumes, networks, floating IPs, load balancers, object storage and shares against one or more OpenStack regions.
+- **Self-service cloud** — provision and manage instances, volumes, networks, floating IPs, load balancers, object storage and shares against one or more OpenStack regions, plus S3 object storage on Ceph RGW (buckets, per-key access, static websites).
 - **Usage-based billing** — metered consumption rated against configurable price plans, resource types, currencies and tax rules.
 - **Invoicing & payments** — automated invoices, account credits, card and bank-transfer payments (Stripe), and automated suspension for overdue accounts.
 - **Savings plans & promotions** — commitment discounts, promotional credits, and sign-up bonuses.
@@ -180,13 +180,3 @@ and our [Code of Conduct](CODE_OF_CONDUCT.md). To report a security issue, see
 
 Stratos is licensed under the **GNU Affero General Public License v3.0**
 (AGPL-3.0-only). See [`LICENSE`](LICENSE).
-
-## Star History
-
-<a href="https://star-history.com/#menlocloud/stratos&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=menlocloud/stratos&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=menlocloud/stratos&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=menlocloud/stratos&type=Date" width="600" />
-  </picture>
-</a>

@@ -27,6 +27,7 @@ import (
 	"github.com/menlocloud/stratos/internal/amqp"
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/billingresource"
+	"github.com/menlocloud/stratos/internal/cloud/cephcred"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/metrics"
 	"github.com/menlocloud/stratos/internal/cloud/metricsjob"
@@ -242,6 +243,9 @@ func run() error {
 	// Cloud-object download tokens (object-store DOWNLOAD action → GET /download/{token}).
 	projectH.SetDownloads(cloud.NewDownloadRepo(pg), cfg.Self.APIBaseURL)
 	projectH.SetCustomMenu(project.NewCustomMenuReader(pg))
+	// Ceph RGW (S3) per-project credentials — enables ceph-s3 provisioning + bucket writes.
+	cephCredRepo := cephcred.New(pg, enc)
+	projectH.SetCephCreds(cephCredRepo, cephcred.NewKeyRepo(pg, enc))
 
 	// Promotion (deposit config) + Affiliate (cfy check + project config/log) — client reads.
 	// The promo-redeem authz gate resolves the bp's org WITH a membership check on the caller

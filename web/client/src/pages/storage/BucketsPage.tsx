@@ -1,12 +1,14 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { Database, FolderOpen, MoreHorizontal, Plus, RefreshCw } from "lucide-react"
+import { Database, FolderOpen, MoreHorizontal, Plus, RefreshCw, Settings } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -15,12 +17,17 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
-import type { CloudResource } from "@/lib/types"
+import { useCloudList, useProjectId } from "@/lib/hooks"
+import { BACKEND_LABEL, bucketBackend, isS3Location, useBucketLocations } from "@/lib/objectstore"
+import type { CloudResource, Location } from "@/lib/types"
+import { BucketSettingsDialog } from "./BucketSettingsDialog"
 
 export function bucketName(r: CloudResource): string {
   return (r.data?.bucketName as string) || r.externalId || r.name || r.id
@@ -39,42 +46,71 @@ export function bucketGb(r: CloudResource): string {
 
 export default function BucketsPage() {
   const pid = useProjectId()
-  const scope = useCloudScope(pid)
   const qc = useQueryClient()
   const navigate = useNavigate()
   const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "BUCKET")
+  // Swift and S3 are separate stores with separate bucket sets — the user picks which one to create in.
+  const { locations } = useBucketLocations(pid)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
+  const [locKey, setLocKey] = useState("")
+  const [objectLock, setObjectLock] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CloudResource | null>(null)
+  const [settingsTarget, setSettingsTarget] = useState<CloudResource | null>(null)
+
+  // Key the store picker by serviceId+region, NOT the array index — useLocations returns the API array
+  // with no stable order, so an index could point at a different backend between renders and create the
+  // bucket on the wrong store.
+  const locKeyOf = (l: Location) => `${l.serviceId ?? ""}::${l.region ?? ""}`
+  const selectedLoc = locations.find((l) => locKeyOf(l) === locKey) ?? locations[0]
+  const s3Selected = isS3Location(selectedLoc)
+  const multipleStores = locations.length > 1
+
+  useEffect(() => {
+    if (locations.length && !locations.some((l) => locKeyOf(l) === locKey)) {
+      setLocKey(locKeyOf(locations[0]))
+    }
+  }, [locations, locKey])
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["cloud", pid, "BUCKET"] })
 
   const create = useMutation({
-    mutationFn: () =>
-      apiFetch(`/project/${pid}/cloud`, {
+    mutationFn: () => {
+      // Target the CHOSEN store explicitly, not whichever location happens to be first. Fail fast on an
+      // incomplete location — empty x-service-id/x-region-id headers could resolve the wrong store.
+      if (!selectedLoc?.serviceId || !selectedLoc.region) {
+        return Promise.reject(new Error("Select a storage location first"))
+      }
+      return apiFetch(`/project/${pid}/cloud`, {
         method: "POST",
-        cloud: scope,
-        body: { type: "BUCKET", data: { bucketName: name } },
-      }),
+        cloud: { serviceId: selectedLoc.serviceId, region: selectedLoc.region },
+        body: {
+          type: "BUCKET",
+          data: { bucketName: name, ...(s3Selected && objectLock ? { objectLockEnabled: true } : {}) },
+        },
+      })
+    },
     onSuccess: () => {
       toast.success("Bucket created")
       setCreateOpen(false)
       setName("")
+      setObjectLock(false)
       invalidate()
     },
+    // 409 = the name is taken globally (S3 bucket names are not per-project).
     onError: (e: Error) => toast.error(e.message),
   })
 
   const del = useMutation({
     mutationFn: (r: CloudResource) =>
-      apiFetch(`/project/${pid}/cloud/${r.id}`, { method: "DELETE", cloud: scope }),
+      apiFetch(`/project/${pid}/cloud/${r.id}`, { method: "DELETE" }),
     onSuccess: () => {
       toast.success("Bucket deletion requested")
       setDeleteTarget(null)
       invalidate()
     },
-    // Swift rejects deleting a non-empty container — surface the API error.
+    // Both stores refuse to delete a non-empty bucket — surface the API error.
     onError: (e: Error) => toast.error(e.message),
   })
 
@@ -82,13 +118,17 @@ export default function BucketsPage() {
     <>
       <PageHeader
         title="Object storage"
-        description="Buckets for storing objects and files."
+        description={
+          multipleStores
+            ? "Buckets for storing objects and files. Swift and S3 are separate stores — a bucket lives in one of them."
+            : "Buckets for storing objects and files."
+        }
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh buckets">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Button size="sm" onClick={() => setCreateOpen(true)} disabled={!locations.length}>
               <Plus className="size-4" /> Create bucket
             </Button>
           </>
@@ -105,7 +145,7 @@ export default function BucketsPage() {
           title="No buckets yet"
           hint="Create a bucket to store objects and files."
           action={
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button onClick={() => setCreateOpen(true)} disabled={!locations.length}>
               <Plus className="size-4" /> Create bucket
             </Button>
           }
@@ -116,6 +156,7 @@ export default function BucketsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead>Storage</TableHead>
                 <TableHead>Objects</TableHead>
                 <TableHead>Size</TableHead>
                 <TableHead>Created</TableHead>
@@ -123,37 +164,48 @@ export default function BucketsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">
-                    <Link className="hover:underline" to={`/p/${pid}/object-storage/${r.id}`}>
-                      {bucketName(r)}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="text-sm">{(r.data?.objectCount as number) ?? 0}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{bucketGb(r)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm">
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => navigate(`/p/${pid}/object-storage/${r.id}`)}>
-                          <FolderOpen className="size-4" /> Browse
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(r)}>
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {data.map((r) => {
+                const backend = bucketBackend(r)
+                return (
+                  <TableRow key={r.id}>
+                    <TableCell className="font-medium">
+                      <Link className="hover:underline" to={`/p/${pid}/object-storage/${r.id}`}>
+                        {bucketName(r)}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={backend === "CEPH_S3" ? "default" : "secondary"}>{BACKEND_LABEL[backend]}</Badge>
+                    </TableCell>
+                    <TableCell className="text-sm">{(r.data?.objectCount as number) ?? 0}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{bucketGb(r)}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {timeAgo(r.info?.createdAt ?? r.createdAt)}
+                    </TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="sm" aria-label={`Actions for ${bucketName(r)}`}>
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => navigate(`/p/${pid}/object-storage/${r.id}`)}>
+                            <FolderOpen className="size-4" /> Browse
+                          </DropdownMenuItem>
+                          {backend === "CEPH_S3" ? (
+                            <DropdownMenuItem onClick={() => setSettingsTarget(r)}>
+                              <Settings className="size-4" /> Settings
+                            </DropdownMenuItem>
+                          ) : null}
+                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(r)}>
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         </Card>
@@ -163,17 +215,67 @@ export default function BucketsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create bucket</DialogTitle>
-            <DialogDescription>Bucket names must be unique within this project.</DialogDescription>
+            <DialogDescription>
+              {s3Selected
+                ? "S3 bucket names are globally unique — if a name is taken you will need another one."
+                : "Bucket names must be unique within this project."}
+            </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-2">
-            <Label htmlFor="bucket-name">Bucket name</Label>
-            <Input id="bucket-name" value={name} onChange={(e) => setName(e.target.value)} />
+
+          <div className="grid gap-4">
+            {multipleStores ? (
+              <div className="grid gap-2">
+                <Label>Storage</Label>
+                <Select value={locKey} onValueChange={setLocKey}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {locations.map((l) => (
+                      <SelectItem key={locKeyOf(l)} value={locKeyOf(l)}>
+                        {l.provider === "ceph-s3" ? BACKEND_LABEL.CEPH_S3 : BACKEND_LABEL.SWIFT}
+                        {l.serviceName ? ` — ${l.serviceName}` : ""} ({l.region})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Swift and S3 hold separate sets of buckets. A bucket cannot be moved between them.
+                </p>
+              </div>
+            ) : null}
+
+            <div className="grid gap-2">
+              <Label htmlFor="bucket-name">Bucket name</Label>
+              <Input id="bucket-name" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+
+            {s3Selected ? (
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="object-lock"
+                  checked={objectLock}
+                  onCheckedChange={(v) => setObjectLock(v === true)}
+                  className="mt-0.5"
+                />
+                <div className="grid gap-0.5">
+                  <Label htmlFor="object-lock" className="font-normal">
+                    Enable object lock
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Protects objects from deletion for a retention period, and turns on versioning. This can only be
+                    chosen now — it cannot be enabled later.
+                  </p>
+                </div>
+              </div>
+            ) : null}
           </div>
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => create.mutate()} disabled={!name.trim() || create.isPending}>
+            <Button onClick={() => create.mutate()} disabled={!name.trim() || !selectedLoc || create.isPending}>
               {create.isPending ? "Creating…" : "Create bucket"}
             </Button>
           </DialogFooter>
@@ -203,6 +305,16 @@ export default function BucketsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {settingsTarget ? (
+        <BucketSettingsDialog
+          pid={pid}
+          resourceId={settingsTarget.id}
+          bucketName={bucketName(settingsTarget)}
+          open={!!settingsTarget}
+          onOpenChange={(o) => !o && setSettingsTarget(null)}
+        />
+      ) : null}
     </>
   )
 }

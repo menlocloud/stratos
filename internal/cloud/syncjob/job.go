@@ -26,13 +26,19 @@ import (
 // resources and would stamp them all onto this project (cross-tenant cache pollution + over-billing).
 type ClientFactory func(ctx context.Context, es *externalservice.ExternalService, region, externalProjectID string) (*client.Client, error)
 
+// CephClientFactory builds an ADMIN-keyed ceph-s3 CloudClient scoped to a project's RGW user (uidPrefix +
+// project id). Admin keys are enough for the bucket list+stats the sync/billing meter reads (no
+// project S3 keys needed). Injectable so the ceph sync walk is testable against a fake.
+type CephClientFactory func(ctx context.Context, es *externalservice.ExternalService, region, projectID string) (*client.Client, error)
+
 type Job struct {
-	projects  *project.Repo
-	services  *externalservice.Service
-	cloud     *cloud.Repo
-	clientFor ClientFactory
-	now       func() time.Time
-	log       *slog.Logger
+	projects      *project.Repo
+	services      *externalservice.Service
+	cloud         *cloud.Repo
+	clientFor     ClientFactory
+	cephClientFor CephClientFactory
+	now           func() time.Time
+	log           *slog.Logger
 }
 
 func New(projects *project.Repo, services *externalservice.Service, cloudRepo *cloud.Repo, log *slog.Logger) *Job {
@@ -44,13 +50,17 @@ func New(projects *project.Repo, services *externalservice.Service, cloudRepo *c
 		clientFor: func(ctx context.Context, es *externalservice.ExternalService, region, externalProjectID string) (*client.Client, error) {
 			return client.New(ctx, es.ClientConfigForProject(region, externalProjectID))
 		},
+		cephClientFor: func(ctx context.Context, es *externalservice.ExternalService, region, projectID string) (*client.Client, error) {
+			return client.NewCephS3(ctx, es.CephConfig(region, "", "", es.RGWUIDFor(projectID)))
+		},
 		now: func() time.Time { return time.Now().UTC() },
 		log: log,
 	}
 }
 
-func (j *Job) WithClientFactory(f ClientFactory) *Job { j.clientFor = f; return j }
-func (j *Job) WithNow(now func() time.Time) *Job      { j.now = now; return j }
+func (j *Job) WithClientFactory(f ClientFactory) *Job         { j.clientFor = f; return j }
+func (j *Job) WithCephClientFactory(f CephClientFactory) *Job { j.cephClientFor = f; return j }
+func (j *Job) WithNow(now func() time.Time) *Job              { j.now = now; return j }
 
 // SyncOne runs the sync for a single project — the admin POST /project/{id}/sync leg.
 // serviceID == "" syncs every attached CLOUD service but only
@@ -179,6 +189,10 @@ func ProvidersFor(cc *client.Client, region, projectID, extProjID string, enable
 }
 
 func (j *Job) syncService(ctx context.Context, p *project.Project, es *externalservice.ExternalService) int {
+	// ceph-s3: no Keystone tenant — sync only the object-store (buckets) via an admin-keyed client.
+	if es.IsCephS3() {
+		return j.syncCephService(ctx, p, es)
+	}
 	count := 0
 	extProjID := p.ExternalProjectID(es.ID)
 	if extProjID == "" {
@@ -203,4 +217,27 @@ func (j *Job) syncService(ctx context.Context, p *project.Project, es *externals
 		}
 	}
 	return count
+}
+
+// syncCephService reconciles the project's ceph-s3 buckets (the only synced type for a ceph provider): an
+// admin-keyed client lists the buckets OWNED BY this project's RGW user (admin-ops `uid` filter) WITH
+// stats, so the BUCKET cache carries the {objectCount, sizeInBytes, sizeInGb} the existing "bucket"
+// pricing rules rate. That uid filter IS the leak-guard: it returns only this project's buckets, even
+// though the RGW bucket namespace is global.
+func (j *Job) syncCephService(ctx context.Context, p *project.Project, es *externalservice.ExternalService) int {
+	region := es.CephRegion()
+	// Honour the provider's Services-tab toggle, same as the OpenStack object-store leg.
+	if !es.ServiceEnabledInRegion("object-store", region) {
+		return 0
+	}
+	cc, err := j.cephClientFor(ctx, es, region, p.ID)
+	if err != nil {
+		j.log.Error("syncjob: build ceph client", "project", p.ID, "serviceId", es.ID, "region", region, "err", err)
+		return 0
+	}
+	st, err := providers.Reconcile(ctx, providers.NewBucketProvider(cc, region, p.ID), j.cloud, es.ID, j.now())
+	if err != nil {
+		j.log.Error("syncjob: reconcile ceph buckets", "project", p.ID, "serviceId", es.ID, "region", region, "err", err)
+	}
+	return st.Created + st.Updated
 }

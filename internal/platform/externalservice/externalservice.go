@@ -76,6 +76,83 @@ func (e *ExternalService) IdentityURL() string {
 func (e *ExternalService) Provider() string { return str(e.Config["provider"]) }
 func (e *ExternalService) Shared() bool     { return boolean(e.Config["shared"]) }
 
+// IsCephS3 reports whether this is a Ceph RGW (S3) object-store provider (config.provider == "ceph-s3").
+// Such a provider is fully OpenStack-independent: no Keystone tenant, no identityUrl — object-store is the
+// only service it serves, driven by the S3 + Admin Ops endpoints below.
+func (e *ExternalService) IsCephS3() bool { return e.Provider() == "ceph-s3" }
+
+// S3Endpoint / AdminAPIURL are the ceph-s3 data + Admin Ops endpoints (config.s3Endpoint / config.adminApiUrl).
+func (e *ExternalService) S3Endpoint() string  { return str(e.Config["s3Endpoint"]) }
+func (e *ExternalService) AdminAPIURL() string { return str(e.Config["adminApiUrl"]) }
+
+// S3WebsiteEndpoint is the RGW s3website endpoint (config.s3WebsiteEndpoint), i.e. the host behind
+// rgw_dns_s3website_name. Buckets are served virtual-hosted at <bucket>.<thisHost>. Empty = the provider
+// does not offer static website hosting.
+func (e *ExternalService) S3WebsiteEndpoint() string { return str(e.Config["s3WebsiteEndpoint"]) }
+
+// CephRegion is config.region (the RGW zonegroup used for SigV4), falling back to the first configured region.
+func (e *ExternalService) CephRegion() string {
+	if r := str(e.Config["region"]); r != "" {
+		return r
+	}
+	if rs := e.RegionNames(); len(rs) > 0 {
+		return rs[0]
+	}
+	return ""
+}
+
+// UIDPrefix is an optional prefix on the per-project RGW user id (config.uidPrefix), e.g. "dev_".
+func (e *ExternalService) UIDPrefix() string { return str(e.Config["uidPrefix"]) }
+
+// DefaultQuotaGiB is the per-project storage quota to set at provision (config.defaultQuotaGiB; 0 = unset).
+func (e *ExternalService) DefaultQuotaGiB() int {
+	n, _ := intFrom(e.Config["defaultQuotaGiB"])
+	return n
+}
+
+// RGWUIDFor is the canonical per-project RGW user id: config.uidPrefix + projectID. This is the ONE place
+// it is derived — bootstrap persists this exact value on the binding + credential, and every ceph client
+// scopes its admin-ops calls (user + bucket list) by it. Buckets live in RGW's DEFAULT tenant and are
+// isolated by OWNERSHIP by this user, not by an RGW tenant.
+func (e *ExternalService) RGWUIDFor(projectID string) string {
+	return e.UIDPrefix() + projectID
+}
+
+// cephAdminKeys returns the decrypted RGW admin S3 keys (secret.adminAccessKey / secret.adminSecretKey).
+func (e *ExternalService) cephAdminKeys() (access, secret string) {
+	m := e.secretMap()
+	return str(m["adminAccessKey"]), str(m["adminSecretKey"])
+}
+
+// CephConfig assembles the ceph-s3 connection config for client.NewCephS3. projectAccess/Secret are the
+// per-project RGW user keys (empty → an admin-only client: list/stat/provision, no data I/O).
+//
+// rgwUID must ALREADY be the final user id — use RGWUIDFor(projectID) to derive it, or pass the value
+// persisted on the credential/binding. The uidPrefix is NOT re-applied here, or a caller passing a stored
+// (already-prefixed) uid would double-prefix it.
+func (e *ExternalService) CephConfig(region, projectAccess, projectSecret, rgwUID string) client.CephConfig {
+	if region == "" {
+		region = e.CephRegion()
+	}
+	adminAccess, adminSecret := e.cephAdminKeys()
+	var quotaBytes int64
+	if g := e.DefaultQuotaGiB(); g > 0 {
+		quotaBytes = int64(g) * 1073741824
+	}
+	return client.CephConfig{
+		S3Endpoint:        e.S3Endpoint(),
+		S3WebsiteEndpoint: e.S3WebsiteEndpoint(),
+		AdminURL:          e.AdminAPIURL(),
+		Region:            region,
+		AdminAccessKey:    adminAccess,
+		AdminSecretKey:    adminSecret,
+		ProjectAccessKey:  projectAccess,
+		ProjectSecretKey:  projectSecret,
+		RGWUID:            rgwUID,
+		DefaultQuotaBytes: quotaBytes,
+	}
+}
+
 // GnocchiGranularity returns config.gnocchiGranularity, else 300.
 func (e *ExternalService) GnocchiGranularity() int {
 	if g, ok := intFrom(e.Config["gnocchiGranularity"]); ok && g > 0 {

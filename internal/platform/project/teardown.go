@@ -7,7 +7,9 @@ package project
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
+	"time"
 
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
@@ -93,15 +95,106 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 		remaining = stillLeft
 	}
 
-	// Delete the Keystone tenant on each service the project is bootstrapped on (admin-scoped client,
-	// not tenant-scoped — a tenant cannot delete itself). Best-effort.
+	// cephRevokeFailed records that a ceph-s3 credential could NOT be revoked (RGW purge failed), so its
+	// local record was deliberately kept and the caller must be told deprovisioning is incomplete.
+	cephRevokeFailed := false
+
+	// Delete the per-service tenant the project is bootstrapped on (admin-scoped client, not
+	// tenant-scoped — a tenant cannot delete itself). Best-effort per provider kind.
 	for _, svcID := range p.ServiceIDs() {
-		extProj := p.ExternalProjectID(svcID)
-		if extProj == "" {
-			continue
-		}
 		es, err := h.esSvc.Get(ctx, svcID)
 		if err != nil || es == nil {
+			continue
+		}
+		if es.IsCephS3() {
+			// ceph-s3: purge the RGW user + ALL its data, then drop the stored credential.
+			// The customer-facing DeleteBucket in the sweep above refuses a NON-EMPTY bucket (S3 semantics,
+			// same as Swift), so those buckets are still in `remaining`. Force-delete each of THIS project's
+			// ceph buckets via Admin Ops (purge-objects) so their cache rows get archived and teardown stops
+			// reporting them as undeleted.
+			region := es.CephRegion()
+			if region == "" {
+				region = h.cloudRegion
+			}
+			// Prefer the uid that was actually PROVISIONED (stored on the credential) over re-deriving it
+			// from current service config — a uidPrefix change between provision and teardown would
+			// otherwise target a user that never existed and leave the real one undeprovisioned.
+			rgwUID := es.RGWUIDFor(p.ID)
+			if h.cephCreds != nil {
+				if cred, _ := h.cephCreds.Get(ctx, p.ID, svcID); cred != nil && cred.RGWUID != "" {
+					rgwUID = cred.RGWUID
+				}
+			}
+			adminCC, cerr := client.NewCephS3(ctx, es.CephConfig(region, "", "", rgwUID))
+			if cerr != nil {
+				// Could not even build the admin client → cloud credentials are NOT revoked. Keep every
+				// local credential record so a re-run / operator can still revoke, and report the failure.
+				slog.Error("teardown: build ceph admin client", "project", p.ID, "serviceId", svcID, "err", cerr)
+				cephRevokeFailed = true
+				continue
+			}
+			now := time.Now().UTC()
+			var stillLeft []cloud.CloudResource
+			for i := range remaining {
+				res := &remaining[i]
+				if res.ServiceID != svcID || res.Type != cloud.TypeBucket {
+					stillLeft = append(stillLeft, *res)
+					continue
+				}
+				if derr := adminCC.ForceDeleteCephBucket(ctx, res.ExternalID); derr != nil {
+					stillLeft = append(stillLeft, *res)
+					continue
+				}
+				// The bucket is gone cloud-side; archiving the cache row can still fail. Keep it in
+				// `remaining` so teardown reports it (a re-run's ForceDeleteCephBucket is a no-op and retries
+				// the archive) rather than silently claiming success with a stale row left behind.
+				if aerr := h.cloud.DeleteAndArchive(ctx, res, now); aerr != nil {
+					slog.Error("teardown: archive ceph bucket row", "project", p.ID, "externalId", res.ExternalID, "err", aerr)
+					stillLeft = append(stillLeft, *res)
+				}
+			}
+			remaining = stillLeft
+			// Extra S3 keys are SEPARATE RGW users ("<projectUid>-<name>"); purging the project's own user
+			// does not touch them. FAIL CLOSED (finding F1): only drop a local key record once its RGW user
+			// is actually purged — otherwise a transient purge failure would leave a live S3 key behind with
+			// no local inventory left to revoke it.
+			if h.cephKeys != nil {
+				if keys, kerr := h.cephKeys.List(ctx, p.ID, svcID); kerr == nil {
+					for i := range keys {
+						if derr := adminCC.DeleteCephChildUser(ctx, keys[i].RGWUID); derr != nil {
+							slog.Error("teardown: purge ceph child key", "project", p.ID, "rgwUid", keys[i].RGWUID, "err", derr)
+							cephRevokeFailed = true
+							continue // keep the local record so the key can still be revoked later
+						}
+						// The RGW user is gone; a failed record delete leaves stale inventory, so report it
+						// and keep teardown retryable (the purge re-run is a not-found no-op).
+						if derr := h.cephKeys.Delete(ctx, keys[i].ID); derr != nil {
+							slog.Error("teardown: delete ceph child key record", "project", p.ID, "keyId", keys[i].ID, "err", derr)
+							cephRevokeFailed = true
+						}
+					}
+				} else {
+					slog.Error("teardown: list ceph child keys", "project", p.ID, "err", kerr)
+					cephRevokeFailed = true
+				}
+			}
+			if perr := adminCC.PurgeCephUser(ctx); perr != nil {
+				// The parent user (and its keys) is still alive. Keep the stored credential so it can be
+				// revoked on a retry; do not blank the only record that identifies it.
+				slog.Error("teardown: purge ceph user", "project", p.ID, "rgwUid", rgwUID, "err", perr)
+				cephRevokeFailed = true
+			} else if h.cephCreds != nil {
+				if derr := h.cephCreds.Delete(ctx, p.ID, svcID); derr != nil {
+					// RGW user purged but the local record remains — report it so teardown is retried
+					// rather than claiming a clean deprovision with stale credentials on file.
+					slog.Error("teardown: delete ceph credential record", "project", p.ID, "serviceId", svcID, "err", derr)
+					cephRevokeFailed = true
+				}
+			}
+			continue
+		}
+		extProj := p.ExternalProjectID(svcID)
+		if extProj == "" {
 			continue
 		}
 		adminCC, err := client.New(ctx, es.ClientConfig(h.cloudRegion))
@@ -115,6 +208,9 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 	p.Status = "DELETED"
 	if err := h.svc.Save(ctx, p); err != nil {
 		return err
+	}
+	if cephRevokeFailed {
+		return fmt.Errorf("teardown could not revoke some ceph-s3 credentials; their local records were kept for retry")
 	}
 	if len(remaining) > 0 {
 		return fmt.Errorf("teardown left %d resource(s) undeleted; the sync job will reconcile them", len(remaining))

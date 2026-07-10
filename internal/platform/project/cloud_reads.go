@@ -181,6 +181,14 @@ func (h *Handler) resourceTypes(w http.ResponseWriter, r *http.Request) {
 		}
 		services, _ := es.Config["services"].(map[string]any)
 		regions, _ := es.Config["regions"].(map[string]any)
+		// A ceph-s3 provider carries a single config.region (its RGW zonegroup) instead of the OpenStack
+		// regions map. Without this synthetic entry it contributes NO location, and the client's cloud
+		// scope (x-service-id / x-region-id) is never resolved — the whole Object storage page stays empty.
+		if len(regions) == 0 && es.IsCephS3() {
+			if r := es.CephRegion(); r != "" {
+				regions = map[string]any{r: map[string]any{}}
+			}
+		}
 		for regionName, rcfgAny := range regions {
 			rcfg, _ := rcfgAny.(map[string]any)
 			seen := map[string]bool{}
@@ -209,6 +217,9 @@ func (h *Handler) resourceTypes(w http.ResponseWriter, r *http.Request) {
 			out = append(out, map[string]any{
 				"name": name, "country": country, "displayName": displayName,
 				"serviceName": es.Name, "serviceId": es.ID, "region": regionName,
+				// provider ("openstack" | "ceph-s3") lets the create form pick WHICH object store a bucket
+				// lands on — Swift and S3 run side by side over two disjoint bucket sets.
+				"provider":      es.Provider(),
 				"resourceTypes": types,
 			})
 		}
