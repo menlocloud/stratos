@@ -47,6 +47,11 @@ const emptyPayloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca49599
 // adminDo rejects any value outside it so attacker-influenced input cannot shape the request URL.
 var adminValueRe = regexp.MustCompile(`^[A-Za-z0-9._-]*$`)
 
+// adminParamRe is the allow-list for the query PARAMETER NAMES ("bucket", "purge-objects", …). Every name
+// we send is a fixed lowercase literal; checking them anyway keeps the whole query — keys and values —
+// behind the same barrier.
+var adminParamRe = regexp.MustCompile(`^[a-z-]*$`)
+
 // CephConfig carries the connection parameters for one ceph-s3 provider scope. Admin keys are always
 // present; project keys are empty on an admin-only client (sync/provision).
 //
@@ -270,6 +275,9 @@ func (b *cephBackend) adminDo(ctx context.Context, method, path string, q url.Va
 	// fresh url.Values keeps the barrier on the same data-flow node that reaches the sink.
 	safe := url.Values{}
 	for k, vs := range q {
+		if !adminParamRe.MatchString(k) {
+			return fmt.Errorf("ceph-s3: refusing admin request: unsafe query parameter %q", k)
+		}
 		for _, v := range vs {
 			if !adminValueRe.MatchString(v) {
 				return fmt.Errorf("ceph-s3: refusing admin request: unsafe %s value %q", k, v)

@@ -76,16 +76,21 @@ export default function BucketsPage() {
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["cloud", pid, "BUCKET"] })
 
   const create = useMutation({
-    mutationFn: () =>
-      apiFetch(`/project/${pid}/cloud`, {
+    mutationFn: () => {
+      // Target the CHOSEN store explicitly, not whichever location happens to be first. Fail fast on an
+      // incomplete location — empty x-service-id/x-region-id headers could resolve the wrong store.
+      if (!selectedLoc?.serviceId || !selectedLoc.region) {
+        return Promise.reject(new Error("Select a storage location first"))
+      }
+      return apiFetch(`/project/${pid}/cloud`, {
         method: "POST",
-        // Target the CHOSEN store explicitly, not whichever location happens to be first.
-        cloud: { serviceId: selectedLoc?.serviceId ?? "", region: selectedLoc?.region ?? "" },
+        cloud: { serviceId: selectedLoc.serviceId, region: selectedLoc.region },
         body: {
           type: "BUCKET",
           data: { bucketName: name, ...(s3Selected && objectLock ? { objectLockEnabled: true } : {}) },
         },
-      }),
+      })
+    },
     onSuccess: () => {
       toast.success("Bucket created")
       setCreateOpen(false)

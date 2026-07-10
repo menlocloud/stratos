@@ -280,8 +280,9 @@ export default function S3KeysPage() {
           <DialogHeader>
             <DialogTitle>Rotate access key</DialogTitle>
             <DialogDescription>
-              A new access key and secret are issued and the current one stops working <strong>immediately</strong>.
-              Anything still using the old key will start failing. Bucket access is unaffected.
+              A new access key and secret are issued and the current one is retired — normally it stops working{" "}
+              <strong>immediately</strong>, and you will be warned if it could not be retired and must be revoked
+              manually. Anything still using the old key will start failing. Bucket access is unaffected.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

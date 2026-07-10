@@ -195,8 +195,9 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
                   <Button
                     variant="outline"
                     size="sm"
-                    // These are plain text inputs, so guard against NaN/negatives before sending — an empty
-                    // field means "unlimited" (-1), anything else must be a non-negative number.
+                    // These are plain text inputs, so guard against NaN before sending — an empty field
+                    // means "unlimited" (-1), anything else must be strictly > 0 (the backend reads <= 0
+                    // as unlimited, so a literal 0 would not mean "block everything").
                     disabled={!quotaFieldsValid(quotaGb, quotaObjects)}
                     onClick={() =>
                       run(
