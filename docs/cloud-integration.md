@@ -453,8 +453,9 @@ which would make static website hosting impossible. The trade-offs:
 
 ### Provider config
 
-A `ceph-s3` external service is created through the same admin `POST /service` path (no special
-casing — the create path persists arbitrary `config` + encrypts `secret`). Shape:
+A `ceph-s3` external service is created from **Cloud providers → Add provider → Ceph S3** in the
+admin UI, or through the same admin `POST /service` path it posts to (no special casing — the create
+path persists arbitrary `config` + encrypts `secret`). Shape:
 
 ```jsonc
 {
@@ -476,6 +477,19 @@ casing — the create path persists arbitrary `config` + encrypts `secret`). Sha
 Accessors: `IsCephS3`, `S3Endpoint`, `AdminAPIURL`, `S3WebsiteEndpoint`, `CephRegion`,
 `UIDPrefix`, `RGWUIDFor(projectID)`, `DefaultQuotaGiB`, and `CephConfig(...)` which assembles a
 `client.CephConfig` for `client.NewCephS3`.
+
+**Cluster prerequisite.** The client talks path-style (`UsePathStyle: true`), so `s3Endpoint`'s
+hostname MUST be one RGW recognizes as its own — `rgw_dns_name`, the zonegroup `hostnames` list, or
+Rook's `CephObjectStore.spec.hosting.dnsNames`. RGW treats that list as all-or-nothing: naming any
+host switches it to Host-header matching, and a Host that is missing is parsed as the **bucket name**
+(`404 NoSuchBucket: <your-hostname>`, path ignored). List every external name the gateway answers on —
+including the Keystone Swift endpoint's, if the same RGW serves Swift.
+
+**Attaching an existing project.** A project provisions onto every non-disabled provider the first
+time it is entered, but only while it has no attached service (`enableAndBootstrap` early-returns
+otherwise). Projects that predate the provider are onboarded from the admin project page →
+**Cloud services → Attach provider**, which calls `GET /admin/project/{id}/external-service/{esid}` →
+`BootstrapOnto` → `BootstrapCephOnto`. Idempotent.
 
 ### Two credential planes
 
