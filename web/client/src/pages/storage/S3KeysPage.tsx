@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useId, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { Copy, Eye, EyeOff, KeyRound, MoreHorizontal, Plus, RefreshCw, RotateCw } from "lucide-react"
@@ -35,11 +35,12 @@ async function copy(label: string, value: string) {
 /** A secret is hidden until explicitly revealed — it stays out of screenshots and shoulder-surfing by default. */
 function SecretField({ label, value }: { label: string; value: string }) {
   const [shown, setShown] = useState(false)
+  const id = useId()
   return (
     <div className="grid gap-1.5">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
       <div className="flex items-center gap-2">
-        <Input readOnly value={shown ? value : "•".repeat(Math.min(value.length, 40))} className="font-mono text-xs" />
+        <Input id={id} readOnly value={shown ? value : "•".repeat(Math.min(value.length, 40))} className="font-mono text-xs" />
         <Button variant="outline" size="sm" onClick={() => setShown((s) => !s)} aria-label={shown ? "Hide" : "Reveal"}>
           {shown ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
         </Button>
@@ -52,11 +53,12 @@ function SecretField({ label, value }: { label: string; value: string }) {
 }
 
 function PlainField({ label, value }: { label: string; value: string }) {
+  const id = useId()
   return (
     <div className="grid gap-1.5">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
       <div className="flex items-center gap-2">
-        <Input readOnly value={value} className="font-mono text-xs" />
+        <Input id={id} readOnly value={value} className="font-mono text-xs" />
         <Button variant="outline" size="sm" onClick={() => void copy(label, value)} aria-label={`Copy ${label}`}>
           <Copy className="size-4" />
         </Button>
@@ -183,7 +185,7 @@ export default function S3KeysPage() {
 
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-sm font-medium text-muted-foreground">Additional keys</h2>
-        <Button variant="outline" size="sm" onClick={() => void keys.refetch()} disabled={keys.isFetching}>
+        <Button variant="outline" size="sm" onClick={() => void keys.refetch()} disabled={keys.isFetching} aria-label="Refresh keys">
           <RefreshCw className={keys.isFetching ? "size-4 animate-spin" : "size-4"} />
         </Button>
       </div>
@@ -221,7 +223,7 @@ export default function S3KeysPage() {
                   <TableCell>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm">
+                        <Button variant="ghost" size="sm" aria-label={`Actions for ${k.name}`}>
                           <MoreHorizontal className="size-4" />
                         </Button>
                       </DropdownMenuTrigger>

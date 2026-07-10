@@ -12,7 +12,7 @@ Depending on how your platform is set up, buckets may live on one of two storage
 
 ## Working with objects
 
-Within a bucket you upload, download, and delete objects, and organise them into folders. The store presents an S3-compatible surface, so existing S3 tooling and SDKs work against your buckets without change.
+Within a bucket you upload, download, and delete objects, and organise them into folders. S3 (Ceph) buckets present an S3-compatible surface, so existing S3 tooling and SDKs work against them without change; Swift buckets are managed through Stratos.
 
 ## S3 access keys
 

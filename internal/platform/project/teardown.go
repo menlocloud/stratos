@@ -116,7 +116,16 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 			if region == "" {
 				region = h.cloudRegion
 			}
-			adminCC, cerr := client.NewCephS3(ctx, es.CephConfig(region, "", "", es.RGWUIDFor(p.ID)))
+			// Prefer the uid that was actually PROVISIONED (stored on the credential) over re-deriving it
+			// from current service config — a uidPrefix change between provision and teardown would
+			// otherwise target a user that never existed and leave the real one undeprovisioned.
+			rgwUID := es.RGWUIDFor(p.ID)
+			if h.cephCreds != nil {
+				if cred, _ := h.cephCreds.Get(ctx, p.ID, svcID); cred != nil && cred.RGWUID != "" {
+					rgwUID = cred.RGWUID
+				}
+			}
+			adminCC, cerr := client.NewCephS3(ctx, es.CephConfig(region, "", "", rgwUID))
 			if cerr != nil {
 				// Could not even build the admin client → cloud credentials are NOT revoked. Keep every
 				// local credential record so a re-run / operator can still revoke, and report the failure.
@@ -157,7 +166,12 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 							cephRevokeFailed = true
 							continue // keep the local record so the key can still be revoked later
 						}
-						_ = h.cephKeys.Delete(ctx, keys[i].ID)
+						// The RGW user is gone; a failed record delete leaves stale inventory, so report it
+						// and keep teardown retryable (the purge re-run is a not-found no-op).
+						if derr := h.cephKeys.Delete(ctx, keys[i].ID); derr != nil {
+							slog.Error("teardown: delete ceph child key record", "project", p.ID, "keyId", keys[i].ID, "err", derr)
+							cephRevokeFailed = true
+						}
 					}
 				} else {
 					slog.Error("teardown: list ceph child keys", "project", p.ID, "err", kerr)
@@ -167,10 +181,15 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 			if perr := adminCC.PurgeCephUser(ctx); perr != nil {
 				// The parent user (and its keys) is still alive. Keep the stored credential so it can be
 				// revoked on a retry; do not blank the only record that identifies it.
-				slog.Error("teardown: purge ceph user", "project", p.ID, "rgwUid", es.RGWUIDFor(p.ID), "err", perr)
+				slog.Error("teardown: purge ceph user", "project", p.ID, "rgwUid", rgwUID, "err", perr)
 				cephRevokeFailed = true
 			} else if h.cephCreds != nil {
-				_ = h.cephCreds.Delete(ctx, p.ID, svcID)
+				if derr := h.cephCreds.Delete(ctx, p.ID, svcID); derr != nil {
+					// RGW user purged but the local record remains — report it so teardown is retried
+					// rather than claiming a clean deprovision with stale credentials on file.
+					slog.Error("teardown: delete ceph credential record", "project", p.ID, "serviceId", svcID, "err", derr)
+					cephRevokeFailed = true
+				}
 			}
 			continue
 		}
