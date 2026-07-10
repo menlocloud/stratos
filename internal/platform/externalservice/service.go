@@ -3,9 +3,18 @@ package externalservice
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/menlocloud/stratos/pkg/textcrypt"
 )
+
+// serviceIDRe is the allow-list for a service id (hex ObjectId / UUID-style token). Requests can choose
+// WHICH service to load (x-service-id header, ?serviceId=), so the id is validated here — at the single
+// choke point every ES read funnels through — before it is used as a lookup key. Without this, a
+// request-supplied id taints the loaded document (the pgdoc codec splices the id into the decoded JSON)
+// and the operator-configured endpoint URLs inside it get flagged as attacker-controlled
+// (CodeQL go/request-forgery against the ceph Admin Ops client).
+var serviceIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 // Service is the read side for external services: load them and decrypt their secret in place
 // (decrypt = textcrypt.DecryptObject over each textual leaf). The pgdoc JSON codec yields
@@ -23,6 +32,9 @@ func NewService(repo *Repo, enc *textcrypt.Encryptor) *Service {
 
 // Get finds a service by id and decrypts it, or returns a not-found error.
 func (s *Service) Get(ctx context.Context, id string) (*ExternalService, error) {
+	if !serviceIDRe.MatchString(id) {
+		return nil, fmt.Errorf("externalservice: invalid service id %q", id)
+	}
 	es, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return nil, err
