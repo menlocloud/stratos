@@ -127,6 +127,8 @@ export function DataTable<TData>({
         </div>
       )}
 
+      {/* A table is never naked: card surface with hairline border. */}
+      <div className="overflow-hidden rounded-xl border bg-card">
       <Table>
         <TableHeader>
           {table.getHeaderGroups().map((hg) => (
@@ -194,6 +196,7 @@ export function DataTable<TData>({
           )}
         </TableBody>
       </Table>
+      </div>
 
       {pageSize && table.getPageCount() > 1 && (
         <div className="flex items-center justify-between text-sm text-muted-foreground">
