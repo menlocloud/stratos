@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -505,22 +506,32 @@ func (c *Client) ResizeServer(ctx context.Context, id, flavorID string) error {
 	return servers.Resize(ctx, cc, id, servers.ResizeOpts{FlavorRef: flavorID}).ExtractErr()
 }
 
-// ConfirmResize finalizes a pending resize (action CONFIRMRESIZE).
+// ConfirmResize finalizes a pending resize (action CONFIRMRESIZE). A 409 means the server is no
+// longer in VERIFY_RESIZE — it was already confirmed (a double-click, or nova auto-confirmed after
+// its resize_confirm_window). The resize is already finalized, which is exactly what confirm wants,
+// so this is treated as idempotent success rather than surfacing a raw 500 for a no-op.
 func (c *Client) ConfirmResize(ctx context.Context, id string) error {
 	cc, err := c.compute()
 	if err != nil {
 		return err
 	}
-	return servers.ConfirmResize(ctx, cc, id).ExtractErr()
+	if err := servers.ConfirmResize(ctx, cc, id).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, http.StatusConflict) {
+		return err
+	}
+	return nil
 }
 
-// RevertResize rolls back a pending resize (action REVERTRESIZE).
+// RevertResize rolls back a pending resize (action REVERTRESIZE). A 409 (server no longer in
+// VERIFY_RESIZE — already reverted/settled) is idempotent success, same rationale as ConfirmResize.
 func (c *Client) RevertResize(ctx context.Context, id string) error {
 	cc, err := c.compute()
 	if err != nil {
 		return err
 	}
-	return servers.RevertResize(ctx, cc, id).ExtractErr()
+	if err := servers.RevertResize(ctx, cc, id).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, http.StatusConflict) {
+		return err
+	}
+	return nil
 }
 
 // RenameServer updates a server's display name (action RENAME → nova update).

@@ -8,7 +8,7 @@
 //   ADD/REMOVE_SECURITY_GROUP{name} · ATTACH_PORT/DETACH_PORT{portId} ·
 //   volume ATTACH/DETACH act on the VOLUME resource with data{serverId: <server externalId>} ·
 //   metadata = PUT /project/{pid}/cloud/{id}/metadata with the FULL map[string]string.
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
@@ -76,6 +76,16 @@ export function ServerDetailPage() {
   const [resizeFlavor, setResizeFlavor] = useState("")
   const [rebuildImage, setRebuildImage] = useState("")
   const [passwordVal, setPasswordVal] = useState("")
+  // Hide the confirm/revert-resize panel as soon as one is clicked, so a second click can't
+  // fire a confirm at an already-confirmed server (which nova 409s). The cached status can lag
+  // the real state for a while (notification/sync delay), so relying on it alone leaves the
+  // buttons live too long. Reset when the status finally moves off VERIFY_RESIZE, or on error.
+  const [resizeActed, setResizeActed] = useState(false)
+  // Re-arm the panel once the server leaves VERIFY_RESIZE (a later resize shows it again).
+  // Kept above any early return so the hook order is stable.
+  useEffect(() => {
+    if (!server || serverStatus(server) !== "VERIFY_RESIZE") setResizeActed(false)
+  }, [server])
 
   const invalidate = () => {
     setTimeout(() => {
@@ -258,16 +268,26 @@ export function ServerDetailPage() {
         <span className="font-mono text-xs text-muted-foreground">{server.externalId}</span>
       </div>
 
-      {status === "VERIFY_RESIZE" ? (
+      {status === "VERIFY_RESIZE" && !resizeActed ? (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border bg-muted p-3 text-sm">
           <span>The resize is waiting for verification.</span>
-          <Button size="sm" onClick={() => act.mutate({ action: "CONFIRMRESIZE" })} disabled={act.isPending}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setResizeActed(true)
+              act.mutate({ action: "CONFIRMRESIZE" }, { onError: () => setResizeActed(false) })
+            }}
+            disabled={act.isPending}
+          >
             Confirm resize
           </Button>
           <Button
             size="sm"
             variant="outline"
-            onClick={() => act.mutate({ action: "REVERTRESIZE" })}
+            onClick={() => {
+              setResizeActed(true)
+              act.mutate({ action: "REVERTRESIZE" }, { onError: () => setResizeActed(false) })
+            }}
             disabled={act.isPending}
           >
             Revert resize
