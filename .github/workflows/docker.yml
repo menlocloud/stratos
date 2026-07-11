@@ -111,18 +111,21 @@ jobs:
       - name: Compute tag
         id: meta
         env:
-          MANUAL_TAG: ${{ github.event.inputs.image_tag }}
+          MANUAL_TAG: ${{ github.event.inputs.image_tag }}   # kept out of the script text (no ${{ }} splice)
+        run: |
           set -euo pipefail
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [ -n "${MANUAL_TAG:-}" ]; then
-            suffix="${MANUAL_TAG#dev-}"
-            suffix="$(printf '%s' "$suffix" | tr '[:upper:]' '[:lower:]')"
-            if ! [[ "$suffix" =~ ^[a-z0-9_][a-z0-9_.-]{0,120}$ ]]; then
-              echo "Invalid image_tag '$MANUAL_TAG'. Use only [a-z0-9_.-], start with [a-z0-9_], and keep it <= 121 chars." >&2
+          elif [ -n "${MANUAL_TAG}" ]; then
+            # Sanitize the operator-supplied suffix: a Docker tag component is [A-Za-z0-9._-];
+            # rejecting anything else also blocks newlines (which would inject extra
+            # $GITHUB_OUTPUT lines). Fail fast with a clear message rather than a cryptic
+            # build error. Always dev-prefixed so it can't shadow a v* release.
+            if ! printf '%s' "${MANUAL_TAG}" | grep -qE '^[A-Za-z0-9._-]+$'; then
+              echo "::error::image_tag must match [A-Za-z0-9._-]+ (got: '${MANUAL_TAG}')"
               exit 1
             fi
-            echo "tag=dev-${suffix}" >> "$GITHUB_OUTPUT"
+            echo "tag=dev-${MANUAL_TAG}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
