@@ -20,7 +20,9 @@ interface StatCardProps {
    */
   format?: Format
   icon?: LucideIcon
-  trend?: { direction: "up" | "down"; label: string }
+  /** `tone` decouples color from direction: a rising cost is "negative" even
+   * though the arrow points up. Defaults to up=positive / down=negative. */
+  trend?: { direction: "up" | "down"; label: string; tone?: "positive" | "negative" | "neutral" }
   hint?: string
   sparkline?: number[]
   className?: string
@@ -61,7 +63,11 @@ export function StatCard({
               <span
                 className={cn(
                   "inline-flex items-center gap-0.5 font-medium",
-                  trend.direction === "up" ? "text-success" : "text-warning"
+                  (trend.tone ?? (trend.direction === "up" ? "positive" : "negative")) === "positive"
+                    ? "text-success"
+                    : (trend.tone ?? "negative") === "negative"
+                      ? "text-warning"
+                      : "text-muted-foreground"
                 )}
               >
                 {trend.direction === "up" ? (

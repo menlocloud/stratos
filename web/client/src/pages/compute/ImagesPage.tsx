@@ -4,20 +4,22 @@
 // Upload: Go has NO plain IMAGE create (providers/write.go TypeImage = server snapshot only), so
 // there is no "create then upload" flow — instead a per-row "Upload data" appears on images still
 // in glance "queued" status and streams the raw file to POST /project/{pid}/image/{imageId}/upload.
-import { useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { HardDrive, RefreshCw, Trash2, Upload } from "lucide-react"
+import { HardDrive, MoreHorizontal, RefreshCw, Trash2, Upload } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
@@ -29,6 +31,37 @@ const gb = (bytes?: number) => (bytes ? (bytes / 1073741824).toFixed(2) : "0.00"
 function imageName(r: CloudResource): string {
   return (r.data?.image?.name as string) ?? r.name ?? r.id
 }
+
+// Public-catalog rows are flat glance image maps — no mutations, so the
+// columns can live at module scope (referentially stable by construction).
+const publicColumns: ColumnDef<Record<string, any>, any>[] = [
+  {
+    id: "name",
+    accessorFn: (im) => String(im.name ?? im.id),
+    header: sortableHeader("Name"),
+    cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+  },
+  {
+    id: "os",
+    accessorFn: (im) => [im.os_distro, im.os_version].filter(Boolean).join(" "),
+    header: sortableHeader("OS"),
+    cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+  },
+  {
+    id: "size",
+    accessorFn: (im) => (im.size as number) ?? 0,
+    header: sortableHeader("Size"),
+    cell: ({ getValue }) => (
+      <span className="text-sm tabular-nums text-muted-foreground">{gb(getValue())} GB</span>
+    ),
+  },
+  {
+    id: "status",
+    accessorFn: (im) => (im.status as string) ?? "",
+    header: sortableHeader("Status"),
+    cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+  },
+]
 
 export default function ImagesPage() {
   const pid = useProjectId()
@@ -83,10 +116,83 @@ export default function ImagesPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const uploadPending = upload.isPending
+  const mineColumns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => imageName(r),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (r) => (r.data?.image?.status as string) ?? r.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "size",
+        accessorFn: (r) => (r.data?.image?.size as number) ?? 0,
+        header: sortableHeader("Size"),
+        cell: ({ getValue }) => (
+          <span className="text-sm tabular-nums text-muted-foreground">{gb(getValue())} GB</span>
+        ),
+      },
+      {
+        id: "visibility",
+        accessorFn: (r) => (r.data?.image?.visibility as string) ?? "",
+        header: "Visibility",
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? (r.data?.image?.created_at as string) ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${imageName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {(r.data?.image?.status as string) === "queued" && (
+                    <DropdownMenuItem onClick={() => pickUpload(r)} disabled={uploadPending}>
+                      <Upload className="size-4" /> Upload data
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // pickUpload closes over refs only (stable); setToDelete is a stable setter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [uploadPending],
+  )
+
   return (
     <>
       <PageHeader
         title="Images"
+        eyebrow="Compute"
         description="Your project's images and snapshots, plus the public OS catalog."
         actions={
           <Button
@@ -110,110 +216,35 @@ export default function ImagesPage() {
         </TabsList>
 
         <TabsContent value="mine" className="mt-4">
-          {mine.isLoading ? (
-            <Skeleton className="h-64" />
-          ) : mine.error ? (
-            <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">
-              {(mine.error as Error).message}
-            </p>
-          ) : !mine.data?.length ? (
+          {!mine.isLoading && !mine.error && !mine.data?.length ? (
             <EmptyState
               icon={HardDrive}
               title="No images yet"
               hint="Server snapshots and images you upload will show up here."
             />
           ) : (
-            <Card className="overflow-hidden py-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Visibility</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead className="w-16" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {mine.data.map((r) => (
-                    <TableRow key={r.id}>
-                      <TableCell className="font-medium">{imageName(r)}</TableCell>
-                      <TableCell>
-                        <StatusBadge status={(r.data?.image?.status as string) ?? r.status} />
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {gb(r.data?.image?.size as number)} GB
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {(r.data?.image?.visibility as string) ?? "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {timeAgo(r.info?.createdAt ?? (r.data?.image?.created_at as string) ?? r.createdAt)}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
-                          {(r.data?.image?.status as string) === "queued" && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => pickUpload(r)}
-                              disabled={upload.isPending}
-                              aria-label="Upload image data"
-                              title="Upload image data"
-                            >
-                              <Upload className="size-4" />
-                            </Button>
-                          )}
-                          <Button variant="ghost" size="sm" onClick={() => setToDelete(r)} aria-label="Delete image">
-                            <Trash2 className="size-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Card>
+            <DataTable
+              columns={mineColumns}
+              data={mine.data}
+              isLoading={mine.isLoading}
+              error={mine.error as Error | null}
+              searchPlaceholder="Search images…"
+            />
           )}
         </TabsContent>
 
         <TabsContent value="public" className="mt-4">
-          {pub.isLoading ? (
-            <Skeleton className="h-64" />
-          ) : pub.error ? (
-            <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">
-              {(pub.error as Error).message}
-            </p>
-          ) : !pub.data?.length ? (
+          {!pub.isLoading && !pub.error && !pub.data?.length ? (
             <EmptyState icon={HardDrive} title="No public images" hint="The region's public OS catalog is empty." />
           ) : (
-            <Card className="overflow-hidden py-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>OS</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pub.data.map((im) => (
-                    <TableRow key={String(im.id)}>
-                      <TableCell className="font-medium">{String(im.name ?? im.id)}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {[im.os_distro, im.os_version].filter(Boolean).join(" ") || "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{gb(im.size as number)} GB</TableCell>
-                      <TableCell>
-                        <StatusBadge status={im.status as string} />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Card>
+            <DataTable
+              columns={publicColumns}
+              data={pub.data}
+              isLoading={pub.isLoading}
+              error={pub.error as Error | null}
+              searchPlaceholder="Search images…"
+              getRowId={(im) => String(im.id)}
+            />
           )}
         </TabsContent>
       </Tabs>
