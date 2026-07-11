@@ -1,12 +1,15 @@
 import { useState } from "react"
-import { useParams } from "react-router-dom"
+import { Link, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { Plus, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatusBadge } from "@/components/status-badge"
+import { Badge } from "@/components/ui/badge"
+import {
+  Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -31,6 +34,28 @@ type Recordset = {
 }
 
 const RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "PTR"]
+
+function ZoneBreadcrumb({ pid, name }: { pid: string; name?: string }) {
+  return (
+    <Breadcrumb>
+      <BreadcrumbList>
+        <BreadcrumbItem>
+          <BreadcrumbLink asChild>
+            <Link to={`/p/${pid}/dns`}>DNS zones</Link>
+          </BreadcrumbLink>
+        </BreadcrumbItem>
+        {name ? (
+          <>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage className="font-mono">{name}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </>
+        ) : null}
+      </BreadcrumbList>
+    </Breadcrumb>
+  )
+}
 
 export default function DnsZoneDetailPage() {
   const pid = useProjectId()
@@ -102,8 +127,11 @@ export default function DnsZoneDetailPage() {
   if (isLoading || !zone) {
     return (
       <>
-        <PageHeader title="DNS zone" />
-        <Skeleton className="h-72" />
+        <PageHeader title="DNS zone" eyebrow="Network" breadcrumb={<ZoneBreadcrumb pid={pid} />} />
+        <div className="grid gap-3">
+          <Skeleton className="h-9 w-64" />
+          <Skeleton className="h-64" />
+        </div>
       </>
     )
   }
@@ -115,7 +143,9 @@ export default function DnsZoneDetailPage() {
     <>
       <PageHeader
         title={domain}
+        eyebrow="Network"
         description={`Contact ${(z.email as string) ?? "—"} — record sets in this zone.`}
+        breadcrumb={<ZoneBreadcrumb pid={pid} name={domain} />}
         actions={
           <Button size="sm" onClick={() => setAddOpen(true)}>
             <Plus className="size-4" /> Add record set
@@ -128,50 +158,52 @@ export default function DnsZoneDetailPage() {
         <span className="font-mono text-xs text-muted-foreground">{zone.externalId}</span>
       </div>
 
-      <Card className="overflow-hidden py-0">
-        <CardHeader className="pt-6">
-          <CardTitle className="text-base">Record sets</CardTitle>
-        </CardHeader>
-        <CardContent className="px-0 pb-0">
-          {recordsets.isLoading ? (
-            <Skeleton className="m-6 h-32" />
-          ) : recordsets.isError ? (
-            <p className="p-6 text-sm text-muted-foreground">{(recordsets.error as Error).message}</p>
-          ) : !recordsets.data?.result?.length ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">No record sets in this zone.</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>TTL</TableHead>
-                  <TableHead>Records</TableHead>
-                  <TableHead className="w-12" />
+      <div className="mb-3 text-eyebrow">Record sets</div>
+      {recordsets.isLoading ? (
+        <Skeleton className="h-40" />
+      ) : recordsets.isError ? (
+        <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">
+          {(recordsets.error as Error).message}
+        </div>
+      ) : !recordsets.data?.result?.length ? (
+        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+          No record sets in this zone yet — add one to publish records.
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Name</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>TTL</TableHead>
+                <TableHead>Records</TableHead>
+                <TableHead className="w-12" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {recordsets.data.result.map((rs, i) => (
+                <TableRow key={rs.id ?? i}>
+                  <TableCell className="font-mono text-sm font-medium">{rs.name ?? "—"}</TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">{rs.type ?? "—"}</Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-sm">{rs.ttl != null ? `${rs.ttl}s` : "—"}</TableCell>
+                  <TableCell className="max-w-md truncate font-mono text-sm">
+                    {rs.records?.join(", ") || "—"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {/* NS/SOA are zone-managed; deleting them fails server-side, so the button stays generic. */}
+                    <Button variant="ghost" size="icon-sm" onClick={() => setToDelete(rs)} aria-label="Delete record set">
+                      <Trash2 className="size-4 text-muted-foreground" />
+                    </Button>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {recordsets.data.result.map((rs, i) => (
-                  <TableRow key={rs.id ?? i}>
-                    <TableCell className="font-medium">{rs.name ?? "—"}</TableCell>
-                    <TableCell>{rs.type ?? "—"}</TableCell>
-                    <TableCell className="font-mono text-sm">{rs.ttl ?? "—"}</TableCell>
-                    <TableCell className="max-w-md truncate font-mono text-sm">
-                      {rs.records?.join(", ") || "—"}
-                    </TableCell>
-                    <TableCell>
-                      {/* NS/SOA are zone-managed; deleting them fails server-side, so the button stays generic. */}
-                      <Button variant="ghost" size="sm" onClick={() => setToDelete(rs)} aria-label="Delete record set">
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent>
@@ -184,12 +216,13 @@ export default function DnsZoneDetailPage() {
               <Label htmlFor="rec-name">Name</Label>
               <Input
                 id="rec-name"
+                className="font-mono"
                 value={recName}
                 onChange={(e) => setRecName(e.target.value)}
                 placeholder={`www.${domain}`}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label>Type</Label>
                 <Select value={recType} onValueChange={setRecType}>
@@ -220,6 +253,7 @@ export default function DnsZoneDetailPage() {
               <Label htmlFor="rec-values">Records (one per line)</Label>
               <Textarea
                 id="rec-values"
+                className="font-mono"
                 value={recValues}
                 onChange={(e) => setRecValues(e.target.value)}
                 placeholder={"192.0.2.10\n192.0.2.11"}

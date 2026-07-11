@@ -1,15 +1,20 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Plus, RefreshCw, Route, Settings2, Trash2 } from "lucide-react"
+import { MoreHorizontal, Plus, RefreshCw, Route, Settings2, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -19,8 +24,6 @@ import { Separator } from "@/components/ui/separator"
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useCloudScope, useProject, useProjectId } from "@/lib/hooks"
@@ -32,6 +35,9 @@ function routerName(r: CloudResource): string {
 }
 function routerStatus(r: CloudResource): string | undefined {
   return (r.data?.router?.status as string) ?? r.status
+}
+function routerGatewayId(r: CloudResource): string | undefined {
+  return (r.data?.router?.external_gateway_info as { network_id?: string } | undefined)?.network_id
 }
 
 const NONE = "__none__"
@@ -132,10 +138,87 @@ export default function RoutersPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => routerName(r),
+        header: sortableHeader("Name"),
+        cell: ({ row, getValue }) => (
+          <button
+            className="font-medium hover:underline"
+            onClick={(e) => {
+              e.stopPropagation()
+              setManageId(row.original.id)
+            }}
+          >
+            {getValue()}
+          </button>
+        ),
+      },
+      {
+        id: "status",
+        accessorFn: (r) => routerStatus(r) ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "gateway",
+        accessorFn: (r) => (routerGatewayId(r) ? "connected" : ""),
+        header: sortableHeader("External gateway"),
+        cell: ({ row }) =>
+          routerGatewayId(row.original) ? (
+            <Badge variant="secondary">Connected</Badge>
+          ) : (
+            <span className="text-sm text-muted-foreground">—</span>
+          ),
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${routerName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setManageId(r.id)}>
+                    <Settings2 className="size-4" /> Manage
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Routers"
+        eyebrow="Network"
         description="Routers connecting your networks."
         actions={
           <>
@@ -149,11 +232,7 @@ export default function RoutersPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : !data?.length ? (
+      {!isLoading && !error && !data?.length ? (
         <EmptyState
           icon={Route}
           title="No routers yet"
@@ -165,52 +244,14 @@ export default function RoutersPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>External gateway</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-20" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => {
-                const gw = r.data?.router?.external_gateway_info as { network_id?: string } | undefined
-                return (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium">{routerName(r)}</TableCell>
-                    <TableCell>
-                      <StatusBadge status={routerStatus(r)} />
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{gw?.network_id ? "yes" : "—"}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setManageId(r.id)}
-                          aria-label="Manage router"
-                          title="Manage interfaces and gateway"
-                        >
-                          <Settings2 className="size-4 text-muted-foreground" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => setToDelete(r)} aria-label="Delete router">
-                          <Trash2 className="size-4 text-muted-foreground" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search routers…"
+          onRowClick={(r) => setManageId(r.id)}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -263,16 +304,21 @@ export default function RoutersPage() {
 
       <Sheet open={!!manage} onOpenChange={(o) => !o && setManageId(null)}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-md">
-          <SheetHeader>
-            <SheetTitle>{manage ? routerName(manage) : "Router"}</SheetTitle>
+          <SheetHeader className="border-b">
+            <div className="text-eyebrow">Router</div>
+            <SheetTitle className="font-display text-lg tracking-tight">
+              {manage ? routerName(manage) : "Router"}
+            </SheetTitle>
             <SheetDescription>Manage this router's interfaces and external gateway.</SheetDescription>
           </SheetHeader>
           {manage && (
             <div className="grid gap-6 px-4 pb-6">
               <section className="grid gap-3">
-                <h3 className="text-sm font-medium">Interfaces</h3>
+                <h3 className="text-eyebrow">Interfaces</h3>
                 {routerPorts.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No interfaces attached.</p>
+                  <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
+                    No interfaces attached.
+                  </p>
                 ) : (
                   <div className="grid gap-2">
                     {routerPorts.map((p) => {
@@ -282,10 +328,10 @@ export default function RoutersPage() {
                         .join(", ")
                       const portExt = (p.data?.port?.id as string) ?? p.externalId ?? p.id
                       return (
-                        <div key={p.id} className="flex items-center justify-between rounded-md border px-3 py-2">
+                        <div key={p.id} className="flex items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2">
                           <div className="min-w-0">
                             <div className="truncate font-mono text-xs">{portExt}</div>
-                            <div className="text-xs text-muted-foreground">{ips || "no IP"}</div>
+                            <div className="font-mono text-xs text-muted-foreground">{ips || "no IP"}</div>
                           </div>
                           <Button
                             variant="ghost"
@@ -343,17 +389,15 @@ export default function RoutersPage() {
               <Separator />
 
               <section className="grid gap-3">
-                <h3 className="text-sm font-medium">External gateway</h3>
+                <h3 className="text-eyebrow">External gateway</h3>
                 {(() => {
-                  const gwNetId = (
-                    manage.data?.router?.external_gateway_info as { network_id?: string } | undefined
-                  )?.network_id
+                  const gwNetId = routerGatewayId(manage)
                   if (gwNetId) {
                     const net = (networks ?? []).find((n) => n.externalId === gwNetId)
                     return (
-                      <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                      <div className="flex items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2">
                         <div className="min-w-0">
-                          <div className="truncate text-sm">{net ? networkName(net) : "External network"}</div>
+                          <div className="truncate text-sm font-medium">{net ? networkName(net) : "External network"}</div>
                           <div className="truncate font-mono text-xs text-muted-foreground">{gwNetId}</div>
                         </div>
                         <Button variant="destructive" size="sm" onClick={() => setConfirmClearGw(true)}>

@@ -217,6 +217,27 @@ export function seedCloudResources(): CloudResource[] {
   ]
 }
 
+// Octavia sub-resources for the load-balancer manage sheet (gophercloud snake_case).
+export const lbListeners = [
+  { id: "lst-1", name: "http", protocol: "HTTP", protocol_port: 80 },
+  { id: "lst-2", name: "https-passthrough", protocol: "TCP", protocol_port: 443 },
+]
+export const lbPools = [
+  {
+    id: "pool-1",
+    name: "web-pool",
+    protocol: "HTTP",
+    lb_algorithm: "ROUND_ROBIN",
+    members: [
+      { id: "mem-1", address: "10.0.0.11", protocol_port: 80, operating_status: "ONLINE" },
+      { id: "mem-2", address: "10.0.0.12", protocol_port: 80, operating_status: "ERROR" },
+    ],
+  },
+]
+export const lbMonitors = [
+  { id: "mon-1", name: "http-check", type: "HTTP", delay: 5, timeout: 5, max_retries: 3 },
+]
+
 export const bucketObjects = [
   { name: "images/", displayName: "images", directory: true },
   { name: "index.html", displayName: "index.html", sizeInBytes: 4096, mimeType: "text/html", directory: false, lastModified: "2026-07-01T10:00:00Z" },

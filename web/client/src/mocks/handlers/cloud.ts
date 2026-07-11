@@ -3,7 +3,8 @@ import { on } from "../router"
 import { db } from "../db"
 import {
   availabilityZones, bucketSettings, dnsRecordsets, flavorCategories,
-  flavors, imageGrouping, publicImages, s3Credentials, volumeTypes,
+  flavors, imageGrouping, lbListeners, lbMonitors, lbPools, publicImages,
+  s3Credentials, volumeTypes,
 } from "../fixtures/cloud"
 import { locations, publicNetworks } from "../fixtures/platform"
 
@@ -167,7 +168,9 @@ on("POST /project/:pid/cloud/:resourceId/action", ({ params, opts }) => {
     case "ADD_RULE": case "DELETE_RULE": return ok()
 
     // Load balancers
-    case "GET_LISTENERS": case "GET_POOLS": case "GET_MONITORS": return ok([])
+    case "GET_LISTENERS": return ok(lbListeners)
+    case "GET_POOLS": return ok(lbPools)
+    case "GET_MONITORS": return ok(lbMonitors)
     case "CREATE_LISTENER": case "DELETE_LISTENER": case "CREATE_POOL": case "DELETE_POOL":
     case "ADD_MEMBER": case "DELETE_MEMBER": case "ADD_MONITOR": case "DELETE_MONITOR": return ok()
 

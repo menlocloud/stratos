@@ -1,24 +1,26 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Cable, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Cable, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
@@ -29,7 +31,7 @@ function portName(r: CloudResource): string {
 }
 function portFixedIPs(r: CloudResource): string {
   const ips = (r.data?.port?.fixed_ips as Array<{ ip_address?: string }> | undefined) ?? []
-  return ips.map((f) => f.ip_address).filter(Boolean).join(", ") || "—"
+  return ips.map((f) => f.ip_address).filter(Boolean).join(", ")
 }
 
 export default function PortsPage() {
@@ -122,10 +124,89 @@ export default function PortsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => `${portName(r)} ${(r.data?.port?.id as string) ?? r.externalId ?? ""}`,
+        header: sortableHeader("Name / ID"),
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div>
+              <span className="font-medium">{portName(r)}</span>
+              <div className="font-mono text-xs text-muted-foreground">
+                {(r.data?.port?.id as string) ?? r.externalId}
+              </div>
+            </div>
+          )
+        },
+      },
+      {
+        id: "status",
+        accessorFn: (r) => (r.data?.port?.status as string) ?? r.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "mac",
+        accessorFn: (r) => (r.data?.port?.mac_address as string) ?? "",
+        header: "MAC address",
+        cell: ({ getValue }) => <span className="font-mono text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "ips",
+        accessorFn: (r) => portFixedIPs(r),
+        header: sortableHeader("Fixed IPs"),
+        cell: ({ getValue }) => <span className="font-mono text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "device",
+        accessorFn: (r) => (r.data?.port?.device_owner as string) ?? "",
+        header: sortableHeader("Device"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${portName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => openEdit(r)}>
+                    <Pencil className="size-4" /> Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; openEdit only touches setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Ports"
+        eyebrow="Network"
         description="Network interfaces in this project."
         actions={
           <>
@@ -139,11 +220,7 @@ export default function PortsPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : !data?.length ? (
+      {!isLoading && !error && !data?.length ? (
         <EmptyState
           icon={Cable}
           title="No ports"
@@ -155,49 +232,13 @@ export default function PortsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name / ID</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>MAC address</TableHead>
-                <TableHead>Fixed IPs</TableHead>
-                <TableHead>Device</TableHead>
-                <TableHead className="w-20" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => {
-                const p = (r.data?.port ?? {}) as Record<string, unknown>
-                return (
-                  <TableRow key={r.id}>
-                    <TableCell>
-                      <span className="font-medium">{portName(r)}</span>
-                      <div className="font-mono text-xs text-muted-foreground">{(p.id as string) ?? r.externalId}</div>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={(p.status as string) ?? r.status} />
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">{(p.mac_address as string) ?? "—"}</TableCell>
-                    <TableCell className="font-mono text-sm">{portFixedIPs(r)}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{(p.device_owner as string) || "—"}</TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => openEdit(r)} aria-label="Edit port">
-                          <Pencil className="size-4 text-muted-foreground" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => setToDelete(r)} aria-label="Delete port">
-                          <Trash2 className="size-4 text-muted-foreground" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search ports…"
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
