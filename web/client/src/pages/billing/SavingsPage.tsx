@@ -176,7 +176,7 @@ function PlanCard({ plan, currency, onPurchase }: { plan: SavingsPlan; currency:
                       <tr key={row.start} className="border-b last:border-0">
                         <td className="px-3 py-1.5 font-mono tabular-nums">{fmtMoney(row.start, currency)}+</td>
                         <td className="px-3 py-1.5 text-right font-mono tabular-nums">{pct(row.noUpfront)}</td>
-                        <td className="px-3 py-1.5 text-right font-mono font-medium text-primary tabular-nums">
+                        <td className="px-3 py-1.5 text-right font-mono font-medium text-primary-text tabular-nums">
                           {pct(row.upfront)}
                         </td>
                       </tr>
@@ -296,7 +296,7 @@ function PurchaseDialog({
             </div>
             {matchedTier ? (
               <p className="mt-1.5 text-xs text-muted-foreground">
-                Qualifies for the <span className="font-medium text-primary">{pct(matchedTier.discount)}</span>{" "}
+                Qualifies for the <span className="font-medium text-primary-text">{pct(matchedTier.discount)}</span>{" "}
                 {upfront ? "upfront" : "no-upfront"} tier.
               </p>
             ) : null}

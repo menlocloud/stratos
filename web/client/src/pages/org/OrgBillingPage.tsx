@@ -170,7 +170,7 @@ export default function OrgBillingPage() {
               </Button>
             </div>
             <Select value={proj} onValueChange={setProj}>
-              <SelectTrigger className="w-56">
+              <SelectTrigger className="w-56" aria-label="Filter by project">
                 <SelectValue placeholder="All projects" />
               </SelectTrigger>
               <SelectContent>

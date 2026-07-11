@@ -156,7 +156,7 @@ function NetworkServers({ pid, resourceId }: { pid: string; resourceId: string }
           <ul className="grid gap-2 text-sm">
             {servers.map((s) => (
               <li key={s.id} className="flex items-center justify-between border-b pb-2 last:border-0">
-                <Link className="font-medium hover:underline" to={`/p/${pid}/servers/${s.id}`}>
+                <Link className="inline-block py-1 font-medium hover:underline" to={`/p/${pid}/servers/${s.id}`}>
                   {(s.data?.server?.name as string) ?? s.id}
                 </Link>
                 <StatusBadge status={(s.data?.server?.status as string) ?? s.status} />

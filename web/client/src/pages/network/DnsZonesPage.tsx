@@ -94,7 +94,7 @@ export default function DnsZonesPage() {
         header: sortableHeader("Domain"),
         cell: ({ row, getValue }) => (
           <Link
-            className="font-mono font-medium hover:underline"
+            className="inline-block py-1 font-mono font-medium hover:underline"
             to={`/p/${pid}/dns/${row.original.id}`}
             onClick={(e) => e.stopPropagation()}
           >
@@ -173,7 +173,7 @@ export default function DnsZonesPage() {
         description="Authoritative DNS zones managed in this project."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>

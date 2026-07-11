@@ -205,7 +205,7 @@ export function DashboardPage() {
                     <TableRow key={i}>
                       <TableCell className="font-medium">
                         {r.resource?.type === "SERVER" && r.resource?.id ? (
-                          <Link className="hover:underline" to={`/p/${pid}/servers/${r.resource.id}`}>
+                          <Link className="inline-block py-1 hover:underline" to={`/p/${pid}/servers/${r.resource.id}`}>
                             {r.resource?.name ?? r.resource?.id}
                           </Link>
                         ) : (

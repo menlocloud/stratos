@@ -129,7 +129,7 @@ export default function BucketsPage() {
         accessorFn: (r) => BACKEND_LABEL[bucketBackend(r)],
         header: sortableHeader("Storage"),
         cell: ({ row, getValue }) => (
-          <Badge variant={bucketBackend(row.original) === "CEPH_S3" ? "default" : "secondary"}>{getValue()}</Badge>
+          <Badge variant={bucketBackend(row.original) === "CEPH_S3" ? "secondary" : "outline"}>{getValue()}</Badge>
         ),
       },
       {

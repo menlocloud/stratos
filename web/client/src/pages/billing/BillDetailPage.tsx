@@ -350,7 +350,7 @@ function TotalRow({
           "font-mono tabular-nums",
           muted && "text-muted-foreground",
           strong && "font-semibold",
-          accent && "text-success",
+          accent && "text-success-text",
         )}
       >
         {value}

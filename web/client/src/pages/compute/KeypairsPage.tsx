@@ -155,7 +155,7 @@ export default function KeypairsPage() {
         description="SSH keypairs injected into servers at boot."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>

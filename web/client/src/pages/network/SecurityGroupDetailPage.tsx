@@ -196,7 +196,7 @@ export default function SecurityGroupDetailPage() {
               {rules.data.result.map((rule, i) => (
                 <TableRow key={rule.id ?? i}>
                   <TableCell>
-                    <Badge variant={rule.direction === "ingress" ? "default" : "secondary"} className="capitalize">
+                    <Badge variant={rule.direction === "ingress" ? "secondary" : "outline"} className="capitalize">
                       {rule.direction ?? "—"}
                     </Badge>
                   </TableCell>

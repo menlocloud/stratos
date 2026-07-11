@@ -217,7 +217,7 @@ export default function MembersPage() {
               onValueChange={(role) => changeRoleMutate({ sub: m.sub, role })}
               disabled={changeRolePending}
             >
-              <SelectTrigger className="h-8 w-36" size="sm">
+              <SelectTrigger className="h-8 w-36" size="sm" aria-label={`Role for ${m.email ?? m.sub}`}>
                 <SelectValue placeholder="Set role" />
               </SelectTrigger>
               <SelectContent>
@@ -288,7 +288,7 @@ export default function MembersPage() {
               onValueChange={(role) => changeProjectRoleMutate({ sub: m.sub, role })}
               disabled={changeProjectRolePending}
             >
-              <SelectTrigger className="h-8 w-32" size="sm">
+              <SelectTrigger className="h-8 w-32" size="sm" aria-label={`Project role for ${m.email ?? m.sub}`}>
                 <SelectValue placeholder="Set role" />
               </SelectTrigger>
               <SelectContent>
@@ -444,7 +444,7 @@ export default function MembersPage() {
             <div>
               <Label className="mb-1.5 block">Role</Label>
               <Select value={addRole} onValueChange={setAddRole}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="w-full" aria-label="Role">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -503,7 +503,7 @@ export default function MembersPage() {
               <Label className="mb-1.5 block">Member</Label>
               {addCandidates.length ? (
                 <Select value={pmSub} onValueChange={setPmSub}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full" aria-label="Member">
                     <SelectValue placeholder="Pick a member" />
                   </SelectTrigger>
                   <SelectContent>
@@ -523,7 +523,7 @@ export default function MembersPage() {
             <div>
               <Label className="mb-1.5 block">Role</Label>
               <Select value={pmRole} onValueChange={setPmRole}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="w-full" aria-label="Project role">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

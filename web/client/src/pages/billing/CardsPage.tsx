@@ -84,7 +84,7 @@ export default function CardsPage() {
                 <CreditCardIcon className="size-4 text-muted-foreground" aria-hidden="true" />
               </span>
               <span className="font-mono text-sm tracking-wider tabular-nums">{c.panMasked ?? c.id}</span>
-              {c.id === defaultCardId ? <Badge>Default</Badge> : null}
+              {c.id === defaultCardId ? <Badge variant="secondary">Default</Badge> : null}
             </span>
           )
         },

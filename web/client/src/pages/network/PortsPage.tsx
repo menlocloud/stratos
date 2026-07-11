@@ -210,7 +210,7 @@ export default function PortsPage() {
         description="Network interfaces in this project."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>

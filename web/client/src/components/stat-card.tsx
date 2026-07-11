@@ -64,9 +64,9 @@ export function StatCard({
                 className={cn(
                   "inline-flex items-center gap-0.5 font-medium",
                   (trend.tone ?? (trend.direction === "up" ? "positive" : "negative")) === "positive"
-                    ? "text-success"
+                    ? "text-success-text"
                     : (trend.tone ?? "negative") === "negative"
-                      ? "text-warning"
+                      ? "text-warning-text"
                       : "text-muted-foreground"
                 )}
               >

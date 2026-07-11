@@ -91,12 +91,13 @@ export default function OrgSettingsPage() {
                 <p className="font-mono text-xs text-muted-foreground">{org.id}</p>
               </div>
               <div>
-                <Label className="mb-1.5 block">Name</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} />
+                <Label className="mb-1.5 block" htmlFor="org-name">Name</Label>
+                <Input id="org-name" value={name} onChange={(e) => setName(e.target.value)} />
               </div>
               <div>
-                <Label className="mb-1.5 block">Description</Label>
+                <Label className="mb-1.5 block" htmlFor="org-description">Description</Label>
                 <Input
+                  id="org-description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Optional description"
@@ -141,8 +142,9 @@ export default function OrgSettingsPage() {
             </DialogDescription>
           </DialogHeader>
           <div>
-            <Label className="mb-1.5 block">Organization name</Label>
+            <Label className="mb-1.5 block" htmlFor="org-delete-confirm">Organization name</Label>
             <Input
+              id="org-delete-confirm"
               value={confirmName}
               onChange={(e) => setConfirmName(e.target.value)}
               placeholder={org?.name}

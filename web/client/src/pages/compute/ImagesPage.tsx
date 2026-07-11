@@ -203,6 +203,7 @@ export default function ImagesPage() {
               void pub.refetch()
             }}
             disabled={mine.isFetching || pub.isFetching}
+            aria-label="Refresh"
           >
             <RefreshCw className={mine.isFetching || pub.isFetching ? "size-4 animate-spin" : "size-4"} />
           </Button>

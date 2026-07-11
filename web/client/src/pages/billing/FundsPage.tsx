@@ -186,7 +186,7 @@ function DepositCard({ pid, bp, currency }: { pid: string; bp: string; currency:
             <Skeleton className="h-9" />
           ) : cards?.length ? (
             <Select value={cardId} onValueChange={setCardId}>
-              <SelectTrigger className="w-full font-mono">
+              <SelectTrigger className="w-full font-mono" aria-label="Pay with card">
                 <SelectValue placeholder="Select a saved card" />
               </SelectTrigger>
               <SelectContent>

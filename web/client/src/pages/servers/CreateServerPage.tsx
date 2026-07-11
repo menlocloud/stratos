@@ -476,7 +476,7 @@ export default function CreateServerPage() {
                 ) : wantFip ? (
                   <>
                     <Select value={fipNet} onValueChange={setFipNetId}>
-                      <SelectTrigger className="w-full">
+                      <SelectTrigger className="w-full" aria-label="Public network">
                         <SelectValue placeholder="Select a public network" />
                       </SelectTrigger>
                       <SelectContent>
@@ -532,7 +532,7 @@ export default function CreateServerPage() {
                       value={keyName || "__none__"}
                       onValueChange={(v) => setKeyName(v === "__none__" ? "" : v)}
                     >
-                      <SelectTrigger className="w-full">
+                      <SelectTrigger className="w-full" aria-label="Key pair">
                         <SelectValue placeholder="No key pair" />
                       </SelectTrigger>
                       <SelectContent>

@@ -146,7 +146,7 @@ export default function RoutersPage() {
         header: sortableHeader("Name"),
         cell: ({ row, getValue }) => (
           <button
-            className="font-medium hover:underline"
+            className="inline-block py-1 font-medium hover:underline"
             onClick={(e) => {
               e.stopPropagation()
               setManageId(row.original.id)
@@ -222,7 +222,7 @@ export default function RoutersPage() {
         description="Routers connecting your networks."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
