@@ -112,12 +112,17 @@ jobs:
         id: meta
         env:
           MANUAL_TAG: ${{ github.event.inputs.image_tag }}
-        run: |
+          set -euo pipefail
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [ -n "${MANUAL_TAG}" ]; then
-            # Manual run with a chosen suffix — always dev-prefixed so it can't shadow a v* release.
-            echo "tag=dev-${MANUAL_TAG}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${MANUAL_TAG:-}" ]; then
+            suffix="${MANUAL_TAG#dev-}"
+            suffix="$(printf '%s' "$suffix" | tr '[:upper:]' '[:lower:]')"
+            if ! [[ "$suffix" =~ ^[a-z0-9_][a-z0-9_.-]{0,120}$ ]]; then
+              echo "Invalid image_tag '$MANUAL_TAG'. Use only [a-z0-9_.-], start with [a-z0-9_], and keep it <= 121 chars." >&2
+              exit 1
+            fi
+            echo "tag=dev-${suffix}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
