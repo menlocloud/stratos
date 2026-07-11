@@ -56,6 +56,7 @@
     --color-accent-foreground: var(--accent-foreground);
     --color-destructive: var(--destructive);
     --color-destructive-foreground: var(--destructive-foreground);
+    --color-destructive-text: var(--destructive-text);
     --color-success: var(--success);
     --color-success-foreground: var(--success-foreground);
     --color-success-text: var(--success-text);
@@ -184,6 +185,7 @@
        off-white (2.49/2.11) — use these for colored copy in light mode. */
     --success-text: #047857;
     --warning-text: #B45309;
+    --destructive-text: #B91C1C; /* 6.5:1 on --background — destructive copy */
 
     /* Status-dot aliases used by the console's status badges. */
     --ok: var(--palette-green);
@@ -306,6 +308,7 @@
     /* Re-tinted 400-shades pass as text on the dark bg. */
     --success-text: var(--palette-green);
     --warning-text: var(--palette-amber);
+    --destructive-text: #F87171; /* 6.9:1 on the dark bg — destructive copy */
 
     --border: hsla(47, 15%, 70%, 0.18);
     --input: hsla(47, 15%, 70%, 0.18);
