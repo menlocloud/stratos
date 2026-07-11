@@ -26,12 +26,47 @@ export const permissionMeta = [
   { key: "billing:read", description: "View invoices and cost data", resourceType: "BILLING" },
 ]
 
-export const orgAuditEvents = [
+const curatedAuditEvents = [
   { id: "evt-1", timestamp: "2026-07-10T09:15:00Z", action: "server.start", resourceType: "SERVER", resourceId: "res-server-003", resourceDisplayName: "worker-01", outcome: "SUCCESS", actor: { id: mockProfile.sub, displayName: "Dev User", type: "USER" } },
   { id: "evt-2", timestamp: "2026-07-09T16:40:00Z", action: "member.invite", resourceType: "PROJECT", resourceId: "prj-aurora", resourceDisplayName: "aurora-production", outcome: "SUCCESS", actor: { id: "user-ashley", displayName: "Ashley Tran", type: "USER" } },
   { id: "evt-3", timestamp: "2026-07-08T11:05:00Z", action: "volume.create", resourceType: "VOLUME", resourceId: "res-volume-002", resourceDisplayName: "scratch-vol", outcome: "SUCCESS", actor: { id: mockProfile.sub, displayName: "Dev User", type: "USER" } },
   { id: "evt-4", timestamp: "2026-07-07T22:10:00Z", action: "server.delete", resourceType: "SERVER", resourceId: "res-server-099", resourceDisplayName: "old-worker", outcome: "FAILED", actor: { id: "user-james", displayName: "James Dam", type: "USER" } },
 ]
+
+// Deterministic filler so the cursor-paged audit endpoints actually page
+// (>2 pages at the console's limit=50) and "Load more" is exercisable in dev.
+const auditActors = [
+  { id: mockProfile.sub, displayName: "Dev User", type: "USER" },
+  { id: "user-ashley", displayName: "Ashley Tran", type: "USER" },
+  { id: "user-james", displayName: "James Dam", type: "USER" },
+  { id: "svc-scheduler", displayName: "stratos-scheduler", type: "SERVICE" },
+]
+const auditActions: Array<[string, string, string]> = [
+  ["server.create", "SERVER", "worker-02"],
+  ["server.stop", "SERVER", "worker-01"],
+  ["volume.attach", "VOLUME", "scratch-vol"],
+  ["network.update", "NETWORK", "aurora-net"],
+  ["keypair.create", "KEYPAIR", "deploy-key"],
+  ["image.upload", "IMAGE", "ubuntu-24.04"],
+  ["role.update", "ROLE", "billing-auditor"],
+  ["bucket.create", "BUCKET", "aurora-artifacts"],
+]
+const generatedAuditEvents = Array.from({ length: 116 }, (_, i) => {
+  const [action, resourceType, resourceDisplayName] = auditActions[i % auditActions.length]
+  return {
+    id: `evt-gen-${i + 1}`,
+    // Descending from just before the curated events, ~47 min apart.
+    timestamp: new Date(Date.parse("2026-07-07T20:00:00Z") - i * 47 * 60_000).toISOString(),
+    action,
+    resourceType,
+    resourceId: `res-gen-${i + 1}`,
+    resourceDisplayName,
+    outcome: i % 9 === 4 ? "FAILED" : "SUCCESS",
+    actor: auditActors[i % auditActors.length],
+  }
+})
+
+export const orgAuditEvents = [...curatedAuditEvents, ...generatedAuditEvents]
 
 export const accountAuditEvents = orgAuditEvents.map((e) => ({
   ...e,

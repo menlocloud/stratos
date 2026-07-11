@@ -26,6 +26,17 @@ export const projects: Project[] = [
     memberships: [{ sub: mockProfile.sub, roles: ["OWNER"] }],
     services: [{ serviceId: "svc-openstack-1" }],
   },
+  // Seeded mid-deletion so the projects list renders the scheduled-for-deletion
+  // treatment (and its "Cancel deletion" action) without needing a mutation.
+  {
+    id: "prj-icarus",
+    name: "icarus-sandbox",
+    status: "SCHEDULED_FOR_DELETION",
+    organizationId: ORG_ID,
+    billingProfileId: BP_ID,
+    memberships: [{ sub: mockProfile.sub, roles: ["OWNER"] }],
+    services: [{ serviceId: "svc-openstack-1" }],
+  },
 ]
 
 export const organizations: Organization[] = [
