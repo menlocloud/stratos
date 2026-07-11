@@ -32,6 +32,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { fmtMoney } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 const EMPTY: never[] = []
@@ -176,28 +177,16 @@ export function DataTable<TData>({
               </TableCell>
             </TableRow>
           ) : (
+            // Row click is a pointer convenience only: making the <tr>
+            // focusable/role=button nests interactive elements (axe serious).
+            // The accessible path is the in-row name link or the kebab menu,
+            // which every clickable-row page provides.
             modelRows.map((row) => (
               <TableRow
                 key={row.id}
                 data-state={row.getIsSelected() ? "selected" : undefined}
-                className={cn(
-                  onRowClick &&
-                    "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                )}
-                role={onRowClick ? "button" : undefined}
-                tabIndex={onRowClick ? 0 : undefined}
+                className={cn(onRowClick && "cursor-pointer")}
                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-                onKeyDown={
-                  onRowClick
-                    ? (e) => {
-                        if (e.target !== e.currentTarget) return
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault()
-                          onRowClick(row.original)
-                        }
-                      }
-                    : undefined
-                }
               >
                 {row.getVisibleCells().map((cell) => (
                   <TableCell key={cell.id}>
@@ -258,6 +247,23 @@ export function sortableHeader<TData>(label: string) {
       </Button>
     )
   }
+}
+
+/** Right-aligned sortable header — numeric/money columns. */
+export function sortableRightHeader<TData>(label: string) {
+  const Header = sortableHeader<TData>(label)
+  return function SortableRightHeader(ctx: { column: Column<TData, unknown> }) {
+    return (
+      <div className="flex justify-end">
+        <Header {...ctx} />
+      </div>
+    )
+  }
+}
+
+/** Right-aligned mono money cell — the one way money renders in tables. */
+export function MoneyCell({ value, currency }: { value: number | null | undefined; currency: string }) {
+  return <div className="text-right font-mono tabular-nums">{fmtMoney(value ?? 0, currency)}</div>
 }
 
 /** Stable hook for column defs — thin alias so pages remember the rule. */
