@@ -142,23 +142,26 @@ export function seedCloudResources(): CloudResource[] {
       volume: { id: "vol-1", name: "data-vol-01", size: 100, status: "in-use", volume_type: "standard", attachments: [{ server_id: `os-web-01`, device: "/dev/vdb" }] },
       sizeInGb: 100,
       attachments: [{ server_id: `os-web-01`, device: "/dev/vdb" }],
-    }, { status: "IN-USE" }),
+      // externalId mirrors the real API: the cache row's externalId IS the cinder volume id,
+      // so cross-references (snapshot.volume_id → volume) resolve like production.
+    }, { status: "IN-USE", externalId: "vol-1" }),
     res("VOLUME", "scratch-vol", {
       volume: { id: "vol-2", name: "scratch-vol", size: 50, status: "available", volume_type: "high-iops", attachments: [] },
       sizeInGb: 50,
       attachments: [],
-    }, { status: "AVAILABLE" }),
+    }, { status: "AVAILABLE", externalId: "vol-2" }),
 
     res("VOLUME_SNAPSHOT", "data-vol-01-snap", {
       volumeSnapshot: { id: "vsnap-1", name: "data-vol-01-snap", status: "available", size: 100, volume_id: "vol-1" },
       snapshot: { id: "vsnap-1", name: "data-vol-01-snap", status: "available", size: 100, volume_id: "vol-1" },
     }, { status: "AVAILABLE" }),
 
-    res("BUCKET", "menlo-assets", { bucketName: "menlo-assets", objectCount: 42, storageBackend: "CEPH_S3" }),
-    res("BUCKET", "menlo-backups", { bucketName: "menlo-backups", objectCount: 7, storageBackend: "SWIFT" }),
+    res("BUCKET", "menlo-assets", { bucketName: "menlo-assets", objectCount: 42, sizeInGb: "12.4", storageBackend: "CEPH_S3" }),
+    res("BUCKET", "menlo-backups", { bucketName: "menlo-backups", objectCount: 7, sizeInGb: "3.2", storageBackend: "SWIFT" }),
 
     res("SHARE", "shared-datasets", {
-      share: { id: "share-1", name: "shared-datasets", protocol: "NFS", size: 500, status: "available" },
+      // share_proto matches the live Manila/gophercloud JSON key.
+      share: { id: "share-1", name: "shared-datasets", share_proto: "NFS", size: 500, status: "available" },
     }, { status: "AVAILABLE" }),
 
     networkPrivate,

@@ -1,12 +1,13 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { FolderTree, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -88,14 +89,86 @@ export default function SharesPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => shareName(r),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (r) => (share(r).status as string) ?? r.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "protocol",
+        accessorFn: (r) => shareProtocol(r),
+        header: "Protocol",
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue()}</span>,
+      },
+      {
+        id: "size",
+        accessorFn: (r) => (share(r).size as number) ?? null,
+        header: sortableHeader("Size"),
+        cell: ({ getValue }) => (
+          <span className="text-sm tabular-nums">{getValue() != null ? `${getValue()} GB` : "—"}</span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setManageFor(row.original)}
+              aria-label={`Manage ${shareName(row.original)}`}
+            >
+              <Settings2 className="size-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setDeleteTarget(row.original)}
+              aria-label={`Delete ${shareName(row.original)}`}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Shared file systems"
+        eyebrow="Storage"
         description="Network file shares (NFS/CIFS) in this project."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              aria-label="Refresh shares"
+            >
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -105,11 +178,7 @@ export default function SharesPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : isError ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
-      ) : !data?.length ? (
+      {!isLoading && !isError && !data?.length ? (
         <EmptyState
           icon={FolderTree}
           title="No shares yet"
@@ -121,51 +190,14 @@ export default function SharesPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Protocol</TableHead>
-                <TableHead>Size</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-24" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">
-                    <button className="hover:underline" onClick={() => setManageFor(r)}>
-                      {shareName(r)}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={(share(r).status as string) ?? r.status} />
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{shareProtocol(r)}</TableCell>
-                  <TableCell className="text-sm">
-                    {share(r).size != null ? `${share(r).size} GB` : "—"}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => setManageFor(r)} aria-label="Manage share">
-                        <Settings2 className="size-4" />
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(r)} aria-label="Delete share">
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={isError ? (error as Error) : null}
+          searchPlaceholder="Search shares…"
+          onRowClick={(r) => setManageFor(r)}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -334,7 +366,8 @@ function ShareManageSheet({
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="overflow-y-auto sm:max-w-xl">
         <SheetHeader>
-          <SheetTitle>{shareName(res)}</SheetTitle>
+          <div className="text-eyebrow">Shared file system</div>
+          <SheetTitle className="font-display">{shareName(res)}</SheetTitle>
           <SheetDescription>
             {shareProtocol(res)} · {currentSize} GB — manage access rules and size.
           </SheetDescription>
@@ -354,13 +387,17 @@ function ShareManageSheet({
                 </Button>
               </div>
               {access.isLoading ? (
-                <Skeleton className="h-32" />
+                <div className="space-y-2">
+                  <Skeleton className="h-8" />
+                  <Skeleton className="h-8" />
+                  <Skeleton className="h-8" />
+                </div>
               ) : access.isError ? (
                 <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
                   {(access.error as Error).message}
                 </p>
               ) : !rules.length ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">
+                <p className="rounded-md border border-dashed py-6 text-center text-sm text-muted-foreground">
                   No access rules — nothing can mount this share yet.
                 </p>
               ) : (
@@ -386,7 +423,7 @@ function ShareManageSheet({
                         <TableCell>
                           <Button
                             variant="ghost"
-                            size="sm"
+                            size="icon-sm"
                             aria-label="Revoke access"
                             onClick={() => setRevokeTarget(rule)}
                           >
@@ -402,7 +439,7 @@ function ShareManageSheet({
 
             <TabsContent value="resize" className="mt-4 space-y-6">
               <div className="space-y-2">
-                <Label htmlFor="extend-size">Extend</Label>
+                <Label htmlFor="extend-size" className="text-eyebrow">Extend</Label>
                 <div className="flex gap-2">
                   <Input
                     id="extend-size"
@@ -425,7 +462,7 @@ function ShareManageSheet({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="shrink-size">Shrink</Label>
+                <Label htmlFor="shrink-size" className="text-eyebrow">Shrink</Label>
                 <div className="flex gap-2">
                   <Input
                     id="shrink-size"
@@ -461,7 +498,7 @@ function ShareManageSheet({
               <DialogDescription>Allow a client to mount this share.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-2">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="grid gap-2">
                   <Label>Type</Label>
                   <Select

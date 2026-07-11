@@ -1,13 +1,14 @@
-import { useEffect, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { Database, FolderOpen, MoreHorizontal, Plus, RefreshCw, Settings } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -20,8 +21,6 @@ import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useProjectId } from "@/lib/hooks"
@@ -117,10 +116,83 @@ export default function BucketsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => bucketName(r),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "storage",
+        accessorFn: (r) => BACKEND_LABEL[bucketBackend(r)],
+        header: sortableHeader("Storage"),
+        cell: ({ row, getValue }) => (
+          <Badge variant={bucketBackend(row.original) === "CEPH_S3" ? "default" : "secondary"}>{getValue()}</Badge>
+        ),
+      },
+      {
+        id: "objects",
+        accessorFn: (r) => (r.data?.objectCount as number) ?? 0,
+        header: sortableHeader("Objects"),
+        cell: ({ getValue }) => <span className="text-sm tabular-nums">{getValue()}</span>,
+      },
+      {
+        id: "size",
+        accessorFn: (r) => bucketGb(r),
+        header: "Size",
+        cell: ({ getValue }) => <span className="text-sm tabular-nums text-muted-foreground">{getValue()}</span>,
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${bucketName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => navigate(`/p/${pid}/object-storage/${r.id}`)}>
+                    <FolderOpen className="size-4" /> Browse
+                  </DropdownMenuItem>
+                  {bucketBackend(r) === "CEPH_S3" ? (
+                    <DropdownMenuItem onClick={() => setSettingsTarget(r)}>
+                      <Settings className="size-4" /> Settings
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(r)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    [navigate, pid],
+  )
+
   return (
     <>
       <PageHeader
         title="Object storage"
+        eyebrow="Storage"
         description={
           multipleStores
             ? "Buckets for storing objects and files. Swift and S3 are separate stores — a bucket lives in one of them."
@@ -138,11 +210,7 @@ export default function BucketsPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : isError ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
-      ) : !data?.length ? (
+      {!isLoading && !isError && !data?.length ? (
         <EmptyState
           icon={Database}
           title="No buckets yet"
@@ -154,64 +222,14 @@ export default function BucketsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Storage</TableHead>
-                <TableHead>Objects</TableHead>
-                <TableHead>Size</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-10" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => {
-                const backend = bucketBackend(r)
-                return (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium">
-                      <Link className="hover:underline" to={`/p/${pid}/object-storage/${r.id}`}>
-                        {bucketName(r)}
-                      </Link>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={backend === "CEPH_S3" ? "default" : "secondary"}>{BACKEND_LABEL[backend]}</Badge>
-                    </TableCell>
-                    <TableCell className="text-sm">{(r.data?.objectCount as number) ?? 0}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{bucketGb(r)}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm" aria-label={`Actions for ${bucketName(r)}`}>
-                            <MoreHorizontal className="size-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => navigate(`/p/${pid}/object-storage/${r.id}`)}>
-                            <FolderOpen className="size-4" /> Browse
-                          </DropdownMenuItem>
-                          {backend === "CEPH_S3" ? (
-                            <DropdownMenuItem onClick={() => setSettingsTarget(r)}>
-                              <Settings className="size-4" /> Settings
-                            </DropdownMenuItem>
-                          ) : null}
-                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(r)}>
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={isError ? (error as Error) : null}
+          searchPlaceholder="Search buckets…"
+          onRowClick={(r) => navigate(`/p/${pid}/object-storage/${r.id}`)}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

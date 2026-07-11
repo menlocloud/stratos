@@ -134,7 +134,9 @@ on("POST /project/:pid/cloud/:resourceId/action", ({ params, opts }) => {
 
     // Shares
     case "EXTEND_SHARE": case "SHRINK_SHARE": return ok()
-    case "LIST_ACCESS": return ok([])
+    case "LIST_ACCESS":
+      // Manila access rules come back verbatim (snake_case) — one sample rule so the manage sheet has data.
+      return ok([{ id: "rule-1", access_type: "ip", access_to: "10.0.0.0/24", access_level: "rw", state: "active" }])
     case "GRANT_ACCESS": case "REVOKE_ACCESS": return ok()
 
     // Buckets
