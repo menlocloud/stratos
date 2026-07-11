@@ -26,8 +26,46 @@ type OsloMessage struct {
 	EventType   string         `json:"event_type"`
 	PublisherID string         `json:"publisher_id"`
 	Priority    string         `json:"priority"`
-	Timestamp   *time.Time     `json:"timestamp"`
+	Timestamp   osloTime       `json:"timestamp"`
 	Payload     map[string]any `json:"payload"`
+}
+
+// osloTimeLayouts are the timestamp formats a notification may carry, most-common first.
+// oslo_utils emits a SPACE-separated, timezone-less stamp ("2006-01-02 15:04:05.999999") — NOT
+// RFC3339 — and that is what real ceilometer traffic sends, so it leads; RFC3339 (from a bridge
+// that already normalizes) follows. A plain *time.Time field only decodes RFC3339, which is why
+// it 400s every real notification. An unrecognized stamp yields the zero time rather than
+// failing the whole message (the timestamp is non-essential — Handle falls back to now()).
+var osloTimeLayouts = []string{
+	"2006-01-02 15:04:05.999999",
+	"2006-01-02 15:04:05.999999-07:00",
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04:05.999999",
+	time.RFC3339Nano,
+	time.RFC3339,
+}
+
+// osloTime is a time.Time that decodes oslo's space-separated stamps as well as RFC3339, and
+// never errors on an unparseable/absent/non-string value (leaves the zero time).
+type osloTime struct{ time.Time }
+
+// OsloTimeAt wraps a time.Time as an osloTime (for constructing an OsloMessage in tests).
+func OsloTimeAt(t time.Time) osloTime { return osloTime{t.UTC()} }
+
+func (t *osloTime) UnmarshalJSON(b []byte) error {
+	// Decode the JSON token as a string first (proper unescaping/validation); a null,
+	// non-string, or empty value means "no timestamp" and must not reject the message.
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil || s == "" {
+		return nil
+	}
+	for _, layout := range osloTimeLayouts {
+		if parsed, err := time.Parse(layout, s); err == nil {
+			t.Time = parsed.UTC()
+			return nil
+		}
+	}
+	return nil // unrecognized stamp must not reject the notification
 }
 
 // ParseOsloBody decodes an os-notification request body into an OsloMessage, unwrapping the
@@ -251,7 +289,7 @@ func (s *Service) Handle(ctx context.Context, serviceID, region string, msg Oslo
 	}
 
 	ts := now
-	if msg.Timestamp != nil {
+	if !msg.Timestamp.IsZero() {
 		ts = msg.Timestamp.UTC()
 	}
 	cr := &cloud.CloudResource{
