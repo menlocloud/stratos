@@ -132,7 +132,7 @@ export default function CreditsPage() {
       />
 
       <div className="grid items-start gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="min-w-0 lg:col-span-2">
           {!creditsLoading && !error && !credits?.length ? (
             <EmptyState
               icon={Gift}

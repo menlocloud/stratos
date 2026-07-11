@@ -150,7 +150,7 @@ export default function OrgBillingPage() {
         eyebrow="Organization"
         description="Per-project and per-resource spend across the organization."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 max-sm:flex-wrap">
             <div className="inline-flex gap-0.5 rounded-lg bg-muted p-0.5">
               <Button
                 variant="ghost"
@@ -170,7 +170,7 @@ export default function OrgBillingPage() {
               </Button>
             </div>
             <Select value={proj} onValueChange={setProj}>
-              <SelectTrigger className="w-56" aria-label="Filter by project">
+              <SelectTrigger className="w-full sm:w-56" aria-label="Filter by project">
                 <SelectValue placeholder="All projects" />
               </SelectTrigger>
               <SelectContent>
@@ -226,7 +226,7 @@ export default function OrgBillingPage() {
           </CardHeader>
           <CardContent>
             {projBars.length ? (
-              <ChartContainer config={barConfig} className="h-[280px] w-full">
+              <ChartContainer config={barConfig} className="aspect-auto h-[280px] w-full">
                 <BarChart data={projBars} layout="vertical" margin={{ left: 8, right: 16 }}>
                   <XAxis
                     type="number"

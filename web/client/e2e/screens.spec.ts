@@ -5,28 +5,45 @@
 import { expect, test } from "@playwright/test"
 import { routes, themes } from "./routes.ts"
 
-for (const theme of themes) {
-  for (const route of routes) {
-    test(`shot ${route.name} [${theme}]`, async ({ page }) => {
-      await page.emulateMedia({ reducedMotion: "reduce" })
-      await page.addInitScript((t) => localStorage.setItem("stratos.theme", t), theme)
-      await page.goto(route.path)
-      await page.waitForLoadState("networkidle")
-      await page.evaluate(() => document.fonts.ready)
-      // settle: mock latency + suspense chunks
-      await page.waitForTimeout(500)
+// Desktop is the design target; mobile (iPhone-ish) is the reflow check —
+// the page must render, navigate, and never force document-level horizontal
+// scroll.
+const viewports = [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 390, height: 844 },
+] as const
 
-      const text = await page.evaluate(() => document.body.innerText)
-      expect(text.length, "page should render content").toBeGreaterThan(40)
-      if (!route.public) {
-        expect(text, "should not hit the auth wall").not.toMatch(/sign in to continue/i)
-      }
+for (const vp of viewports) {
+  for (const theme of themes) {
+    for (const route of routes) {
+      test(`shot ${route.name} [${theme}] [${vp.name}]`, async ({ page }) => {
+        await page.setViewportSize({ width: vp.width, height: vp.height })
+        await page.emulateMedia({ reducedMotion: "reduce" })
+        await page.addInitScript((t) => localStorage.setItem("stratos.theme", t), theme)
+        await page.goto(route.path)
+        await page.waitForLoadState("networkidle")
+        await page.evaluate(() => document.fonts.ready)
+        // settle: mock latency + suspense chunks
+        await page.waitForTimeout(500)
 
-      await page.screenshot({
-        path: `e2e/shots/${route.name}-${theme}.png`,
-        animations: "disabled",
-        fullPage: false,
+        const text = await page.evaluate(() => document.body.innerText)
+        expect(text.length, "page should render content").toBeGreaterThan(40)
+        if (!route.public) {
+          expect(text, "should not hit the auth wall").not.toMatch(/sign in to continue/i)
+        }
+        // WCAG reflow floor: only inner containers (tables) may scroll
+        // horizontally, never the document.
+        const docOverflow = await page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        )
+        expect(docOverflow, "no document-level horizontal scroll").toBeLessThanOrEqual(1)
+
+        await page.screenshot({
+          path: `e2e/shots/${route.name}-${theme}-${vp.name}.png`,
+          animations: "disabled",
+          fullPage: false,
+        })
       })
-    })
+    }
   }
 }
