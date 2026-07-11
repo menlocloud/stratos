@@ -26,8 +26,41 @@ type OsloMessage struct {
 	EventType   string         `json:"event_type"`
 	PublisherID string         `json:"publisher_id"`
 	Priority    string         `json:"priority"`
-	Timestamp   *time.Time     `json:"timestamp"`
+	Timestamp   osloTime       `json:"timestamp"`
 	Payload     map[string]any `json:"payload"`
+}
+
+// osloTimeLayouts are the timestamp formats a notification may carry, most-common first.
+// oslo_utils emits a SPACE-separated, timezone-less stamp ("2006-01-02 15:04:05.999999") —
+// NOT RFC3339 — so a plain *time.Time field fails to decode and 400s every real ceilometer
+// notification. Parsing is tried across these layouts; an unrecognized stamp yields the zero
+// time rather than failing the whole message (the timestamp is non-essential — Handle falls
+// back to now()).
+var osloTimeLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02 15:04:05.999999",
+	"2006-01-02 15:04:05.999999-07:00",
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04:05.999999",
+}
+
+// osloTime is a time.Time that decodes oslo's space-separated stamps as well as RFC3339, and
+// never errors on an unparseable value (leaves the zero time).
+type osloTime struct{ time.Time }
+
+func (t *osloTime) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		return nil
+	}
+	for _, layout := range osloTimeLayouts {
+		if parsed, err := time.Parse(layout, s); err == nil {
+			t.Time = parsed.UTC()
+			return nil
+		}
+	}
+	return nil // unparseable timestamp must not reject the notification
 }
 
 // ParseOsloBody decodes an os-notification request body into an OsloMessage, unwrapping the
@@ -251,7 +284,7 @@ func (s *Service) Handle(ctx context.Context, serviceID, region string, msg Oslo
 	}
 
 	ts := now
-	if msg.Timestamp != nil {
+	if !msg.Timestamp.IsZero() {
 		ts = msg.Timestamp.UTC()
 	}
 	cr := &cloud.CloudResource{
