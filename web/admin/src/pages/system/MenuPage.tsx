@@ -82,7 +82,7 @@ function MenuItemForm({ form, setForm }: { form: FormState; setForm: (f: FormSta
           className="font-mono"
         />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="mi-icon">Icon</Label>
           <Input
@@ -105,9 +105,9 @@ function MenuItemForm({ form, setForm }: { form: FormState; setForm: (f: FormSta
         </div>
       </div>
       <div className="grid gap-2">
-        <Label>Render mode</Label>
+        <Label htmlFor="mi-render">Render mode</Label>
         <Select value={form.renderMode} onValueChange={(v) => setForm({ ...form, renderMode: v })}>
-          <SelectTrigger>
+          <SelectTrigger id="mi-render">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -213,10 +213,17 @@ export default function MenuPage() {
     <>
       <PageHeader
         title="Menu"
+        eyebrow="System"
         description={'Custom links added here appear in the client console\'s "More" section.'}
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              aria-label="Refresh"
+            >
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={openCreate}>
@@ -264,7 +271,7 @@ export default function MenuPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Move up"
+                          aria-label={`Move ${m.displayName ?? "item"} up`}
                           disabled={i === 0 || reorder.isPending}
                           onClick={() => move(i, -1)}
                         >
@@ -273,7 +280,7 @@ export default function MenuPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Move down"
+                          aria-label={`Move ${m.displayName ?? "item"} down`}
                           disabled={i === items.length - 1 || reorder.isPending}
                           onClick={() => move(i, 1)}
                         >
@@ -291,10 +298,20 @@ export default function MenuPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" title="Edit" onClick={() => openEdit(m)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Edit ${m.displayName ?? "item"}`}
+                          onClick={() => openEdit(m)}
+                        >
                           <Pencil className="size-4 text-muted-foreground" />
                         </Button>
-                        <Button variant="ghost" size="icon" title="Delete" onClick={() => setToDelete(m)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Delete ${m.displayName ?? "item"}`}
+                          onClick={() => setToDelete(m)}
+                        >
                           <Trash2 className="size-4 text-muted-foreground" />
                         </Button>
                       </div>
@@ -308,7 +325,7 @@ export default function MenuPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">URL variables you can use</CardTitle>
+            <CardTitle className="text-eyebrow">URL variables you can use</CardTitle>
           </CardHeader>
           <CardContent>
             {placeholdersQ.isLoading ? (

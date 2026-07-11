@@ -1,23 +1,25 @@
-import { useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { FileText, Mail, Plus } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table"
+import { Eye, FileText, Mail, MoreHorizontal, Pencil, Plus, Trash2, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
@@ -62,10 +64,6 @@ type PdfTemplate = {
 const MSG_PATH = "/admin/message-templates"
 const PDF_PATH = "/admin/pdf-templates"
 
-function ErrorPanel({ error }: { error: unknown }) {
-  return <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(error as Error).message}</div>
-}
-
 // ── Message templates ────────────────────────────────────────────────────────
 
 function MessageTemplatesTab() {
@@ -80,17 +78,21 @@ function MessageTemplatesTab() {
 
   const openCreate = () =>
     setEditor({ mode: "create", key: "", category: "", subject: "", body: "", disabled: false, systemTemplate: false })
-  const openEdit = (t: MessageTemplate) =>
-    setEditor({
-      mode: "edit",
-      id: t.id,
-      key: t.key ?? "",
-      category: t.category ?? "",
-      subject: t.messageTitle ?? "",
-      body: t.messageBody ?? "",
-      disabled: t.disabled === true,
-      systemTemplate: t.systemTemplate === true,
-    })
+  // Stable callback (setter only) so the column defs can memoize over it.
+  const openEdit = useCallback(
+    (t: MessageTemplate) =>
+      setEditor({
+        mode: "edit",
+        id: t.id,
+        key: t.key ?? "",
+        category: t.category ?? "",
+        subject: t.messageTitle ?? "",
+        body: t.messageBody ?? "",
+        disabled: t.disabled === true,
+        systemTemplate: t.systemTemplate === true,
+      }),
+    [],
+  )
   const patch = (p: Partial<Editor>) => setEditor((e) => (e ? { ...e, ...p } : e))
 
   const save = useMutation({
@@ -135,9 +137,70 @@ function MessageTemplatesTab() {
 
   const canSave = editor !== null && (editor.mode === "edit" || editor.key.trim() !== "")
 
+  const columns = useMemo<ColumnDef<MessageTemplate, any>[]>(
+    () => [
+      {
+        id: "key",
+        accessorFn: (t) => t.key ?? "",
+        header: sortableHeader("Name"),
+        cell: ({ row }) => {
+          const t = row.original
+          return (
+            <span className="inline-flex flex-wrap items-center gap-2 font-mono text-xs">
+              {t.key ?? "—"}
+              {t.systemTemplate ? <Badge variant="secondary" className="font-sans">System</Badge> : null}
+              {t.disabled ? <Badge variant="outline" className="font-sans">Disabled</Badge> : null}
+            </span>
+          )
+        },
+      },
+      {
+        id: "subject",
+        accessorFn: (t) => t.messageTitle ?? "",
+        header: sortableHeader("Subject"),
+        cell: ({ getValue }) => <span className="text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "category",
+        accessorFn: (t) => t.category ?? "",
+        header: sortableHeader("Category"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const t = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for template ${t.key ?? t.id}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => openEdit(t)}>
+                    <Pencil className="size-4" /> Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleting(t)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // openEdit is a stable useCallback; setDeleting is a stable setter.
+    [openEdit],
+  )
+
   return (
     <>
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           Email templates sent to customers. Subject and body use {"{{variable}}"} Mustache placeholders.
         </p>
@@ -146,46 +209,21 @@ function MessageTemplatesTab() {
         </Button>
       </div>
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <ErrorPanel error={error} />
-      ) : items.length === 0 ? (
+      {!isLoading && !error && items.length === 0 ? (
         <EmptyState icon={Mail} title="No message templates" hint="Create one, or system templates are seeded at startup." />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Subject</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead className="w-40" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((t) => (
-                <TableRow key={t.id}>
-                  <TableCell className="font-mono text-xs">
-                    {t.key ?? "—"}
-                    {t.systemTemplate ? <Badge variant="secondary" className="ml-2">system</Badge> : null}
-                    {t.disabled ? <Badge variant="outline" className="ml-2">disabled</Badge> : null}
-                  </TableCell>
-                  <TableCell>{t.messageTitle ?? "—"}</TableCell>
-                  <TableCell className="text-muted-foreground">{t.category ?? "—"}</TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => openEdit(t)}>Edit</Button>
-                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setDeleting(t)}>Delete</Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={items}
+          isLoading={isLoading}
+          error={error as Error | null}
+          searchPlaceholder="Search templates…"
+          getRowId={(t) => t.id}
+        />
       )}
 
       <Dialog open={!!editor} onOpenChange={(o) => !o && setEditor(null)}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {editor?.mode === "create" ? "Create message template" : `Edit template ${editor?.key ?? ""}`}
@@ -196,7 +234,7 @@ function MessageTemplatesTab() {
           {editor ? (
             <div className="space-y-3">
               {editor.mode === "create" ? (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="mt-key">Key</Label>
                     <Input
@@ -351,41 +389,66 @@ function PdfTemplatesTab() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  if (isLoading) return <Skeleton className="h-64" />
-  if (error) return <ErrorPanel error={error} />
-  if (items.length === 0) return <EmptyState icon={FileText} title="No PDF templates" hint="Invoice and statement layouts appear here." />
+  const columns = useMemo<ColumnDef<PdfTemplate, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (t) => t.name ?? "",
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue() || "—"}</span>,
+      },
+      {
+        id: "type",
+        accessorFn: (t) => t.type ?? "",
+        header: sortableHeader("Type"),
+        cell: ({ getValue }) => <Badge variant="outline">{getValue() || "—"}</Badge>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const t = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${t.name ?? t.id}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => runPreview.mutate(t)} disabled={runPreview.isPending}>
+                    <Eye className="size-4" /> Preview
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setReverting(t)}>
+                    <Undo2 className="size-4" /> Revert to default
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // runPreview.mutate is stable; isPending drives the disabled state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runPreview.isPending],
+  )
+
+  if (!isLoading && !error && items.length === 0) {
+    return <EmptyState icon={FileText} title="No PDF templates" hint="Invoice and statement layouts appear here." />
+  }
 
   return (
     <>
-      <Card className="overflow-hidden py-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead className="w-56" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.map((t) => (
-              <TableRow key={t.id}>
-                <TableCell className="font-medium">{t.name ?? "—"}</TableCell>
-                <TableCell>
-                  <Badge variant="outline">{t.type ?? "—"}</Badge>
-                </TableCell>
-                <TableCell className="text-right">
-                  <Button variant="ghost" size="sm" onClick={() => runPreview.mutate(t)} disabled={runPreview.isPending}>
-                    Preview
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setReverting(t)}>
-                    Revert to default
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Card>
+      <DataTable
+        columns={columns}
+        data={items}
+        isLoading={isLoading}
+        error={error as Error | null}
+        getRowId={(t) => t.id}
+      />
 
       <Dialog open={!!preview} onOpenChange={(o) => !o && setPreview(null)}>
         <DialogContent className="sm:max-w-4xl">
@@ -420,7 +483,11 @@ function PdfTemplatesTab() {
 export default function TemplatesPage() {
   return (
     <>
-      <PageHeader title="Templates" description="Email message templates and PDF document layouts." />
+      <PageHeader
+        title="Templates"
+        eyebrow="System"
+        description="Email message templates and PDF document layouts."
+      />
       <Tabs defaultValue="messages">
         <TabsList>
           <TabsTrigger value="messages">Message templates</TabsTrigger>

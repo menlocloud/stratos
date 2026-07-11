@@ -1,13 +1,23 @@
-import { useState } from "react"
-import { useParams } from "react-router-dom"
+import { useMemo, useState } from "react"
+import { Link, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { BarChart3, Pencil, Plus, Ruler, SlidersHorizontal, Trash2 } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table"
+import { BarChart3, MoreHorizontal, Pencil, Plus, Ruler, SlidersHorizontal, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -17,12 +27,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
 import { fmtMoney } from "@/lib/format"
@@ -224,9 +239,9 @@ function EditRuleDialog({ rule, onClose, onSaved }: { rule: Rule; onClose: () =>
             <Input id="er-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="grid gap-2">
-            <Label>Time unit</Label>
+            <Label htmlFor="er-unit">Time unit</Label>
             <Select value={timeUnit} onValueChange={setTimeUnit}>
-              <SelectTrigger>
+              <SelectTrigger id="er-unit">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -339,7 +354,7 @@ function AdjRuleDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{rule ? "Edit adjustment rule" : "Create adjustment rule"}</DialogTitle>
           <DialogDescription>
@@ -347,7 +362,7 @@ function AdjRuleDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="ar-name">Name</Label>
               <Input id="ar-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Volume discount" />
@@ -362,33 +377,33 @@ function AdjRuleDialog({
             <Input id="ar-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           <div className="grid gap-2">
-            <Label>Tiers — applied from the given usage amount upwards</Label>
+            <div className="text-eyebrow">Tiers — applied from the given usage amount upwards</div>
             {tiers.map((t, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={i} className="flex flex-wrap items-center gap-2">
                 <Input
                   type="number"
                   step="any"
-                  className="w-24"
+                  className="w-24 font-mono"
                   placeholder="0.01"
-                  title="Start amount"
+                  aria-label="Start amount"
                   value={t.startAmount}
                   onChange={(e) => setTier(i, { startAmount: e.target.value })}
                 />
                 <Select value={t.operator} onValueChange={(v) => setTier(i, { operator: v })}>
-                  <SelectTrigger className="w-28">
+                  <SelectTrigger className="w-28" aria-label="Operator">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="add">add</SelectItem>
-                    <SelectItem value="subtract">subtract</SelectItem>
+                    <SelectItem value="add">Add</SelectItem>
+                    <SelectItem value="subtract">Subtract</SelectItem>
                   </SelectContent>
                 </Select>
                 <Input
                   type="number"
                   step="any"
-                  className="w-24"
+                  className="w-24 font-mono"
                   placeholder="10"
-                  title="Modifier value"
+                  aria-label="Modifier value"
                   value={t.value}
                   onChange={(e) => setTier(i, { value: e.target.value })}
                 />
@@ -399,7 +414,7 @@ function AdjRuleDialog({
                 <Button
                   variant="ghost"
                   size="icon"
-                  title="Remove tier"
+                  aria-label="Remove tier"
                   disabled={tiers.length === 1}
                   onClick={() => setTiers((ts) => ts.filter((_, j) => j !== i))}
                 >
@@ -454,6 +469,68 @@ function AdjustmentRulesTab({ planId }: { planId: string }) {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<AdjRule, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => r.name ?? r.id,
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "description",
+        accessorFn: (r) => r.description ?? "",
+        header: "Description",
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "enabled",
+        accessorFn: (r) => (r.enabled ? "ENABLED" : "DISABLED"),
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "tiers",
+        accessorFn: (r) => adjTiersSummary(r),
+        header: "Modifier tiers",
+        enableSorting: false,
+        cell: ({ getValue }) => <span className="font-mono text-sm tabular-nums">{getValue()}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const rule = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${rule.name ?? rule.id}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setUsageRule(rule)}>
+                    <BarChart3 className="size-4" /> Usage
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setToEdit(rule)}>
+                    <Pencil className="size-4" /> Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(rule)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module scope.
+    [],
+  )
+
   return (
     <>
       <div className="mb-4 flex justify-end">
@@ -462,11 +539,7 @@ function AdjustmentRulesTab({ planId }: { planId: string }) {
         </Button>
       </div>
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : !rules.length ? (
+      {!isLoading && !error && !rules.length ? (
         <EmptyState
           icon={SlidersHorizontal}
           title="No price adjustment rules"
@@ -478,44 +551,13 @@ function AdjustmentRulesTab({ planId }: { planId: string }) {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Enabled</TableHead>
-                <TableHead>Modifier tiers</TableHead>
-                <TableHead className="w-32" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rules.map((rule) => (
-                <TableRow key={rule.id}>
-                  <TableCell className="font-medium">{rule.name ?? rule.id}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{rule.description || "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant={rule.enabled ? "default" : "secondary"}>{rule.enabled ? "Enabled" : "Disabled"}</Badge>
-                  </TableCell>
-                  <TableCell className="font-mono text-sm tabular-nums">{adjTiersSummary(rule)}</TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" title="Usage" onClick={() => setUsageRule(rule)}>
-                        <BarChart3 className="size-4 text-muted-foreground" />
-                      </Button>
-                      <Button variant="ghost" size="icon" title="Edit" onClick={() => setToEdit(rule)}>
-                        <Pencil className="size-4 text-muted-foreground" />
-                      </Button>
-                      <Button variant="ghost" size="icon" title="Delete" onClick={() => setToDelete(rule)}>
-                        <Trash2 className="size-4 text-muted-foreground" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={rules}
+          isLoading={isLoading}
+          error={error as Error | null}
+          getRowId={(r) => r.id}
+        />
       )}
 
       {createOpen ? (
@@ -615,6 +657,68 @@ export default function PricePlanDetailPage() {
   const [usageRule, setUsageRule] = useState<Rule | null>(null)
   const [editRule, setEditRule] = useState<Rule | null>(null)
 
+  const ruleColumns = useMemo<ColumnDef<Rule, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => r.name ?? r.id,
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "type",
+        accessorFn: (r) => r.resourceType ?? "",
+        header: sortableHeader("Resource type"),
+        cell: ({ getValue }) => <span className="text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "unit",
+        accessorFn: (r) => r.timeUnit ?? "",
+        header: sortableHeader("Time unit"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "basis",
+        accessorFn: (r) => priceBasis(r),
+        header: "Price basis",
+        enableSorting: false,
+        cell: ({ getValue }) => <span className="font-mono text-sm tabular-nums">{getValue()}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const rule = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${rule.name ?? rule.id}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setUsageRule(rule)}>
+                    <BarChart3 className="size-4" /> Usage
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setEditRule(rule)}>
+                    <Pencil className="size-4" /> Edit rule
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(rule)}>
+                    <Trash2 className="size-4" /> Delete rule
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module scope.
+    [],
+  )
+
   const canSubmit = name.trim() && resourceType && attribute && price !== "" && !Number.isNaN(parseFloat(price))
 
   const providerCount = plan?.serviceProviders?.length ?? 0
@@ -623,6 +727,22 @@ export default function PricePlanDetailPage() {
     <>
       <PageHeader
         title={plan?.name ?? "Price plan"}
+        eyebrow="System"
+        breadcrumb={
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink asChild>
+                  <Link to="/system/price-plans">Price plans</Link>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{plan?.name ?? id}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        }
         description="Pricing rules and price adjustments charged against this plan's resources."
         actions={
           <Button size="sm" onClick={() => setAddOpen(true)}>
@@ -640,7 +760,7 @@ export default function PricePlanDetailPage() {
       ) : plan ? (
         <div className="mb-6 flex flex-wrap items-center gap-2">
           <Badge variant={plan.accessMode === "SCOPED" ? "secondary" : "outline"}>{plan.accessMode ?? "PUBLIC"}</Badge>
-          <Badge variant={plan.enabled ? "default" : "secondary"}>{plan.enabled ? "Enabled" : "Disabled"}</Badge>
+          <StatusBadge status={plan.enabled ? "ENABLED" : "DISABLED"} />
           {providerCount > 0 ? (
             <Badge variant="outline">
               {providerCount} service provider{providerCount === 1 ? "" : "s"}
@@ -657,9 +777,7 @@ export default function PricePlanDetailPage() {
         </TabsList>
 
         <TabsContent value="rules" className="mt-4">
-          {rulesLoading ? (
-            <Skeleton className="h-64" />
-          ) : !rules.length ? (
+          {!rulesLoading && !rules.length ? (
             <EmptyState
               icon={Ruler}
               title="No rules yet"
@@ -671,42 +789,13 @@ export default function PricePlanDetailPage() {
               }
             />
           ) : (
-            <Card className="overflow-hidden py-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Resource type</TableHead>
-                    <TableHead>Time unit</TableHead>
-                    <TableHead>Price basis</TableHead>
-                    <TableHead className="w-32" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rules.map((rule) => (
-                    <TableRow key={rule.id}>
-                      <TableCell className="font-medium">{rule.name ?? rule.id}</TableCell>
-                      <TableCell className="text-sm">{rule.resourceType ?? "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{rule.timeUnit ?? "—"}</TableCell>
-                      <TableCell className="font-mono text-sm tabular-nums">{priceBasis(rule)}</TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" title="Usage" onClick={() => setUsageRule(rule)}>
-                            <BarChart3 className="size-4 text-muted-foreground" />
-                          </Button>
-                          <Button variant="ghost" size="icon" title="Edit rule" onClick={() => setEditRule(rule)}>
-                            <Pencil className="size-4 text-muted-foreground" />
-                          </Button>
-                          <Button variant="ghost" size="icon" title="Delete rule" onClick={() => setToDelete(rule)}>
-                            <Trash2 className="size-4 text-muted-foreground" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Card>
+            <DataTable
+              columns={ruleColumns}
+              data={rules}
+              isLoading={rulesLoading}
+              searchPlaceholder="Search rules…"
+              getRowId={(r) => r.id}
+            />
           )}
         </TabsContent>
 
@@ -727,7 +816,7 @@ export default function PricePlanDetailPage() {
               <Input id="rule-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Instance vCPU hourly" />
             </div>
             <div className="grid gap-2">
-              <Label>Resource type</Label>
+              <Label htmlFor="rule-type">Resource type</Label>
               <Select
                 value={resourceType}
                 onValueChange={(v) => {
@@ -735,7 +824,7 @@ export default function PricePlanDetailPage() {
                   setAttribute("")
                 }}
               >
-                <SelectTrigger>
+                <SelectTrigger id="rule-type">
                   <SelectValue placeholder="Select a resource type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -748,9 +837,9 @@ export default function PricePlanDetailPage() {
               </Select>
             </div>
             <div className="grid gap-2">
-              <Label>Priced attribute</Label>
+              <Label htmlFor="rule-attr">Priced attribute</Label>
               <Select value={attribute} onValueChange={setAttribute} disabled={!selectedType}>
-                <SelectTrigger>
+                <SelectTrigger id="rule-attr">
                   <SelectValue placeholder={selectedType ? "Select an attribute" : "Pick a resource type first"} />
                 </SelectTrigger>
                 <SelectContent>
@@ -762,11 +851,11 @@ export default function PricePlanDetailPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
-                <Label>Time unit</Label>
+                <Label htmlFor="rule-unit">Time unit</Label>
                 <Select value={timeUnit} onValueChange={setTimeUnit}>
-                  <SelectTrigger>
+                  <SelectTrigger id="rule-unit">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

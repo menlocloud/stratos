@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { ChevronDown, ChevronRight, Pencil, Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -19,7 +21,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
@@ -56,6 +57,22 @@ function pretty(area: string) {
 type FormState = { name: string; description: string; permissions: Set<string> }
 const emptyForm = (): FormState => ({ name: "", description: "", permissions: new Set() })
 
+// Permission catalog columns — module scope, referentially stable.
+const permColumns: ColumnDef<PermissionMeta, any>[] = [
+  {
+    id: "key",
+    accessorFn: (p) => p.key,
+    header: sortableHeader("Permission"),
+    cell: ({ getValue }) => <span className="font-mono text-xs">{getValue()}</span>,
+  },
+  {
+    id: "description",
+    accessorFn: (p) => p.description,
+    header: "Description",
+    cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue()}</span>,
+  },
+]
+
 // Grouped checkbox picker. form.permissions is the source of truth — any token not in the catalog
 // (e.g. a stored "admin:user:*" wildcard on an edited role) rides along untouched so a save never
 // silently drops it. ponytail: catalog offers the 58 concrete keys; wildcards are preserved, not editable.
@@ -87,7 +104,10 @@ function PermissionPicker({
   }
   const toggleGroup = (keys: string[], on: boolean) => {
     const next = new Set(form.permissions)
-    for (const k of keys) (on ? next.add(k) : next.delete(k))
+    for (const k of keys) {
+      if (on) next.add(k)
+      else next.delete(k)
+    }
     setForm({ ...form, permissions: next })
   }
 
@@ -206,10 +226,17 @@ export default function RolesPage() {
     <>
       <PageHeader
         title="Admin roles"
+        eyebrow="System"
         description="Built-in operator roles plus custom roles you define, and the permission catalog."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void rolesQ.refetch()} disabled={rolesQ.isFetching}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void rolesQ.refetch()}
+              disabled={rolesQ.isFetching}
+              aria-label="Refresh"
+            >
               <RefreshCw className={rolesQ.isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={openCreate} disabled={permsQ.isLoading}>
@@ -248,7 +275,7 @@ export default function RolesPage() {
                 return (
                   <Card key={role.id}>
                     <CardContent className="p-4">
-                      <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center justify-between gap-4 max-sm:flex-wrap">
                         <div className="flex min-w-0 items-center gap-3">
                           <ShieldCheck className="size-5 shrink-0 text-muted-foreground/60" />
                           <div className="min-w-0">
@@ -269,10 +296,20 @@ export default function RolesPage() {
                         <div className="flex shrink-0 items-center gap-1">
                           {!role.builtIn && (
                             <>
-                              <Button variant="ghost" size="icon" title="Edit role" onClick={() => openEdit(role)}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                aria-label={`Edit role ${role.name}`}
+                                onClick={() => openEdit(role)}
+                              >
                                 <Pencil className="size-4 text-muted-foreground" />
                               </Button>
-                              <Button variant="ghost" size="icon" title="Delete role" onClick={() => setToDelete(role)}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                aria-label={`Delete role ${role.name}`}
+                                onClick={() => setToDelete(role)}
+                              >
                                 <Trash2 className="size-4 text-muted-foreground" />
                               </Button>
                             </>
@@ -305,37 +342,19 @@ export default function RolesPage() {
         </TabsContent>
 
         <TabsContent value="permissions" className="mt-4">
-          {permsQ.isLoading ? (
-            <Skeleton className="h-64" />
-          ) : permsQ.error ? (
-            <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-              {(permsQ.error as Error).message}
-            </div>
-          ) : (
-            <Card className="overflow-hidden py-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Permission</TableHead>
-                    <TableHead>Description</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {perms.map((p) => (
-                    <TableRow key={p.key}>
-                      <TableCell className="font-mono text-xs">{p.key}</TableCell>
-                      <TableCell className="text-muted-foreground">{p.description}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Card>
-          )}
+          <DataTable
+            columns={permColumns}
+            data={perms}
+            isLoading={permsQ.isLoading}
+            error={permsQ.error as Error | null}
+            searchPlaceholder="Search permissions…"
+            getRowId={(p) => p.key}
+          />
         </TabsContent>
       </Tabs>
 
       <Dialog open={dialog !== null} onOpenChange={(o) => !o && setDialog(null)}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editing ? `Edit role ${editing.name}` : "Create role"}</DialogTitle>
             <DialogDescription>

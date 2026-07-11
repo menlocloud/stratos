@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
-import { Badge } from "@/components/ui/badge"
+import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -144,12 +144,16 @@ export default function ConfigurationPage() {
 
   return (
     <>
-      <PageHeader title="Configuration" description="Platform branding, formats, quota and billing basics." />
+      <PageHeader
+        title="Configuration"
+        eyebrow="System"
+        description="Platform branding, formats, quota and billing basics."
+      />
 
       <div className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Platform</CardTitle>
+            <CardTitle className="text-eyebrow">Platform</CardTitle>
           </CardHeader>
           <CardContent>
             {platformQ.isLoading ? (
@@ -193,10 +197,14 @@ export default function ConfigurationPage() {
                 </div>
 
                 <div className="space-y-3">
-                  <div className="flex items-center gap-6 rounded-lg border p-4">
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border p-4">
                     <div className="flex items-center gap-2">
-                      <Switch checked={form.quotaEnabled} onCheckedChange={(v) => setForm({ ...form, quotaEnabled: v })} />
-                      <span className="text-sm">Project provisioning quota</span>
+                      <Switch
+                        id="pc-quota"
+                        checked={form.quotaEnabled}
+                        onCheckedChange={(v) => setForm({ ...form, quotaEnabled: v })}
+                      />
+                      <Label htmlFor="pc-quota" className="text-sm font-normal">Project provisioning quota</Label>
                     </div>
                     <div className="flex items-center gap-2">
                       <Label htmlFor="pc-limit" className="text-sm text-muted-foreground">Limit</Label>
@@ -212,10 +220,14 @@ export default function ConfigurationPage() {
                     </div>
                     <p className="text-xs text-muted-foreground">Max projects per organization. 0 = only operators create projects.</p>
                   </div>
-                  <div className="flex items-center gap-6 rounded-lg border p-4">
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border p-4">
                     <div className="flex items-center gap-2">
-                      <Switch checked={form.orgQuotaEnabled} onCheckedChange={(v) => setForm({ ...form, orgQuotaEnabled: v })} />
-                      <span className="text-sm">Organization provisioning quota</span>
+                      <Switch
+                        id="pc-org-quota"
+                        checked={form.orgQuotaEnabled}
+                        onCheckedChange={(v) => setForm({ ...form, orgQuotaEnabled: v })}
+                      />
+                      <Label htmlFor="pc-org-quota" className="text-sm font-normal">Organization provisioning quota</Label>
                     </div>
                     <div className="flex items-center gap-2">
                       <Label htmlFor="pc-org-limit" className="text-sm text-muted-foreground">Limit</Label>
@@ -234,7 +246,7 @@ export default function ConfigurationPage() {
                 </div>
 
                 <div className="space-y-3">
-                  <Label className="mb-2 block">Regions</Label>
+                  <div className="text-eyebrow mb-2">Regions</div>
                   {(cfg.regions ?? []).length === 0 ? (
                     <p className="text-sm text-muted-foreground">No regions configured.</p>
                   ) : (
@@ -273,8 +285,8 @@ export default function ConfigurationPage() {
                     </Card>
                   )}
                   <div className="flex flex-wrap items-end gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">Cloud provider</Label>
+                    <div className="w-full space-y-1.5 sm:w-auto">
+                      <Label htmlFor="pc-reg-svc" className="text-xs text-muted-foreground">Cloud provider</Label>
                       <Select
                         value={regSvc}
                         onValueChange={(v) => {
@@ -282,7 +294,7 @@ export default function ConfigurationPage() {
                           setRegName("")
                         }}
                       >
-                        <SelectTrigger className="w-56">
+                        <SelectTrigger id="pc-reg-svc" className="w-full sm:w-56">
                           <SelectValue placeholder="Select provider" />
                         </SelectTrigger>
                         <SelectContent>
@@ -294,10 +306,10 @@ export default function ConfigurationPage() {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">Region</Label>
+                    <div className="w-full space-y-1.5 sm:w-auto">
+                      <Label htmlFor="pc-reg-name" className="text-xs text-muted-foreground">Region</Label>
                       <Select value={regName} onValueChange={setRegName} disabled={!regSvc || regionOptions.length === 0}>
-                        <SelectTrigger className="w-48">
+                        <SelectTrigger id="pc-reg-name" className="w-full sm:w-48">
                           <SelectValue placeholder={regSvc && regionOptions.length === 0 ? "No regions on provider" : "Select region"} />
                         </SelectTrigger>
                         <SelectContent>
@@ -325,7 +337,7 @@ export default function ConfigurationPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Billing</CardTitle>
+            <CardTitle className="text-eyebrow">Billing</CardTitle>
           </CardHeader>
           <CardContent>
             {billingQ.isLoading ? (
@@ -340,10 +352,10 @@ export default function ConfigurationPage() {
                   No billing configuration yet — pick a base currency to create the default one.
                 </p>
                 <div className="flex flex-wrap items-end gap-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Base currency</Label>
+                  <div className="w-full space-y-1.5 sm:w-auto">
+                    <Label htmlFor="pc-currency" className="text-xs text-muted-foreground">Base currency</Label>
                     <Select value={newCurrency} onValueChange={setNewCurrency}>
-                      <SelectTrigger className="w-72">
+                      <SelectTrigger id="pc-currency" className="w-full sm:w-72">
                         <SelectValue placeholder="Select currency" />
                       </SelectTrigger>
                       <SelectContent>
@@ -356,8 +368,8 @@ export default function ConfigurationPage() {
                     </Select>
                   </div>
                   <div className="flex items-center gap-2 pb-2">
-                    <Switch checked={newPromo} onCheckedChange={setNewPromo} />
-                    <span className="text-sm">Promotion codes</span>
+                    <Switch id="pc-promo" checked={newPromo} onCheckedChange={setNewPromo} />
+                    <Label htmlFor="pc-promo" className="text-sm font-normal">Promotion codes</Label>
                   </div>
                   <Button onClick={() => createBilling.mutate()} disabled={!newCurrency || createBilling.isPending}>
                     {createBilling.isPending ? "Creating…" : "Create billing configuration"}
@@ -372,9 +384,7 @@ export default function ConfigurationPage() {
                 </div>
                 <div className="flex items-center justify-between py-2 text-sm">
                   <span className="text-muted-foreground">Promotion codes</span>
-                  <Badge variant={billingQ.data.promotionCodesEnabled ? "default" : "outline"}>
-                    {billingQ.data.promotionCodesEnabled ? "Enabled" : "Disabled"}
-                  </Badge>
+                  <StatusBadge status={billingQ.data.promotionCodesEnabled ? "ENABLED" : "DISABLED"} />
                 </div>
                 {/* ponytail: read-only by design — the read DTO only exposes 4 fields while
                     PUT /admin/billing/configuration/{id} overwrites ALL 13 mutable fields (an
