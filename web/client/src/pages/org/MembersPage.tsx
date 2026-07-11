@@ -1,21 +1,23 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Mail, Trash2, UserPlus, Users } from "lucide-react"
+import { Mail, MoreHorizontal, Trash2, UserPlus, Users } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { useProject, useProjectId } from "@/lib/hooks"
 import type { Organization } from "@/lib/types"
@@ -59,7 +61,7 @@ export default function MembersPage() {
     queryFn: () => apiFetch<OrgRole[]>(`/organizations/${org?.id}/roles`),
     enabled: !!org?.id,
   })
-  const roleNames = roles?.map((r) => r.name) ?? ["OWNER", "ADMIN", "MEMBER"]
+  const roleNames = useMemo(() => roles?.map((r) => r.name) ?? ["OWNER", "ADMIN", "MEMBER"], [roles])
 
   // Project members for THIS project.
   const projectMembers = useQuery({
@@ -179,10 +181,158 @@ export default function MembersPage() {
   const projectSubs = new Set((projectMembers.data ?? []).map((m) => m.sub))
   const addCandidates = (members ?? []).filter((m) => !projectSubs.has(m.sub))
 
+  const changeRoleMutate = changeRole.mutate
+  const changeRolePending = changeRole.isPending
+  const orgColumns = useMemo<ColumnDef<Member, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (m) => memberName(m),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "email",
+        accessorFn: (m) => m.email ?? "",
+        header: sortableHeader("Email"),
+        cell: ({ getValue }) => <span className="text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "sub",
+        accessorFn: (m) => m.sub,
+        header: "Subject",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue()}</span>
+        ),
+      },
+      {
+        id: "role",
+        accessorFn: (m) => m.role ?? "",
+        header: sortableHeader("Role"),
+        cell: ({ row }) => {
+          const m = row.original
+          return (
+            <Select
+              value={m.role ?? ""}
+              onValueChange={(role) => changeRoleMutate({ sub: m.sub, role })}
+              disabled={changeRolePending}
+            >
+              <SelectTrigger className="h-8 w-36" size="sm">
+                <SelectValue placeholder="Set role" />
+              </SelectTrigger>
+              <SelectContent>
+                {roleNames.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {r}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )
+        },
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const m = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${m.email ?? m.sub}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem variant="destructive" onClick={() => setRemoving(m)}>
+                    <Trash2 className="size-4" /> Remove
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // mutate is referentially stable; setRemoving is a stable setter.
+    [roleNames, changeRoleMutate, changeRolePending],
+  )
+
+  const changeProjectRoleMutate = changeProjectRole.mutate
+  const changeProjectRolePending = changeProjectRole.isPending
+  const projectColumns = useMemo<ColumnDef<ProjectMember, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (m) => memberName(m),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "email",
+        accessorFn: (m) => m.email ?? "",
+        header: sortableHeader("Email"),
+        cell: ({ getValue }) => <span className="text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "role",
+        accessorFn: (m) => m.role ?? "",
+        header: sortableHeader("Role"),
+        cell: ({ row }) => {
+          const m = row.original
+          return (
+            <Select
+              value={m.role ?? ""}
+              onValueChange={(role) => changeProjectRoleMutate({ sub: m.sub, role })}
+              disabled={changeProjectRolePending}
+            >
+              <SelectTrigger className="h-8 w-32" size="sm">
+                <SelectValue placeholder="Set role" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="MEMBER">MEMBER</SelectItem>
+                <SelectItem value="OWNER">OWNER</SelectItem>
+              </SelectContent>
+            </Select>
+          )
+        },
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const m = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${m.email ?? m.sub}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem variant="destructive" onClick={() => setPmRemoving(m)}>
+                    <Trash2 className="size-4" /> Remove
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // mutate is referentially stable; setPmRemoving is a stable setter.
+    [changeProjectRoleMutate, changeProjectRolePending],
+  )
+
   return (
     <>
       <PageHeader
         title="Members"
+        eyebrow="Organization"
         description={org?.name ? `People in the ${org.name} organization.` : "People in this organization."}
         actions={
           <>
@@ -196,58 +346,17 @@ export default function MembersPage() {
         }
       />
 
-      {orgLoading || isLoading ? (
-        <Skeleton className="h-64" />
-      ) : err ? (
-        <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">{err.message}</div>
-      ) : !members?.length ? (
+      {!orgLoading && !isLoading && !err && !members?.length ? (
         <EmptyState icon={Users} title="No members" hint="Invite teammates to collaborate on this project." />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Subject</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {members.map((m) => (
-                <TableRow key={m.sub}>
-                  <TableCell className="font-medium">{memberName(m)}</TableCell>
-                  <TableCell>{m.email ?? "—"}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{m.sub}</TableCell>
-                  <TableCell>
-                    <Select
-                      value={m.role ?? ""}
-                      onValueChange={(role) => changeRole.mutate({ sub: m.sub, role })}
-                      disabled={changeRole.isPending}
-                    >
-                      <SelectTrigger className="h-8 w-36" size="sm">
-                        <SelectValue placeholder="Set role" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {roleNames.map((r) => (
-                          <SelectItem key={r} value={r}>
-                            {r}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => setRemoving(m)}>
-                      <Trash2 className="size-4" /> Remove
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={orgColumns}
+          data={members}
+          isLoading={orgLoading || isLoading}
+          error={err}
+          searchPlaceholder="Search members…"
+          getRowId={(m) => m.sub}
+        />
       )}
 
       {/* Project members — membership of THIS project only. */}
@@ -270,55 +379,17 @@ export default function MembersPage() {
             <UserPlus className="size-4" /> Add to project
           </Button>
         </div>
-        {projectMembers.isLoading ? (
-          <Skeleton className="h-40" />
-        ) : projectMembers.error ? (
-          <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
-            {(projectMembers.error as Error).message}
-          </div>
-        ) : !projectMembers.data?.length ? (
+        {!projectMembers.isLoading && !projectMembers.error && !projectMembers.data?.length ? (
           <EmptyState icon={Users} title="No project members" hint="Add an organization member to this project." />
         ) : (
-          <Card className="overflow-hidden py-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {projectMembers.data.map((m) => (
-                  <TableRow key={m.sub}>
-                    <TableCell className="font-medium">{memberName(m)}</TableCell>
-                    <TableCell>{m.email ?? "—"}</TableCell>
-                    <TableCell>
-                      <Select
-                        value={m.role ?? ""}
-                        onValueChange={(role) => changeProjectRole.mutate({ sub: m.sub, role })}
-                        disabled={changeProjectRole.isPending}
-                      >
-                        <SelectTrigger className="h-8 w-32" size="sm">
-                          <SelectValue placeholder="Set role" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="MEMBER">MEMBER</SelectItem>
-                          <SelectItem value="OWNER">OWNER</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => setPmRemoving(m)}>
-                        <Trash2 className="size-4" /> Remove
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Card>
+          <DataTable
+            columns={projectColumns}
+            data={projectMembers.data}
+            isLoading={projectMembers.isLoading}
+            error={projectMembers.error as Error | null}
+            searchPlaceholder="Search members…"
+            getRowId={(m) => m.sub}
+          />
         )}
       </div>
 
