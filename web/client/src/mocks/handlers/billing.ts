@@ -15,7 +15,9 @@ on("GET /bill/:bp/:billId", ({ params }) => ({ data: bills.find((b) => b.id === 
 on("GET /bill/:bp/download/:billId/statement", () => ({ data: new Response(new Blob(["%PDF-1.4 mock"], { type: "application/pdf" })) }))
 
 on("GET /collect-transactions", () => ({ data: collectTransactions }))
-on("GET /collect-transactions/:bp/bill/:billId", () => ({ data: collectTransactions.slice(0, 1) }))
+on("GET /collect-transactions/:bp/bill/:billId", ({ params }) => ({
+  data: collectTransactions.filter((t) => t.billId === params.billId),
+}))
 on("GET /collect-transactions/:bp/download/:txnId", () => ({ data: new Response(new Blob(["%PDF-1.4 mock"], { type: "application/pdf" })) }))
 on("GET /account-credit-transactions", () => ({ data: accountCreditTransactions }))
 

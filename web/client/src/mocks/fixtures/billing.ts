@@ -79,8 +79,9 @@ export const bills: Bill[] = [
   },
 ]
 
-export const collectTransactions: Transaction[] = [
-  { id: "txn-1001", status: "SUCCESS", amount: 887.55, grossAmount: 887.55, currency: "USD", createdAt: "2026-07-02T08:12:00Z", externalInvoiceId: "in_mock_1001" },
+// `billId` scopes a transaction to the bill it settled (deposits carry none).
+export const collectTransactions: (Transaction & { billId?: string })[] = [
+  { id: "txn-1001", status: "SUCCESS", amount: 887.55, grossAmount: 887.55, currency: "USD", createdAt: "2026-07-02T08:12:00Z", externalInvoiceId: "in_mock_1001", billId: "bill-2026-06" },
   { id: "txn-1000", status: "SUCCESS", amount: 400, grossAmount: 400, currency: "USD", createdAt: "2026-06-05T10:00:00Z", externalInvoiceId: "in_mock_1000" },
 ]
 
@@ -94,7 +95,8 @@ export const cards: CreditCard[] = [
 ]
 
 export const paymentGateways = [
-  { id: "gw-stripe", thirdParty: "STRIPE", addCard: true, addFunds: true, minDeposit: 10, metadata: { publicKey: "pk_test_mock" } },
+  // thirdParty matches the Go seed ("Stripe") — FundsPage gates new-card deposits on it.
+  { id: "gw-stripe", thirdParty: "Stripe", addCard: true, addFunds: true, minDeposit: 10, metadata: { publicKey: "pk_test_mock" } },
 ]
 
 export const savingsPlans = [
@@ -104,9 +106,10 @@ export const savingsPlans = [
     description: "Commit to a monthly compute spend and save up to 35%.",
     available: true,
     targets: [{ resourceType: "SERVER" }],
+    // Discounts are stored as percentages (20 → 20%), matching the Go API.
     savingSchedule: [
-      { durationMonths: 12, maxAmount: 10_000, noUpfrontTiers: [{ startAmount: 100, discount: 0.2 }, { startAmount: 1000, discount: 0.28 }], upfrontTiers: [{ startAmount: 100, discount: 0.3 }, { startAmount: 1000, discount: 0.35 }] },
-      { durationMonths: 24, maxAmount: 10_000, noUpfrontTiers: [{ startAmount: 100, discount: 0.25 }], upfrontTiers: [{ startAmount: 100, discount: 0.38 }] },
+      { durationMonths: 12, maxAmount: 10_000, noUpfrontTiers: [{ startAmount: 100, discount: 20 }, { startAmount: 1000, discount: 28 }], upfrontTiers: [{ startAmount: 100, discount: 30 }, { startAmount: 1000, discount: 35 }] },
+      { durationMonths: 24, maxAmount: 10_000, noUpfrontTiers: [{ startAmount: 100, discount: 25 }], upfrontTiers: [{ startAmount: 100, discount: 38 }] },
     ],
   },
 ]
@@ -119,7 +122,7 @@ export const savingsContracts = [
     status: "ACTIVE",
     durationMonths: 12,
     monthlyCommittedAmount: 300,
-    discountRate: 0.2,
+    discountRate: 20,
     paidUpfront: false,
     startDate: "2026-03-01",
     endDate: "2027-02-28",

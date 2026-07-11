@@ -1,13 +1,15 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { Column, ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { PiggyBank } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -18,10 +20,10 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { fmtDate, fmtMoney } from "@/lib/format"
 import { useBillingSummary, useProjectId } from "@/lib/hooks"
+import { cn } from "@/lib/utils"
 
 type Tier = { startAmount?: number | string; discount?: number | string }
 type Schedule = {
@@ -57,6 +59,19 @@ function pct(v: number | string | undefined): string {
   return `${v}%`
 }
 
+// Merge the two tier ladders on their commit thresholds so a schedule renders
+// as one readable table: commit | no-upfront discount | upfront discount.
+function tierRows(s: Schedule): Array<{ start: number; noUpfront?: Tier["discount"]; upfront?: Tier["discount"] }> {
+  const starts = [
+    ...new Set([...(s.noUpfrontTiers ?? []), ...(s.upfrontTiers ?? [])].map((t) => Number(t.startAmount ?? 0))),
+  ].sort((a, b) => a - b)
+  return starts.map((start) => ({
+    start,
+    noUpfront: s.noUpfrontTiers?.find((t) => Number(t.startAmount ?? 0) === start)?.discount,
+    upfront: s.upfrontTiers?.find((t) => Number(t.startAmount ?? 0) === start)?.discount,
+  }))
+}
+
 export default function SavingsPage() {
   const pid = useProjectId()
   const { data: summary, isLoading } = useBillingSummary(pid)
@@ -73,7 +88,7 @@ export default function SavingsPage() {
   if (isLoading || !bp) {
     return (
       <>
-        <PageHeader title="Savings plans" />
+        <PageHeader title="Savings plans" eyebrow="Billing" />
         <Skeleton className="h-64" />
       </>
     )
@@ -83,6 +98,7 @@ export default function SavingsPage() {
     <>
       <PageHeader
         title="Savings plans"
+        eyebrow="Billing"
         description="Commit to monthly usage in exchange for a discount on matching resources."
       />
 
@@ -93,7 +109,7 @@ export default function SavingsPage() {
       ) : !plans?.length ? (
         <EmptyState icon={PiggyBank} title="No savings plans available" hint="Plans published by the operator appear here." />
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid items-start gap-4 md:grid-cols-2">
           {plans.map((p) => (
             <PlanCard key={p.id} plan={p} currency={currency} onPurchase={() => setPurchasing(p)} />
           ))}
@@ -116,46 +132,66 @@ export default function SavingsPage() {
 
 function PlanCard({ plan, currency, onPurchase }: { plan: SavingsPlan; currency: string; onPurchase: () => void }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{plan.name ?? plan.id}</CardTitle>
-        {plan.description ? <p className="text-sm text-muted-foreground">{plan.description}</p> : null}
-      </CardHeader>
-      <CardContent className="space-y-3">
+    <Card className="gap-0 overflow-hidden py-0">
+      <div className="flex items-start justify-between gap-4 border-b px-5 py-4">
+        <div className="min-w-0">
+          <div className="text-eyebrow mb-1">Savings plan</div>
+          <h3 className="font-display text-base font-semibold">{plan.name ?? plan.id}</h3>
+          {plan.description ? <p className="mt-1 text-sm text-muted-foreground">{plan.description}</p> : null}
+        </div>
+        <Button size="sm" className="shrink-0" onClick={onPurchase}>Purchase</Button>
+      </div>
+      <CardContent className="space-y-5 px-5 py-4">
         {plan.targets?.length ? (
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-eyebrow mr-1">Applies to</span>
             {plan.targets.map((t, i) => (
               <Badge key={i} variant="secondary">{t.resourceType ?? "any resource"}</Badge>
             ))}
           </div>
         ) : null}
+
         {plan.savingSchedule?.length ? (
-          <div className="space-y-1 text-sm">
-            {plan.savingSchedule.map((s, i) => (
-              <div key={i} className="flex items-center justify-between border-b pb-1 last:border-0">
-                <span className="text-muted-foreground">{s.durationMonths} months</span>
-                <span>
-                  {tierSummary(s.noUpfrontTiers, "no upfront")}
-                  {s.noUpfrontTiers?.length && s.upfrontTiers?.length ? " · " : ""}
-                  {tierSummary(s.upfrontTiers, "upfront")}
-                  {s.maxAmount !== undefined ? ` · up to ${fmtMoney(s.maxAmount, currency)}` : ""}
-                </span>
+          plan.savingSchedule.map((s, i) => (
+            <div key={i}>
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <span className="text-eyebrow">{s.durationMonths}-month term</span>
+                {s.maxAmount !== undefined ? (
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    up to {fmtMoney(s.maxAmount, currency)}/mo
+                  </span>
+                ) : null}
               </div>
-            ))}
-          </div>
+              <div className="overflow-hidden rounded-lg border">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
+                      <th className="px-3 py-1.5 text-left font-medium">Monthly commit</th>
+                      <th className="px-3 py-1.5 text-right font-medium">No upfront</th>
+                      <th className="px-3 py-1.5 text-right font-medium">Paid upfront</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tierRows(s).map((row) => (
+                      <tr key={row.start} className="border-b last:border-0">
+                        <td className="px-3 py-1.5 font-mono tabular-nums">{fmtMoney(row.start, currency)}+</td>
+                        <td className="px-3 py-1.5 text-right font-mono tabular-nums">{pct(row.noUpfront)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono font-medium text-primary tabular-nums">
+                          {pct(row.upfront)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))
         ) : (
           <p className="text-sm text-muted-foreground">No discount schedule published.</p>
         )}
-        <Button size="sm" onClick={onPurchase}>Purchase plan</Button>
       </CardContent>
     </Card>
   )
-}
-
-function tierSummary(tiers: Tier[] | undefined, label: string): string {
-  if (!tiers?.length) return ""
-  const best = tiers[tiers.length - 1]
-  return `up to ${pct(best.discount)} ${label}`
 }
 
 // Purchase: eligibility is checked first (GET .../{planId}/eligible → boolean), then
@@ -203,6 +239,14 @@ function PurchaseDialog({
   const amountNum = Number(amount)
   const invalid = !duration || !Number.isFinite(amountNum) || amountNum <= 0
 
+  // Preview the tier the entered commitment would land in for the chosen term.
+  const schedule = schedules.find((s) => String(s.durationMonths) === duration)
+  const ladder = (upfront ? schedule?.upfrontTiers : schedule?.noUpfrontTiers) ?? []
+  const matchedTier = [...ladder]
+    .sort((a, b) => Number(a.startAmount ?? 0) - Number(b.startAmount ?? 0))
+    .filter((t) => Number.isFinite(amountNum) && amountNum >= Number(t.startAmount ?? 0))
+    .pop()
+
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent>
@@ -219,7 +263,7 @@ function PurchaseDialog({
           </p>
         ) : null}
 
-        <div className="space-y-3">
+        <div className="space-y-4">
           <div>
             <Label className="mb-1.5 block">Duration</Label>
             <Select value={duration} onValueChange={setDuration}>
@@ -236,14 +280,26 @@ function PurchaseDialog({
             </Select>
           </div>
           <div>
-            <Label className="mb-1.5 block">Monthly committed amount ({currency})</Label>
-            <Input
-              className="font-mono tabular-nums"
-              type="number"
-              min={0}
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-            />
+            <Label className="mb-1.5 block">Monthly committed amount</Label>
+            <div className="relative">
+              <Input
+                className="h-11 pr-14 font-mono text-lg tabular-nums md:text-lg"
+                type="number"
+                min={0}
+                placeholder="0.00"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+              />
+              <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 font-mono text-xs text-muted-foreground">
+                {currency}/mo
+              </span>
+            </div>
+            {matchedTier ? (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Qualifies for the <span className="font-medium text-primary">{pct(matchedTier.discount)}</span>{" "}
+                {upfront ? "upfront" : "no-upfront"} tier.
+              </p>
+            ) : null}
           </div>
           <div>
             <Label className="mb-1.5 block">Starts</Label>
@@ -310,66 +366,102 @@ function ContractsSection({ bp, currency }: { bp: string; currency: string }) {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<SavingsContract, any>[]>(
+    () => [
+      {
+        id: "plan",
+        accessorFn: (c) => c.savingsPlanName ?? c.savingsPlanId ?? "",
+        header: sortableHeader("Plan"),
+        cell: ({ row }) => {
+          const c = row.original
+          const active = c.status === "ACTIVE"
+          return (
+            <span className={cn("font-medium", !active && "text-muted-foreground")}>
+              {c.savingsPlanName ?? c.savingsPlanId ?? "—"}
+              {c.paidUpfront ? <Badge variant="secondary" className="ml-2">Upfront</Badge> : null}
+            </span>
+          )
+        },
+      },
+      {
+        id: "committed",
+        accessorFn: (c) => Number(c.monthlyCommittedAmount ?? 0),
+        header: sortableRightHeader("Committed / month"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono tabular-nums">
+            {fmtMoney(row.original.monthlyCommittedAmount, currency)}
+          </div>
+        ),
+      },
+      {
+        id: "discount",
+        accessorFn: (c) => Number(c.discountRate ?? 0),
+        header: sortableRightHeader("Discount"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono tabular-nums">{pct(row.original.discountRate)}</div>
+        ),
+      },
+      {
+        id: "status",
+        accessorFn: (c) => c.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "term",
+        accessorFn: (c) => c.startDate ?? "",
+        header: sortableHeader("Term"),
+        cell: ({ row }) => (
+          <span className="text-sm text-muted-foreground tabular-nums">
+            {fmtDate(row.original.startDate)} → {fmtDate(row.original.endDate)}
+          </span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const c = row.original
+          return (
+            <div className="text-right">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setExtending(c)}
+                disabled={c.status !== "ACTIVE"}
+              >
+                Extend
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setCancelling(c)}
+                disabled={c.status !== "ACTIVE" || c.paidUpfront === true}
+              >
+                Cancel
+              </Button>
+            </div>
+          )
+        },
+      },
+    ],
+    [currency],
+  )
+
   return (
     <div className="mt-8">
       <h2 className="mb-3 font-display text-lg font-semibold">Your contracts</h2>
-      {isLoading ? (
-        <Skeleton className="h-40" />
-      ) : error ? (
-        <ErrorPanel message={(error as Error).message} />
-      ) : !contracts?.length ? (
+      {!isLoading && !error && !contracts?.length ? (
         <EmptyState icon={PiggyBank} title="No savings contracts" hint="Purchase a plan above to start saving." />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Plan</TableHead>
-                <TableHead className="text-right">Committed / month</TableHead>
-                <TableHead className="text-right">Discount</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Start</TableHead>
-                <TableHead>End</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {contracts.map((c) => (
-                <TableRow key={c.id}>
-                  <TableCell className="font-medium">
-                    {c.savingsPlanName ?? c.savingsPlanId ?? "—"}
-                    {c.paidUpfront ? <Badge variant="secondary" className="ml-2">Upfront</Badge> : null}
-                  </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums">
-                    {fmtMoney(c.monthlyCommittedAmount, currency)}
-                  </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums">{pct(c.discountRate)}</TableCell>
-                  <TableCell><StatusBadge status={c.status} /></TableCell>
-                  <TableCell>{fmtDate(c.startDate)}</TableCell>
-                  <TableCell>{fmtDate(c.endDate)}</TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setExtending(c)}
-                      disabled={c.status !== "ACTIVE"}
-                    >
-                      Extend
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setCancelling(c)}
-                      disabled={c.status !== "ACTIVE" || c.paidUpfront === true}
-                    >
-                      Cancel
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={contracts}
+          isLoading={isLoading}
+          error={error as Error | null}
+          getRowId={(c) => c.id}
+        />
       )}
 
       <Dialog open={!!cancelling} onOpenChange={(o) => !o && setCancelling(null)}>
@@ -412,6 +504,18 @@ function ContractsSection({ bp, currency }: { bp: string; currency: string }) {
       </Dialog>
     </div>
   )
+}
+
+/** Right-aligned variant of sortableHeader for numeric (amount) columns. */
+function sortableRightHeader<TData>(label: string) {
+  const Inner = sortableHeader<TData>(label)
+  return function SortableRightHeader({ column }: { column: Column<TData, unknown> }) {
+    return (
+      <div className="text-right">
+        <Inner column={column} />
+      </div>
+    )
+  }
 }
 
 function ErrorPanel({ message }: { message: string }) {

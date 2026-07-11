@@ -217,6 +217,18 @@ export function seedCloudResources(): CloudResource[] {
   ]
 }
 
+// Heat stack events / resources (LIST_STACK_EVENTS / LIST_RESOURCES action results).
+export const stackEvents = [
+  { id: "ev-3", resource_name: "wordpress-stack", resource_status: "CREATE_COMPLETE", resource_status_reason: "Stack CREATE completed successfully", event_time: "2026-06-20T08:04:12Z" },
+  { id: "ev-2", resource_name: "random", resource_status: "CREATE_COMPLETE", resource_status_reason: "state changed", event_time: "2026-06-20T08:03:40Z" },
+  { id: "ev-1", resource_name: "wordpress-stack", resource_status: "CREATE_IN_PROGRESS", resource_status_reason: "Stack CREATE started", event_time: "2026-06-20T08:00:05Z" },
+]
+
+export const stackResources = [
+  { logical_resource_id: "random", physical_resource_id: "os-random-1", resource_name: "random", resource_type: "OS::Heat::RandomString", resource_status: "CREATE_COMPLETE" },
+  { logical_resource_id: "web_server", physical_resource_id: "os-server-9", resource_name: "web_server", resource_type: "OS::Nova::Server", resource_status: "CREATE_COMPLETE" },
+]
+
 // Octavia sub-resources for the load-balancer manage sheet (gophercloud snake_case).
 export const lbListeners = [
   { id: "lst-1", name: "http", protocol: "HTTP", protocol_port: 80 },

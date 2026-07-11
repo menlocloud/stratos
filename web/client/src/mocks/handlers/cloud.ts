@@ -4,7 +4,7 @@ import { db } from "../db"
 import {
   availabilityZones, bucketSettings, dnsRecordsets, flavorCategories,
   flavors, imageGrouping, lbListeners, lbMonitors, lbPools, publicImages,
-  s3Credentials, volumeTypes,
+  s3Credentials, stackEvents, stackResources, volumeTypes,
 } from "../fixtures/cloud"
 import { locations, publicNetworks } from "../fixtures/platform"
 
@@ -181,6 +181,8 @@ on("POST /project/:pid/cloud/:resourceId/action", ({ params, opts }) => {
     // Stacks
     case "SUSPEND_STACK": case "RESUME_STACK": return ok()
     case "GET_TEMPLATE": return ok({ template: "heat_template_version: 2021-04-16\nresources: {}\n" })
+    case "LIST_STACK_EVENTS": return ok(stackEvents)
+    case "LIST_RESOURCES": return ok(stackResources)
 
     default:
       console.warn(`[mock] unknown resource action ${action}`)
