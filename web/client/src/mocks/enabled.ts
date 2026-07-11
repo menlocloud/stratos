@@ -10,11 +10,16 @@ export const mockProfile = {
   preferred_username: "dev",
 }
 
+// `?logged-out` in the URL previews the unauthenticated experience (login
+// page) while in mock mode.
+const loggedOut =
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("logged-out")
+
 // Mimics the react-oidc-context state surface the app consumes
 // (isLoading/isAuthenticated/user.profile/signin*/signout*).
 export const mockAuthState = {
   isLoading: false,
-  isAuthenticated: true,
+  isAuthenticated: !loggedOut,
   activeNavigator: undefined,
   error: undefined,
   user: {
