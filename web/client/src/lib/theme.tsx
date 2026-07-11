@@ -29,7 +29,12 @@ function resolveDark(pref: ThemePref): boolean {
 // inside the callback), and always on <html> — token chains re-resolve in
 // dark mode only because .dark sits on :root.
 function apply(pref: ThemePref) {
-  document.documentElement.classList.toggle("dark", resolveDark(pref))
+  const dark = resolveDark(pref)
+  document.documentElement.classList.toggle("dark", dark)
+  // Keep browser chrome in sync with the RESOLVED theme (the static media
+  // metas only track the OS preference).
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]:not([media])')
+  if (meta) meta.content = dark ? "#0c0b09" : "#FFFDF6"
 }
 
 const listeners = new Set<() => void>()
@@ -46,6 +51,13 @@ if (typeof window !== "undefined") {
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (readPref() === "system") {
       apply("system")
+      emit()
+    }
+  })
+  // Cross-tab sync: a theme change in another tab updates this one live.
+  window.addEventListener("storage", (e) => {
+    if (e.key === STORAGE_KEY || e.key === null) {
+      apply(readPref())
       emit()
     }
   })

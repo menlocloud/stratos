@@ -121,6 +121,7 @@
     /* Semantic elevation utilities (shadow-card, shadow-popover, …). */
     --shadow-card: var(--shadow-card);
     --shadow-card-hover: var(--shadow-card-hover);
+    --shadow-card-drag: var(--shadow-card-drag);
     --shadow-popover: var(--shadow-popover);
     --shadow-modal: var(--shadow-modal);
 }

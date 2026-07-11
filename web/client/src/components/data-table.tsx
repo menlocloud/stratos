@@ -94,7 +94,14 @@ export function DataTable<TData>({
         }
       : {}),
     globalFilterFn: "includesString",
-    getRowId,
+    // Stable row identity by default: never fall back to array indexes
+    // (breaks React keys + row state on refetch/reorder).
+    getRowId:
+      getRowId ??
+      ((row: TData, index: number) => {
+        const r = row as { id?: unknown; externalId?: unknown }
+        return String(r.id ?? r.externalId ?? index)
+      }),
   })
 
   const visibleColumns = table.getVisibleLeafColumns().length || columns.length
@@ -163,7 +170,9 @@ export function DataTable<TData>({
           ) : modelRows.length === 0 ? (
             <TableRow className="hover:bg-transparent">
               <TableCell colSpan={visibleColumns} className="py-10 text-center text-muted-foreground">
-                {empty ?? (globalFilter ? "No results match your search." : "Nothing here yet.")}
+                {/* An active search always explains itself; the caller's empty
+                    state is for a genuinely empty list. */}
+                {globalFilter ? "No results match your search." : (empty ?? "Nothing here yet.")}
               </TableCell>
             </TableRow>
           ) : (
@@ -171,7 +180,11 @@ export function DataTable<TData>({
               <TableRow
                 key={row.id}
                 data-state={row.getIsSelected() ? "selected" : undefined}
-                className={cn(onRowClick && "cursor-pointer")}
+                className={cn(
+                  onRowClick &&
+                    "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                )}
+                role={onRowClick ? "button" : undefined}
                 tabIndex={onRowClick ? 0 : undefined}
                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                 onKeyDown={
