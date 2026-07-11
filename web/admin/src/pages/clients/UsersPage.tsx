@@ -29,13 +29,6 @@ import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useAdminList } from "@/lib/hooks"
 
-// Tailwind safelist — the scanner only sees literal class names, and StatusBadge
-// composes `status-dot-${kind}` dynamically. Only "status-dot-ok" appears literally
-// elsewhere (Login.tsx), so without these literals the other dot kinds compile away
-// and PENDING/FAILED/muted status dots render invisible across the admin:
-// status-dot-warn status-dot-error status-dot-muted
-// (Proper home: status-badge.tsx or an @source inline() safelist in index.css — both
-// frozen for this sweep; escalated.)
 
 // GET /admin/user (handler.go listRaw "users") — raw user docs, shaped _id→id.
 export type AdminUser = {
