@@ -31,27 +31,32 @@ type OsloMessage struct {
 }
 
 // osloTimeLayouts are the timestamp formats a notification may carry, most-common first.
-// oslo_utils emits a SPACE-separated, timezone-less stamp ("2006-01-02 15:04:05.999999") —
-// NOT RFC3339 — so a plain *time.Time field fails to decode and 400s every real ceilometer
-// notification. Parsing is tried across these layouts; an unrecognized stamp yields the zero
-// time rather than failing the whole message (the timestamp is non-essential — Handle falls
-// back to now()).
+// oslo_utils emits a SPACE-separated, timezone-less stamp ("2006-01-02 15:04:05.999999") — NOT
+// RFC3339 — and that is what real ceilometer traffic sends, so it leads; RFC3339 (from a bridge
+// that already normalizes) follows. A plain *time.Time field only decodes RFC3339, which is why
+// it 400s every real notification. An unrecognized stamp yields the zero time rather than
+// failing the whole message (the timestamp is non-essential — Handle falls back to now()).
 var osloTimeLayouts = []string{
-	time.RFC3339Nano,
-	time.RFC3339,
 	"2006-01-02 15:04:05.999999",
 	"2006-01-02 15:04:05.999999-07:00",
 	"2006-01-02 15:04:05",
 	"2006-01-02T15:04:05.999999",
+	time.RFC3339Nano,
+	time.RFC3339,
 }
 
 // osloTime is a time.Time that decodes oslo's space-separated stamps as well as RFC3339, and
-// never errors on an unparseable value (leaves the zero time).
+// never errors on an unparseable/absent/non-string value (leaves the zero time).
 type osloTime struct{ time.Time }
 
+// OsloTimeAt wraps a time.Time as an osloTime (for constructing an OsloMessage in tests).
+func OsloTimeAt(t time.Time) osloTime { return osloTime{t.UTC()} }
+
 func (t *osloTime) UnmarshalJSON(b []byte) error {
-	s := strings.Trim(string(b), `"`)
-	if s == "" || s == "null" {
+	// Decode the JSON token as a string first (proper unescaping/validation); a null,
+	// non-string, or empty value means "no timestamp" and must not reject the message.
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil || s == "" {
 		return nil
 	}
 	for _, layout := range osloTimeLayouts {
@@ -60,7 +65,7 @@ func (t *osloTime) UnmarshalJSON(b []byte) error {
 			return nil
 		}
 	}
-	return nil // unparseable timestamp must not reject the notification
+	return nil // unrecognized stamp must not reject the notification
 }
 
 // ParseOsloBody decodes an os-notification request body into an OsloMessage, unwrapping the
