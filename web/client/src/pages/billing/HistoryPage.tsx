@@ -1,11 +1,11 @@
 import { useMemo } from "react"
 import { useNavigate } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
-import type { Column, ColumnDef } from "@tanstack/react-table"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { Download, FileText, Receipt } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
-import { DataTable, sortableHeader } from "@/components/data-table"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
@@ -29,17 +29,6 @@ export async function downloadPdf(path: string, filename: string) {
   URL.revokeObjectURL(url)
 }
 
-/** Right-aligned variant of sortableHeader for numeric (amount) columns. */
-function sortableRightHeader<TData>(label: string) {
-  const Inner = sortableHeader<TData>(label)
-  return function SortableRightHeader({ column }: { column: Column<TData, unknown> }) {
-    return (
-      <div className="text-right">
-        <Inner column={column} />
-      </div>
-    )
-  }
-}
 
 export default function HistoryPage() {
   const pid = useProjectId()

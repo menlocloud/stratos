@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { Column, ColumnDef } from "@tanstack/react-table"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { BadgePercent, Gift } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
-import { DataTable, sortableHeader } from "@/components/data-table"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -31,17 +31,6 @@ function expiry(v?: string): string {
   return fmtDate(v)
 }
 
-/** Right-aligned variant of sortableHeader for numeric (amount) columns. */
-function sortableRightHeader<TData>(label: string) {
-  const Inner = sortableHeader<TData>(label)
-  return function SortableRightHeader({ column }: { column: Column<TData, unknown> }) {
-    return (
-      <div className="text-right">
-        <Inner column={column} />
-      </div>
-    )
-  }
-}
 
 // Remaining/initial as a compact meter: muted track, primary fill.
 function RemainingMeter({ remaining, initial }: { remaining: number; initial: number }) {

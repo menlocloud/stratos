@@ -268,7 +268,7 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Website URL</Label>
                   <a
-                    className="flex items-center gap-1 text-sm text-primary hover:underline"
+                    className="flex items-center gap-1 text-sm text-primary-text hover:underline"
                     href={s.website.url}
                     target="_blank"
                     rel="noreferrer"

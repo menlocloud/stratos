@@ -186,7 +186,7 @@ export default function S3KeysPage() {
                   <DropdownMenuItem onClick={() => setRotateTarget(k)}>
                     <RotateCw className="size-4" /> Rotate
                   </DropdownMenuItem>
-                  <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(k)}>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(k)}>
                     Delete
                   </DropdownMenuItem>
                 </DropdownMenuContent>

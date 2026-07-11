@@ -32,6 +32,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { fmtMoney } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 const EMPTY: never[] = []
@@ -246,6 +247,23 @@ export function sortableHeader<TData>(label: string) {
       </Button>
     )
   }
+}
+
+/** Right-aligned sortable header — numeric/money columns. */
+export function sortableRightHeader<TData>(label: string) {
+  const Header = sortableHeader<TData>(label)
+  return function SortableRightHeader(ctx: { column: Column<TData, unknown> }) {
+    return (
+      <div className="flex justify-end">
+        <Header {...ctx} />
+      </div>
+    )
+  }
+}
+
+/** Right-aligned mono money cell — the one way money renders in tables. */
+export function MoneyCell({ value, currency }: { value: number | null | undefined; currency: string }) {
+  return <div className="text-right font-mono tabular-nums">{fmtMoney(value ?? 0, currency)}</div>
 }
 
 /** Stable hook for column defs — thin alias so pages remember the rule. */

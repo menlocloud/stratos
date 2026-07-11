@@ -175,7 +175,7 @@ export default function BucketsPage() {
                       <Settings className="size-4" /> Settings
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(r)}>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(r)}>
                     Delete
                   </DropdownMenuItem>
                 </DropdownMenuContent>

@@ -202,7 +202,7 @@ export default function BucketExplorePage() {
           <>
             <div className="mr-2 flex items-center gap-2">
               {visibility.data !== undefined && (
-                <Badge variant={visibility.data ? "default" : "secondary"}>
+                <Badge variant={visibility.data ? "outline" : "secondary"}>
                   {visibility.data ? "Public" : "Private"}
                 </Badge>
               )}

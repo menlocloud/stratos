@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { Column, ColumnDef } from "@tanstack/react-table"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { PiggyBank } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
-import { DataTable, sortableHeader } from "@/components/data-table"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
@@ -506,17 +506,6 @@ function ContractsSection({ bp, currency }: { bp: string; currency: string }) {
   )
 }
 
-/** Right-aligned variant of sortableHeader for numeric (amount) columns. */
-function sortableRightHeader<TData>(label: string) {
-  const Inner = sortableHeader<TData>(label)
-  return function SortableRightHeader({ column }: { column: Column<TData, unknown> }) {
-    return (
-      <div className="text-right">
-        <Inner column={column} />
-      </div>
-    )
-  }
-}
 
 function ErrorPanel({ message }: { message: string }) {
   return <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">{message}</div>

@@ -28,7 +28,7 @@ export default function CardsPage() {
   const bp = summary?.id
   const defaultCardId = summary?.defaultCardId
 
-  const { data: cards, isLoading } = useQuery({
+  const { data: cards, isLoading, error: cardsError } = useQuery({
     queryKey: ["cards", bp],
     queryFn: () => apiFetch<CreditCard[]>(`/card/${bp}`),
     enabled: !!bp,
@@ -149,7 +149,7 @@ export default function CardsPage() {
 
       {isLoading || !bp ? (
         <Skeleton className="h-64" />
-      ) : !cards?.length ? (
+      ) : !cardsError && !cards?.length ? (
         <EmptyState
           icon={CreditCardIcon}
           title="No cards yet"
@@ -161,7 +161,12 @@ export default function CardsPage() {
           }
         />
       ) : (
-        <DataTable columns={columns} data={cards} getRowId={(c) => c.id} />
+        <DataTable
+          columns={columns}
+          data={cards}
+          error={cardsError as Error | null}
+          getRowId={(c) => c.id}
+        />
       )}
 
       {bp && gateway ? (

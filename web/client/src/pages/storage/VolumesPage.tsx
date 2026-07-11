@@ -273,7 +273,7 @@ export default function VolumesPage() {
                   >
                     Change type
                   </DropdownMenuItem>
-                  <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(r)}>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(r)}>
                     Delete
                   </DropdownMenuItem>
                 </DropdownMenuContent>
