@@ -1,10 +1,17 @@
 // Projects, organizations, invites, menu/features, search, user bootstrap.
 import { on } from "../router"
 import { db } from "../db"
-import { features, ORG_ID, organizations, uiMenu } from "../fixtures/platform"
+import { features, ORG_ID, PID, organizations, uiMenu } from "../fixtures/platform"
+import { mockProfile } from "../enabled"
 import { myInvites } from "../fixtures/people"
 
-on("GET /project", () => ({ data: db.projects }))
+// Page-URL preview flags (mock runs in-browser): "/?no-projects" previews the
+// "/" onboarding states without touching fixtures — combine with "no-org"
+// (create-org flow) or "invited" (pending-invite flow).
+const pageFlag = (name: string) =>
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has(name)
+
+on("GET /project", () => ({ data: pageFlag("no-projects") ? [] : db.projects }))
 on("POST /project", ({ opts }) => {
   const body = opts.body as { name?: string; organizationId?: string }
   const project = {
@@ -48,7 +55,7 @@ on("GET /project/:pid/service", () => ({
   ],
 }))
 
-on("GET /organizations", () => ({ data: organizations }))
+on("GET /organizations", () => ({ data: pageFlag("no-org") ? [] : organizations }))
 on("GET /organizations/self-service", () => ({ data: { canCreateOrganization: true } }))
 on("POST /organizations", ({ opts }) => ({
   data: { id: db.nextId("org"), name: (opts.body as { name?: string })?.name ?? "new-org" },
@@ -56,13 +63,53 @@ on("POST /organizations", ({ opts }) => ({
 on("PUT /organizations/:orgId", () => ({ data: {} }))
 on("DELETE /organizations/:orgId", () => ({ data: {} }))
 
-on("GET /project-invites/mine", () => ({ data: myInvites }))
-on("GET /project-invites/:token", () => ({ data: {} }))
+on("GET /project-invites/mine", () => ({
+  data: pageFlag("invited")
+    ? [
+        { token: "tok-aurora", projectId: PID, projectName: "aurora-production", expiresAt: new Date(Date.now() + 7 * 86400_000).toISOString() },
+        { token: "tok-staging", projectId: "prj-staging", projectName: "aurora-staging", expiresAt: new Date(Date.now() + 3 * 86400_000).toISOString() },
+      ]
+    : myInvites,
+}))
+// Any token resolves to a valid invite except the literal "missing" (previews
+// the invite-not-found state on /join/missing).
+on("GET /project-invites/:token", ({ params }) => ({
+  data:
+    params.token === "missing"
+      ? {}
+      : {
+          email: mockProfile.email,
+          projectId: PID,
+          projectName: "aurora-production",
+          expiresAt: new Date(Date.now() + 7 * 86400_000).toISOString(),
+        },
+}))
 on("POST /project-invites/accept/:token", () => ({ data: {} }))
 on("POST /project-invites/decline/:token", () => ({ data: {} }))
 on("POST /project-invites/invite", () => ({ data: {} }))
 
-on("GET /init/:pid", () => ({ data: uiMenu }))
+// uiMenu + an admin Custom Menu item so /p/:pid/more/status-page renders the
+// embedded-iframe chrome in dev (same-origin docs page stands in for the
+// operator's status page; exercises {{project.id}} substitution).
+on("GET /init/:pid", () => ({
+  data: {
+    ...uiMenu,
+    menu: {
+      ...uiMenu.menu,
+      items: {
+        ...uiMenu.menu.items,
+        "status-page": {
+          enabled: true,
+          newMenuItem: true,
+          displayName: "Status page",
+          order: 1,
+          renderMode: "IFRAME",
+          url: `${window.location.origin}/docs?project={{project.id}}`,
+        },
+      },
+    },
+  },
+}))
 on("GET /features", () => ({ data: features }))
 on("POST /user", () => ({ data: {} }))
 on("POST /user/custom-info/:key", () => ({ data: {} }))
