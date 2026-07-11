@@ -1,18 +1,18 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { loadStripe, type Stripe, type StripeCardElement } from "@stripe/stripe-js"
 import { CreditCard as CreditCardIcon, Plus, Star, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { fmtDate } from "@/lib/format"
 import { useBillingSummary, useProjectId } from "@/lib/hooks"
@@ -26,8 +26,9 @@ export default function CardsPage() {
   const qc = useQueryClient()
   const { data: summary } = useBillingSummary(pid)
   const bp = summary?.id
+  const defaultCardId = summary?.defaultCardId
 
-  const { data: cards, isLoading } = useQuery({
+  const { data: cards, isLoading, error: cardsError } = useQuery({
     queryKey: ["cards", bp],
     queryFn: () => apiFetch<CreditCard[]>(`/card/${bp}`),
     enabled: !!bp,
@@ -68,10 +69,76 @@ export default function CardsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const setDefaultPending = setDefault.isPending
+  const columns = useMemo<ColumnDef<CreditCard, any>[]>(
+    () => [
+      {
+        id: "card",
+        accessorFn: (c) => c.panMasked ?? c.id,
+        header: sortableHeader("Card"),
+        cell: ({ row }) => {
+          const c = row.original
+          return (
+            <span className="flex items-center gap-3">
+              <span className="flex h-7 w-10 shrink-0 items-center justify-center rounded-md border bg-muted/50">
+                <CreditCardIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+              </span>
+              <span className="font-mono text-sm tracking-wider tabular-nums">{c.panMasked ?? c.id}</span>
+              {c.id === defaultCardId ? <Badge variant="secondary">Default</Badge> : null}
+            </span>
+          )
+        },
+      },
+      {
+        id: "expires",
+        accessorFn: (c) => c.tokenExpirationDate ?? "",
+        header: sortableHeader("Expires"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground tabular-nums">{fmtDate(getValue())}</span>
+        ),
+      },
+      {
+        id: "added",
+        accessorFn: (c) => (c.createdAt as string | undefined) ?? "",
+        header: sortableHeader("Added"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground tabular-nums">{fmtDate(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const c = row.original
+          return (
+            <div className="text-right">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setDefault.mutate(c.id)}
+                disabled={c.id === defaultCardId || setDefaultPending}
+              >
+                <Star className="size-4" /> Set default
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setDeleting(c)}>
+                <Trash2 className="size-4" /> Delete
+              </Button>
+            </div>
+          )
+        },
+      },
+    ],
+    // setDefault.mutate and setDeleting are stable; the cells re-render off these two values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [defaultCardId, setDefaultPending],
+  )
+
   return (
     <>
       <PageHeader
         title="Cards"
+        eyebrow="Billing"
         description="Saved payment cards on this billing profile."
         actions={
           <Button size="sm" onClick={() => setAddOpen(true)} disabled={!bp || !gateway}>
@@ -82,7 +149,7 @@ export default function CardsPage() {
 
       {isLoading || !bp ? (
         <Skeleton className="h-64" />
-      ) : !cards?.length ? (
+      ) : !cardsError && !cards?.length ? (
         <EmptyState
           icon={CreditCardIcon}
           title="No cards yet"
@@ -94,45 +161,12 @@ export default function CardsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Card</TableHead>
-                <TableHead>Expires</TableHead>
-                <TableHead>Added</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {cards.map((c) => (
-                <TableRow key={c.id}>
-                  <TableCell className="font-mono">
-                    {c.panMasked ?? c.id}
-                    {c.id === summary?.defaultCardId ? <Badge className="ml-2">Default</Badge> : null}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{fmtDate(c.tokenExpirationDate)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {fmtDate(c.createdAt as string | undefined)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setDefault.mutate(c.id)}
-                      disabled={c.id === summary?.defaultCardId || setDefault.isPending}
-                    >
-                      <Star className="size-4" /> Set default
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setDeleting(c)}>
-                      <Trash2 className="size-4" /> Delete
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={cards}
+          error={cardsError as Error | null}
+          getRowId={(c) => c.id}
+        />
       )}
 
       {bp && gateway ? (
@@ -151,7 +185,8 @@ export default function CardsPage() {
           <DialogHeader>
             <DialogTitle>Delete card</DialogTitle>
             <DialogDescription>
-              Delete card {deleting?.panMasked ?? deleting?.id}? This cannot be undone.
+              Delete card <span className="font-mono">{deleting?.panMasked ?? deleting?.id}</span>? This cannot
+              be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -255,7 +290,7 @@ function AddCardDialog({
           <DialogTitle>Add card</DialogTitle>
           <DialogDescription>Card details go directly to Stripe — they never touch Stratos.</DialogDescription>
         </DialogHeader>
-        <div className="rounded-md border p-3">
+        <div className="rounded-md border bg-muted/30 p-3">
           <div ref={mountRef} />
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}

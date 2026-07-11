@@ -1,12 +1,13 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Gift, Pencil, Plus, TicketPercent, Trash2 } from "lucide-react"
+import type { Column, ColumnDef } from "@tanstack/react-table"
+import { Gift, MoreHorizontal, Plus, TicketPercent } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -16,11 +17,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
 import { fmtDate, fmtMoney } from "@/lib/format"
@@ -55,6 +61,12 @@ const CODES_PATH = "/admin/promotion-codes"
 
 function bpLabel(bp: BillingProfile): string {
   return bp.email ?? bp.fullName ?? [bp.firstName, bp.lastName].filter(Boolean).join(" ") ?? bp.id
+}
+
+/** Sortable money value: normalizes the API's number-or-string amounts. */
+function moneyNum(v: number | string | undefined): number {
+  const n = typeof v === "string" ? parseFloat(v) : v
+  return n == null || Number.isNaN(n) ? 0 : n
 }
 
 // ── Edit promotion code dialog ────────────────────────────────────────────────
@@ -101,10 +113,10 @@ function EditCodeDialog({ code: pc, onClose, onSaved }: { code: PromotionCode; o
           <DialogDescription>Fields left empty are cleared on the code.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="ec-code">Code</Label>
-              <Input id="ec-code" value={code} onChange={(e) => setCode(e.target.value)} />
+              <Input id="ec-code" value={code} onChange={(e) => setCode(e.target.value)} className="font-mono" />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="ec-amount">Amount</Label>
@@ -122,11 +134,11 @@ function EditCodeDialog({ code: pc, onClose, onSaved }: { code: PromotionCode; o
             <Label htmlFor="ec-desc">Description (optional)</Label>
             <Input id="ec-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
-              <Label>Status</Label>
+              <Label htmlFor="ec-status">Status</Label>
               <Select value={status} onValueChange={setStatus}>
-                <SelectTrigger>
+                <SelectTrigger id="ec-status">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -145,7 +157,7 @@ function EditCodeDialog({ code: pc, onClose, onSaved }: { code: PromotionCode; o
               />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="ec-from">Valid from (optional)</Label>
               <Input id="ec-from" type="date" value={validFrom} onChange={(e) => setValidFrom(e.target.value)} />
@@ -243,6 +255,70 @@ function PromotionCodesTab() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<PromotionCode, any>[]>(
+    () => [
+      {
+        id: "code",
+        accessorFn: (c) => c.code ?? "",
+        header: sortableHeader("Code"),
+        cell: ({ getValue }) => <span className="font-mono font-medium">{getValue() || "—"}</span>,
+      },
+      {
+        id: "amount",
+        accessorFn: (c) => moneyNum(c.amount),
+        header: sortableRightHeader("Amount"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono text-sm tabular-nums">{fmtMoney(row.original.amount)}</div>
+        ),
+      },
+      {
+        id: "status",
+        accessorFn: (c) => c.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ row }) => <StatusBadge status={row.original.status} />,
+      },
+      {
+        id: "validFrom",
+        accessorFn: (c) => c.validFrom ?? "",
+        header: sortableHeader("Valid from"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDate(getValue())}</span>,
+      },
+      {
+        id: "validUntil",
+        accessorFn: (c) => c.validUntil ?? "",
+        header: sortableHeader("Valid until"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDate(getValue())}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const c = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="Promotion code actions">
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setToEdit(c)}>Edit</DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive" onClick={() => setToDelete(c)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   return (
     <>
       <div className="mb-4 flex justify-end">
@@ -251,11 +327,7 @@ function PromotionCodesTab() {
         </Button>
       </div>
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : !codes.length ? (
+      {!isLoading && !error && !codes.length ? (
         <EmptyState
           icon={TicketPercent}
           title="No promotion codes"
@@ -267,43 +339,14 @@ function PromotionCodesTab() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Code</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Valid from</TableHead>
-                <TableHead>Valid until</TableHead>
-                <TableHead className="w-24" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {codes.map((c) => (
-                <TableRow key={c.id}>
-                  <TableCell className="font-mono font-medium">{c.code ?? "—"}</TableCell>
-                  <TableCell className="font-mono text-sm tabular-nums">{fmtMoney(c.amount)}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={c.status} />
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{fmtDate(c.validFrom)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{fmtDate(c.validUntil)}</TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" title="Edit" onClick={() => setToEdit(c)}>
-                        <Pencil className="size-4 text-muted-foreground" />
-                      </Button>
-                      <Button variant="ghost" size="icon" title="Delete" onClick={() => setToDelete(c)}>
-                        <Trash2 className="size-4 text-muted-foreground" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={codes}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search promotion codes…"
+          getRowId={(c) => c.id}
+        />
       )}
 
       {toEdit ? <EditCodeDialog code={toEdit} onClose={() => setToEdit(null)} onSaved={() => void invalidate()} /> : null}
@@ -315,10 +358,16 @@ function PromotionCodesTab() {
             <DialogDescription>Clients redeem the code for promotional credit in the base currency.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="pc-code">Code</Label>
-                <Input id="pc-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="WELCOME25" />
+                <Input
+                  id="pc-code"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="WELCOME25"
+                  className="font-mono"
+                />
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="pc-amount">Amount</Label>
@@ -333,7 +382,7 @@ function PromotionCodesTab() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="pc-from">Valid from (optional)</Label>
                 <Input id="pc-from" type="date" value={validFrom} onChange={(e) => setValidFrom(e.target.value)} />
@@ -441,12 +490,77 @@ function PromotionalCreditsTab() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<PromotionalCredit, any>[]>(
+    () => [
+      {
+        id: "billingProfile",
+        accessorFn: (c) => c.billingProfileId ?? bpId,
+        header: "Billing profile",
+        cell: ({ getValue }) => <span className="font-mono text-sm">{getValue()}</span>,
+      },
+      {
+        id: "code",
+        accessorFn: (c) => c.code ?? "",
+        header: sortableHeader("Code"),
+        cell: ({ getValue }) => <span className="font-mono text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "amount",
+        accessorFn: (c) => moneyNum(c.initialAmount),
+        header: sortableRightHeader("Amount"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono text-sm tabular-nums">{fmtMoney(row.original.initialAmount)}</div>
+        ),
+      },
+      {
+        id: "remaining",
+        accessorFn: (c) => moneyNum(c.remainingAmount),
+        header: sortableRightHeader("Remaining"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono text-sm tabular-nums">{fmtMoney(row.original.remainingAmount)}</div>
+        ),
+      },
+      {
+        id: "expires",
+        accessorFn: (c) => c.expirationDate ?? "",
+        header: sortableHeader("Expires"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDate(getValue())}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="text-right">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Promotional credit actions">
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem className="text-destructive" onClick={() => setToDelete(row.original)}>
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ),
+      },
+    ],
+    // bpId is the fallback owner label when the API omits billingProfileId.
+    [bpId],
+  )
+
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="w-full max-w-sm">
+          <Label htmlFor="credits-bp" className="sr-only">
+            Billing profile
+          </Label>
           <Select value={bpId} onValueChange={setBpId}>
-            <SelectTrigger>
+            <SelectTrigger id="credits-bp">
               <SelectValue placeholder={profilesQ.isLoading ? "Loading billing profiles…" : "Select a billing profile"} />
             </SelectTrigger>
             <SelectContent>
@@ -469,13 +583,7 @@ function PromotionalCreditsTab() {
           title="Pick a billing profile"
           hint="Promotional credits are stored per billing profile — select one to list its credits."
         />
-      ) : creditsQ.isLoading ? (
-        <Skeleton className="h-64" />
-      ) : creditsQ.error ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-          {(creditsQ.error as Error).message}
-        </div>
-      ) : !credits.length ? (
+      ) : !creditsQ.isLoading && !creditsQ.error && !credits.length ? (
         <EmptyState
           icon={Gift}
           title="No promotional credits"
@@ -487,36 +595,14 @@ function PromotionalCreditsTab() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Billing profile</TableHead>
-                <TableHead>Code</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Remaining</TableHead>
-                <TableHead>Expires</TableHead>
-                <TableHead className="w-12" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {credits.map((c) => (
-                <TableRow key={c.id}>
-                  <TableCell className="font-mono text-sm">{c.billingProfileId ?? bpId}</TableCell>
-                  <TableCell className="font-mono text-sm">{c.code ?? "—"}</TableCell>
-                  <TableCell className="font-mono text-sm tabular-nums">{fmtMoney(c.initialAmount)}</TableCell>
-                  <TableCell className="font-mono text-sm tabular-nums">{fmtMoney(c.remainingAmount)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{fmtDate(c.expirationDate)}</TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="icon" title="Delete" onClick={() => setToDelete(c)}>
-                      <Trash2 className="size-4 text-muted-foreground" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={credits}
+          isLoading={creditsQ.isLoading}
+          error={creditsQ.error ? (creditsQ.error as Error) : null}
+          searchPlaceholder="Search promotional credits…"
+          getRowId={(c) => c.id}
+        />
       )}
 
       <Dialog open={grantOpen} onOpenChange={setGrantOpen}>
@@ -525,7 +611,7 @@ function PromotionalCreditsTab() {
             <DialogTitle>Grant promotional credit</DialogTitle>
             <DialogDescription>The credit lands on the selected billing profile and expires after the validity window.</DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="gc-amount">Amount</Label>
               <Input
@@ -599,7 +685,11 @@ function PromotionalCreditsTab() {
 export default function PromotionsPage() {
   return (
     <>
-      <PageHeader title="Promotions" description="Redeemable promotion codes and per-profile promotional credits." />
+      <PageHeader
+        title="Promotions"
+        eyebrow="System"
+        description="Redeemable promotion codes and per-profile promotional credits."
+      />
       <Tabs defaultValue="codes">
         <TabsList>
           <TabsTrigger value="codes">Promotion codes</TabsTrigger>
@@ -614,4 +704,16 @@ export default function PromotionsPage() {
       </Tabs>
     </>
   )
+}
+
+/** Right-aligned variant of sortableHeader for numeric (amount) columns. */
+function sortableRightHeader<TData>(label: string) {
+  const Inner = sortableHeader<TData>(label)
+  return function SortableRightHeader({ column }: { column: Column<TData, unknown> }) {
+    return (
+      <div className="text-right">
+        <Inner column={column} />
+      </div>
+    )
+  }
 }

@@ -1,13 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import {
   Archive, Box, Boxes, Cable, Camera, FolderKanban, FolderTree, Globe, HardDrive,
-  Key, Layers, Lock, Network, Receipt, Route, Scale, Search, Server, Shield,
+  Key, Layers, Lock, Network, Receipt, Route, Scale, Server, Shield,
   type LucideIcon,
 } from "lucide-react"
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
-import { cn } from "@/lib/utils"
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
+import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { apiFetch } from "@/lib/api"
 
 // GET /search/{projectId} → {data:[{type, data:{name,…,id,region}}]} (Go clientcloud.go search).
@@ -71,10 +78,8 @@ export default function SearchModal({
   onOpenChange: (o: boolean) => void
 }) {
   const nav = useNavigate()
-  const inputRef = useRef<HTMLInputElement>(null)
   const [raw, setRaw] = useState("")
   const [query, setQuery] = useState("")
-  const [active, setActive] = useState(0)
 
   // Fetch once per open (staleTime keeps re-opens cheap); filtering is client-side.
   const { data, isLoading, isError, error } = useQuery({
@@ -95,7 +100,6 @@ export default function SearchModal({
     if (open) {
       setRaw("")
       setQuery("")
-      setActive(0)
     }
   }, [open])
 
@@ -124,13 +128,6 @@ export default function SearchModal({
     return [...m.entries()]
   }, [filtered])
 
-  // Flat order (matches render order) for arrow-key navigation.
-  const flat = useMemo(() => groups.flatMap(([, arr]) => arr), [groups])
-
-  useEffect(() => {
-    if (active >= flat.length) setActive(0)
-  }, [flat.length, active])
-
   const go = (item: SearchItem) => {
     const id = (item.data?.id as string) ?? ""
     switch (item.type) {
@@ -155,89 +152,82 @@ export default function SearchModal({
     onOpenChange(false)
   }
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault()
-      setActive((a) => Math.min(a + 1, Math.max(flat.length - 1, 0)))
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault()
-      setActive((a) => Math.max(a - 1, 0))
-    } else if (e.key === "Enter") {
-      e.preventDefault()
-      const item = flat[active]
-      if (item) go(item)
-    }
-  }
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="gap-0 overflow-hidden p-0 sm:max-w-xl"
-        showCloseButton={false}
-        onOpenAutoFocus={(e) => {
-          e.preventDefault()
-          inputRef.current?.focus()
-        }}
-      >
-        <DialogTitle className="sr-only">Search this project</DialogTitle>
-        <div className="flex items-center gap-2 border-b px-4">
-          <Search className="size-4 shrink-0 text-muted-foreground" />
-          <input
-            ref={inputRef}
-            value={raw}
-            onChange={(e) => setRaw(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Search servers, networks, volumes, bills…"
-            className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            aria-label="Search this project"
-          />
-        </div>
-
-        <div className="max-h-[60vh] overflow-y-auto p-2">
-          {isLoading ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
-          ) : isError ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">{(error as Error).message}</p>
-          ) : !flat.length ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
+    <CommandDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Search this project"
+      description="Search resources in this project"
+      showCloseButton={false}
+      className="glass-surface top-[20%] translate-y-0 sm:max-w-xl"
+      // Matching is done here (debounced, token-AND over all data values), not by cmdk.
+      commandProps={{ shouldFilter: false, className: "bg-transparent" }}
+    >
+      <CommandInput
+        value={raw}
+        onValueChange={setRaw}
+        placeholder="Search servers, networks, volumes, bills…"
+        aria-label="Search this project"
+      />
+      <CommandList className="max-h-[60vh]">
+        {isLoading ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
+        ) : isError ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">{(error as Error).message}</p>
+        ) : (
+          <>
+            <CommandEmpty className="py-8 text-center text-sm text-muted-foreground">
               {query.trim() ? "No matches." : "Nothing to search yet."}
-            </p>
-          ) : (
-            groups.map(([type, items]) => {
+            </CommandEmpty>
+            {groups.map(([type, items]) => {
               const Icon = TYPE_ICONS[type] ?? Box
               return (
-                <div key={type} className="mb-1">
-                  <p className="px-2 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <CommandGroup key={type}>
+                  <p className="text-eyebrow px-2 py-1.5" aria-hidden>
                     {typeLabel(type)}
                   </p>
                   {items.map((item, i) => {
-                    const idx = flat.indexOf(items[i])
-                    const name = (item.data?.name as string) || (item.data?.id as string) || "—"
+                    const id = (item.data?.id as string) ?? ""
+                    const name = (item.data?.name as string) || id || "—"
                     const sub = [item.data?.status, item.data?.ipv4, item.data?.flavor, item.data?.region]
                       .filter((v) => typeof v === "string" && v)
                       .join(" · ")
                     return (
-                      <button
-                        key={`${type}-${item.data?.id ?? i}`}
-                        onClick={() => go(item)}
-                        onMouseEnter={() => setActive(idx)}
-                        className={cn(
-                          "flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm",
-                          idx === active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
-                        )}
+                      <CommandItem
+                        key={`${type}-${id || i}`}
+                        value={`${type}-${id || `${name}-${i}`}`}
+                        onSelect={() => go(item)}
+                        className="gap-3 py-2"
                       >
                         <Icon className="size-4 shrink-0 text-muted-foreground" />
                         <span className="truncate font-medium">{name}</span>
-                        {sub && <span className="ml-auto truncate text-xs text-muted-foreground">{sub}</span>}
-                      </button>
+                        {sub && (
+                          <span className="ml-auto truncate text-xs text-muted-foreground">{sub}</span>
+                        )}
+                      </CommandItem>
                     )
                   })}
-                </div>
+                </CommandGroup>
               )
-            })
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+            })}
+          </>
+        )}
+      </CommandList>
+      <div className="flex items-center gap-4 border-t px-3 py-2 text-xs text-muted-foreground">
+        <KbdGroup>
+          <Kbd>↑</Kbd>
+          <Kbd>↓</Kbd>
+          navigate
+        </KbdGroup>
+        <KbdGroup>
+          <Kbd>↵</Kbd>
+          open
+        </KbdGroup>
+        <KbdGroup className="ml-auto">
+          <Kbd>esc</Kbd>
+          close
+        </KbdGroup>
+      </div>
+    </CommandDialog>
   )
 }

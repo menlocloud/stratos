@@ -5,7 +5,7 @@ import { toast } from "sonner"
 import { Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -61,10 +61,17 @@ export default function OrgSettingsPage() {
 
   return (
     <>
-      <PageHeader title="Organization settings" description="Details and the danger zone for this organization." />
+      <PageHeader
+        title="Organization settings"
+        eyebrow="Organization"
+        description="Details and the danger zone for this organization."
+      />
 
       {isLoading ? (
-        <Skeleton className="h-64" />
+        <div className="max-w-2xl space-y-6">
+          <Skeleton className="h-64" />
+          <Skeleton className="h-28" />
+        </div>
       ) : error ? (
         <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
           {(error as Error).message}
@@ -74,23 +81,23 @@ export default function OrgSettingsPage() {
           No organization found.
         </div>
       ) : (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Details</CardTitle>
-            </CardHeader>
-            <CardContent className="grid max-w-lg gap-4">
+        <div className="max-w-2xl space-y-6">
+          {/* Settings section: eyebrow-labelled card, mono identifiers. */}
+          <Card className="gap-0 overflow-hidden py-0">
+            <div className="text-eyebrow border-b px-5 py-3">Details</div>
+            <div className="grid gap-4 p-5">
               <div>
                 <Label className="mb-1.5 block">Organization ID</Label>
                 <p className="font-mono text-xs text-muted-foreground">{org.id}</p>
               </div>
               <div>
-                <Label className="mb-1.5 block">Name</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} />
+                <Label className="mb-1.5 block" htmlFor="org-name">Name</Label>
+                <Input id="org-name" value={name} onChange={(e) => setName(e.target.value)} />
               </div>
               <div>
-                <Label className="mb-1.5 block">Description</Label>
+                <Label className="mb-1.5 block" htmlFor="org-description">Description</Label>
                 <Input
+                  id="org-description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Optional description"
@@ -101,15 +108,14 @@ export default function OrgSettingsPage() {
                   {save.isPending ? "Saving…" : "Save changes"}
                 </Button>
               </div>
-            </CardContent>
+            </div>
           </Card>
 
-          <Card className="border-destructive/40">
-            <CardHeader>
-              <CardTitle className="text-destructive">Danger zone</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-muted-foreground">
+          {/* Danger zone: destructive hairline border carries the signal. */}
+          <Card className="gap-0 overflow-hidden border-destructive/40 py-0">
+            <div className="text-eyebrow border-b border-destructive/40 px-5 py-3">Danger zone</div>
+            <div className="flex flex-wrap items-center justify-between gap-3 p-5">
+              <p className="max-w-sm text-sm text-muted-foreground">
                 Deleting the organization removes it along with its membership and settings. This cannot be undone.
               </p>
               <Button
@@ -121,7 +127,7 @@ export default function OrgSettingsPage() {
               >
                 <Trash2 className="size-4" /> Delete organization
               </Button>
-            </CardContent>
+            </div>
           </Card>
         </div>
       )}
@@ -136,8 +142,9 @@ export default function OrgSettingsPage() {
             </DialogDescription>
           </DialogHeader>
           <div>
-            <Label className="mb-1.5 block">Organization name</Label>
+            <Label className="mb-1.5 block" htmlFor="org-delete-confirm">Organization name</Label>
             <Input
+              id="org-delete-confirm"
               value={confirmName}
               onChange={(e) => setConfirmName(e.target.value)}
               placeholder={org?.name}

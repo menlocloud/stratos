@@ -1,14 +1,15 @@
+import { useMemo } from "react"
 import { useNavigate } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { Download, FileText, Receipt } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
 import { fmtDate, fmtDateTime, fmtMoney } from "@/lib/format"
@@ -28,6 +29,7 @@ export async function downloadPdf(path: string, filename: string) {
   URL.revokeObjectURL(url)
 }
 
+
 export default function HistoryPage() {
   const pid = useProjectId()
   const { data: summary, isLoading } = useBillingSummary(pid)
@@ -35,7 +37,11 @@ export default function HistoryPage() {
 
   return (
     <>
-      <PageHeader title="Billing history" description="Bills and payment transactions on this billing profile." />
+      <PageHeader
+        title="Billing history"
+        eyebrow="Billing"
+        description="Bills and payment transactions on this billing profile."
+      />
       {isLoading || !bp ? (
         <Skeleton className="h-64" />
       ) : (
@@ -67,48 +73,67 @@ function BillsTab({ pid, bp }: { pid: string; bp: string }) {
     queryFn: () => apiFetch<Bill[]>(`/bill/${bp}`),
   })
 
-  if (isLoading) return <Skeleton className="h-64" />
-  if (error) return <ErrorPanel message={(error as Error).message} />
-  if (!bills?.length) {
+  const columns = useMemo<ColumnDef<Bill, any>[]>(
+    () => [
+      {
+        id: "created",
+        accessorFn: (b) => b.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => <span className="text-sm">{fmtDate(getValue())}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (b) => b.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "net",
+        accessorFn: (b) => b.netAmount ?? 0,
+        header: sortableRightHeader("Net"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono tabular-nums">
+            {fmtMoney(row.original.netAmount, row.original.invoiceCurrency)}
+          </div>
+        ),
+      },
+      {
+        id: "gross",
+        accessorFn: (b) => b.grossAmount ?? 0,
+        header: sortableRightHeader("Gross"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono tabular-nums">
+            {fmtMoney(row.original.grossAmount, row.original.invoiceCurrency)}
+          </div>
+        ),
+      },
+      {
+        id: "unpaid",
+        accessorFn: (b) => b.unpaidGrossAmount ?? 0,
+        header: sortableRightHeader("Unpaid"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono tabular-nums">
+            {fmtMoney(row.original.unpaidGrossAmount, row.original.invoiceCurrency)}
+          </div>
+        ),
+      },
+    ],
+    [],
+  )
+
+  if (!isLoading && !error && !bills?.length) {
     return <EmptyState icon={FileText} title="No bills yet" hint="Bills appear here once usage is charged." />
   }
   return (
-    <Card className="overflow-hidden py-0">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Created</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead className="text-right">Net</TableHead>
-            <TableHead className="text-right">Gross</TableHead>
-            <TableHead className="text-right">Unpaid</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {bills.map((b) => (
-            <TableRow
-              key={b.id}
-              className="cursor-pointer"
-              onClick={() => navigate(`/p/${pid}/billing/history/bills/${b.id}`)}
-            >
-              <TableCell>{fmtDate(b.createdAt)}</TableCell>
-              <TableCell>
-                <StatusBadge status={b.status} />
-              </TableCell>
-              <TableCell className="text-right font-mono tabular-nums">
-                {fmtMoney(b.netAmount, b.invoiceCurrency)}
-              </TableCell>
-              <TableCell className="text-right font-mono tabular-nums">
-                {fmtMoney(b.grossAmount, b.invoiceCurrency)}
-              </TableCell>
-              <TableCell className="text-right font-mono tabular-nums">
-                {fmtMoney(b.unpaidGrossAmount, b.invoiceCurrency)}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </Card>
+    <DataTable
+      columns={columns}
+      data={bills}
+      isLoading={isLoading}
+      error={error as Error | null}
+      pageSize={25}
+      onRowClick={(b) => navigate(`/p/${pid}/billing/history/bills/${b.id}`)}
+      getRowId={(b) => b.id}
+    />
   )
 }
 
@@ -120,55 +145,78 @@ function TransactionsTab({ bp }: { bp: string }) {
     queryFn: () => apiFetch<Transaction[]>(`/collect-transactions?billingProfileId=${bp}`),
   })
 
-  if (isLoading) return <Skeleton className="h-64" />
-  if (error) return <ErrorPanel message={(error as Error).message} />
-  if (!txns?.length) {
+  const columns = useMemo<ColumnDef<Transaction, any>[]>(
+    () => [
+      {
+        id: "date",
+        accessorFn: (t) => t.createdAt ?? "",
+        header: sortableHeader("Date"),
+        cell: ({ getValue }) => <span className="text-sm">{fmtDateTime(getValue())}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (t) => t.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "amount",
+        accessorFn: (t) => t.grossAmount ?? 0,
+        header: sortableRightHeader("Amount"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono tabular-nums">
+            {fmtMoney(row.original.grossAmount, row.original.currency)}
+          </div>
+        ),
+      },
+      {
+        id: "externalId",
+        accessorFn: (t) => (t.externalId as string) ?? t.externalInvoiceId ?? "",
+        header: "External ID",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "receipt",
+        header: () => <div className="text-right">Receipt</div>,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const t = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Download receipt"
+                onClick={() =>
+                  downloadPdf(
+                    `/collect-transactions/${bp}/download/${t.id}`,
+                    `${t.externalInvoiceId ?? t.id}.pdf`,
+                  ).catch((e: Error) => toast.error(e.message))
+                }
+              >
+                <Download className="size-4" />
+              </Button>
+            </div>
+          )
+        },
+      },
+    ],
+    [bp],
+  )
+
+  if (!isLoading && !error && !txns?.length) {
     return <EmptyState icon={Receipt} title="No transactions yet" hint="Deposits and bill payments appear here." />
   }
   return (
-    <Card className="overflow-hidden py-0">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Date</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead className="text-right">Amount</TableHead>
-            <TableHead>External ID</TableHead>
-            <TableHead className="text-right">Receipt</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {txns.map((t) => (
-            <TableRow key={t.id}>
-              <TableCell>{fmtDateTime(t.createdAt)}</TableCell>
-              <TableCell>
-                <StatusBadge status={t.status} />
-              </TableCell>
-              <TableCell className="text-right font-mono tabular-nums">
-                {fmtMoney(t.grossAmount, t.currency)}
-              </TableCell>
-              <TableCell className="font-mono text-xs text-muted-foreground">
-                {(t.externalId as string) ?? t.externalInvoiceId ?? "—"}
-              </TableCell>
-              <TableCell className="text-right">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    downloadPdf(
-                      `/collect-transactions/${bp}/download/${t.id}`,
-                      `${t.externalInvoiceId ?? t.id}.pdf`,
-                    ).catch((e: Error) => toast.error(e.message))
-                  }
-                >
-                  <Download className="size-4" />
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </Card>
+    <DataTable
+      columns={columns}
+      data={txns}
+      isLoading={isLoading}
+      error={error as Error | null}
+      getRowId={(t) => t.id}
+    />
   )
 }
 
@@ -181,47 +229,70 @@ function AccountCreditsTab({ bp }: { bp: string }) {
     queryFn: () => apiFetch<Transaction[]>(`/account-credit-transactions?billingProfileId=${bp}`),
   })
 
-  if (isLoading) return <Skeleton className="h-64" />
-  if (error) return <ErrorPanel message={(error as Error).message} />
-  if (!txns?.length) {
-    return <EmptyState icon={Receipt} title="No account-credit transactions" hint="Deposits and refunds appear here." />
+  const columns = useMemo<ColumnDef<Transaction, any>[]>(
+    () => [
+      {
+        id: "date",
+        accessorFn: (t) => t.createdAt ?? "",
+        header: sortableHeader("Date"),
+        cell: ({ getValue }) => <span className="text-sm">{fmtDateTime(getValue())}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (t) => t.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "amount",
+        accessorFn: (t) => t.amount ?? 0,
+        header: sortableRightHeader("Amount"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono tabular-nums">
+            {fmtMoney(row.original.amount, row.original.currency)}
+          </div>
+        ),
+      },
+      {
+        id: "gross",
+        accessorFn: (t) => t.grossAmount ?? 0,
+        header: sortableRightHeader("Gross"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono tabular-nums">
+            {fmtMoney(row.original.grossAmount, row.original.currency)}
+          </div>
+        ),
+      },
+      {
+        id: "currency",
+        accessorFn: (t) => t.currency ?? "",
+        header: "Currency",
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "externalId",
+        accessorFn: (t) => (t.externalId as string) ?? t.externalInvoiceId ?? "",
+        header: "External ID",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+    ],
+    [],
+  )
+
+  if (!isLoading && !error && !txns?.length) {
+    return (
+      <EmptyState icon={Receipt} title="No account-credit transactions" hint="Deposits and refunds appear here." />
+    )
   }
   return (
-    <Card className="overflow-hidden py-0">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Date</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead className="text-right">Amount</TableHead>
-            <TableHead className="text-right">Gross</TableHead>
-            <TableHead>Currency</TableHead>
-            <TableHead>External ID</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {txns.map((t) => (
-            <TableRow key={t.id}>
-              <TableCell>{fmtDateTime(t.createdAt)}</TableCell>
-              <TableCell>
-                <StatusBadge status={t.status} />
-              </TableCell>
-              <TableCell className="text-right font-mono tabular-nums">{fmtMoney(t.amount, t.currency)}</TableCell>
-              <TableCell className="text-right font-mono tabular-nums">
-                {fmtMoney(t.grossAmount, t.currency)}
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">{t.currency ?? "—"}</TableCell>
-              <TableCell className="font-mono text-xs text-muted-foreground">
-                {(t.externalId as string) ?? t.externalInvoiceId ?? "—"}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </Card>
+    <DataTable
+      columns={columns}
+      data={txns}
+      isLoading={isLoading}
+      error={error as Error | null}
+      getRowId={(t) => t.id}
+    />
   )
-}
-
-function ErrorPanel({ message }: { message: string }) {
-  return <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">{message}</div>
 }

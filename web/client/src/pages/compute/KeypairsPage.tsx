@@ -1,21 +1,23 @@
 // Keypairs: list KEYPAIR cloud resources, create (data{name, publicKey?} per
 // internal/cloud/providers/write.go TypeKeypair; a nova-generated private key comes back
 // once as ephemeralData.privateKey) and delete with confirm.
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Copy, Download, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Copy, Download, KeyRound, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
@@ -92,14 +94,68 @@ export default function KeypairsPage() {
     URL.revokeObjectURL(url)
   }
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => keypairName(r),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "fingerprint",
+        accessorFn: (r) => keypairFingerprint(r),
+        header: "Fingerprint",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue()}</span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${keypairName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Keypairs"
+        eyebrow="Compute"
         description="SSH keypairs injected into servers at boot."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -109,11 +165,7 @@ export default function KeypairsPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
-      ) : !data?.length ? (
+      {!isLoading && !error && !data?.length ? (
         <EmptyState
           icon={KeyRound}
           title="No keypairs yet"
@@ -125,36 +177,13 @@ export default function KeypairsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Fingerprint</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-16" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">{keypairName(r)}</TableCell>
-                  <TableCell className="font-mono text-sm text-muted-foreground">
-                    {keypairFingerprint(r)}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" onClick={() => setToDelete(r)}>
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search keypairs…"
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -178,7 +207,7 @@ export default function KeypairsPage() {
                 onChange={(e) => setPublicKey(e.target.value)}
                 placeholder="ssh-ed25519 AAAA…"
                 rows={4}
-                className="font-mono text-xs"
+                className="max-h-40 font-mono text-xs"
               />
             </div>
           </div>
@@ -201,7 +230,7 @@ export default function KeypairsPage() {
               This is the only time the private key is shown — copy or download it now.
             </DialogDescription>
           </DialogHeader>
-          <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-all">
+          <pre className="max-h-64 overflow-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs whitespace-pre-wrap break-all">
             {privateKey?.key}
           </pre>
           <DialogFooter>

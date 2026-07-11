@@ -1,12 +1,13 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { FileCode2, Layers, MoreHorizontal, Pause, Play, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -118,14 +119,74 @@ export default function StacksPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => stackName(r),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (r) => stackStatus(r) ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "created",
+        accessorFn: (r) => (r.data?.stack?.creation_time as string) ?? r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${stackName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setDetailsFor(r)}>
+                    <FileCode2 className="size-4" /> Details
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => act.mutate({ id: r.id, action: "SUSPEND_STACK" })}>
+                    <Pause className="size-4" /> Suspend
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => act.mutate({ id: r.id, action: "RESUME_STACK" })}>
+                    <Play className="size-4" /> Resume
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // act.mutate and the dialog setters are stable references.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Stacks"
+        eyebrow="Platform"
         description="Heat orchestration stacks deployed from HOT templates."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh stacks">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -135,11 +196,7 @@ export default function StacksPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : isError ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
-      ) : !data?.length ? (
+      {!isLoading && !isError && !data?.length ? (
         <EmptyState
           icon={Layers}
           title="No stacks yet"
@@ -151,67 +208,23 @@ export default function StacksPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-12" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">
-                    <button className="hover:underline" onClick={() => setDetailsFor(r)}>
-                      {stackName(r)}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={stackStatus(r)} />
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo((r.data?.stack?.creation_time as string) ?? r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm" aria-label="Stack actions">
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setDetailsFor(r)}>
-                          <FileCode2 className="size-4" /> Details
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => act.mutate({ id: r.id, action: "SUSPEND_STACK" })}>
-                          <Pause className="size-4" /> Suspend
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => act.mutate({ id: r.id, action: "RESUME_STACK" })}>
-                          <Play className="size-4" /> Resume
-                        </DropdownMenuItem>
-                        <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
-                          <Trash2 className="size-4" /> Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={(error as Error | null) ?? null}
+          onRowClick={(r) => setDetailsFor(r)}
+          getRowId={(r) => r.id}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Create stack</DialogTitle>
             <DialogDescription>Paste a Heat orchestration template (HOT, YAML).</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-2">
+          <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto py-2 pr-1">
             <div className="grid gap-2">
               <Label htmlFor="stack-name">Name</Label>
               <Input id="stack-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="my-stack" />
@@ -224,7 +237,8 @@ export default function StacksPage() {
                 onChange={(e) => setTemplate(e.target.value)}
                 placeholder={TEMPLATE_PLACEHOLDER}
                 rows={12}
-                className="font-mono text-xs"
+                spellCheck={false}
+                className="max-h-[45vh] min-h-48 resize-y font-mono text-xs leading-relaxed"
               />
             </div>
           </div>
@@ -318,7 +332,8 @@ function StackDetailsSheet({
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="overflow-y-auto sm:max-w-2xl">
         <SheetHeader>
-          <SheetTitle>{stackName(stack)}</SheetTitle>
+          <div className="text-eyebrow">Stack</div>
+          <SheetTitle className="font-display">{stackName(stack)}</SheetTitle>
           <SheetDescription>Events, template and resources of this stack.</SheetDescription>
         </SheetHeader>
 
@@ -340,32 +355,34 @@ function StackDetailsSheet({
               ) : !events.data?.result?.length ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">No events recorded.</p>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Resource</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Time</TableHead>
-                      <TableHead>Reason</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {events.data.result.map((e, i) => (
-                      <TableRow key={e.id ?? i}>
-                        <TableCell className="font-medium">{e.resource_name ?? "—"}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={e.resource_status} />
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {fmtDateTime(e.event_time ?? e.time)}
-                        </TableCell>
-                        <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
-                          {e.resource_status_reason ?? "—"}
-                        </TableCell>
+                <div className="overflow-hidden rounded-lg border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Resource</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Time</TableHead>
+                        <TableHead>Reason</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {events.data.result.map((e, i) => (
+                        <TableRow key={e.id ?? i}>
+                          <TableCell className="font-medium">{e.resource_name ?? "—"}</TableCell>
+                          <TableCell>
+                            <StatusBadge status={e.resource_status} />
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {fmtDateTime(e.event_time ?? e.time)}
+                          </TableCell>
+                          <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
+                            {e.resource_status_reason ?? "—"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               )}
             </TabsContent>
 
@@ -379,7 +396,7 @@ function StackDetailsSheet({
               ) : !rawTemplate ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">No template returned.</p>
               ) : (
-                <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 font-mono text-xs">
+                <pre className="max-h-[60vh] overflow-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs leading-relaxed">
                   {prettyTemplate}
                 </pre>
               )}
@@ -395,28 +412,30 @@ function StackDetailsSheet({
               ) : !resources.data?.result?.length ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">No resources in this stack.</p>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {resources.data.result.map((res, i) => (
-                      <TableRow key={res.physical_resource_id ?? i}>
-                        <TableCell className="font-medium">
-                          {res.resource_name ?? res.logical_resource_id ?? "—"}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{res.resource_type ?? "—"}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={res.resource_status} />
-                        </TableCell>
+                <div className="overflow-hidden rounded-lg border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Status</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {resources.data.result.map((res, i) => (
+                        <TableRow key={res.physical_resource_id ?? i}>
+                          <TableCell className="font-medium">
+                            {res.resource_name ?? res.logical_resource_id ?? "—"}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">{res.resource_type ?? "—"}</TableCell>
+                          <TableCell>
+                            <StatusBadge status={res.resource_status} />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               )}
             </TabsContent>
           </Tabs>

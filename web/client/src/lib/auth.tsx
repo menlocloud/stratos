@@ -2,10 +2,11 @@
 // After the first sign-in the platform user is initialized with
 // POST /user (form field id_token) — idempotent get-or-create.
 import { useEffect, useRef } from "react"
-import { AuthProvider, useAuth, type AuthProviderProps } from "react-oidc-context"
+import { AuthProvider, useAuth as useOidcAuth, type AuthProviderProps } from "react-oidc-context"
 import { WebStorageStateStore } from "oidc-client-ts"
 import { config } from "./config"
 import { apiFetchEnvelope, setTokenProvider } from "./api"
+import { MOCK_ENABLED, mockAuthState } from "@/mocks/enabled"
 
 const oidcConfig: AuthProviderProps = {
   authority: config.authIssuer,
@@ -21,8 +22,15 @@ const oidcConfig: AuthProviderProps = {
 }
 
 export function StratosAuthProvider({ children }: { children: React.ReactNode }) {
+  if (MOCK_ENABLED) return <>{children}</>
   return <AuthProvider {...oidcConfig}>{children}</AuthProvider>
 }
+
+// In mock mode there is no OIDC provider; useAuth resolves to a canned
+// always-authenticated session (see src/mocks/).
+export const useAuth: typeof useOidcAuth = MOCK_ENABLED
+  ? (() => mockAuthState as unknown as ReturnType<typeof useOidcAuth>)
+  : useOidcAuth
 
 // Wires the bearer token into the API client + runs the one-time user init.
 export function AuthBridge({ children }: { children: React.ReactNode }) {
@@ -44,5 +52,3 @@ export function AuthBridge({ children }: { children: React.ReactNode }) {
 
   return <>{children}</>
 }
-
-export { useAuth }

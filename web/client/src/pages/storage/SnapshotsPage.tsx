@@ -1,12 +1,13 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { Camera, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -15,8 +16,6 @@ import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
@@ -33,6 +32,7 @@ export default function SnapshotsPage() {
   const qc = useQueryClient()
   const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "VOLUME_SNAPSHOT")
   const volumes = useCloudList(pid, "VOLUME")
+  const volumesData = volumes.data
 
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
@@ -69,20 +69,82 @@ export default function SnapshotsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  const volumeName = (extId?: string) => {
-    if (!extId) return "—"
-    const v = volumes.data?.find((r) => r.externalId === extId)
-    return (v?.data?.volume?.name as string) ?? v?.name ?? extId
-  }
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(() => {
+    const volumeName = (extId?: string) => {
+      if (!extId) return "—"
+      const v = volumesData?.find((r) => r.externalId === extId)
+      return (v?.data?.volume?.name as string) ?? v?.name ?? extId
+    }
+    return [
+      {
+        id: "name",
+        accessorFn: (r) => snap(r).name || r.name || r.id,
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (r) => (snap(r).status as string) ?? r.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "size",
+        accessorFn: (r) => (snap(r).size as number) ?? null,
+        header: sortableHeader("Size"),
+        cell: ({ getValue }) => (
+          <span className="text-sm tabular-nums">{getValue() != null ? `${getValue()} GB` : "—"}</span>
+        ),
+      },
+      {
+        id: "volume",
+        accessorFn: (r) => volumeName(snap(r).volume_id as string),
+        header: "Volume",
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue()}</span>,
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="text-right">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Delete ${snap(row.original).name || row.original.id}`}
+              onClick={() => setDeleteTarget(row.original)}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
+        ),
+      },
+    ]
+  }, [volumesData])
 
   return (
     <>
       <PageHeader
         title="Volume snapshots"
+        eyebrow="Storage"
         description="Point-in-time copies of your block-storage volumes."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              aria-label="Refresh snapshots"
+            >
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -92,11 +154,7 @@ export default function SnapshotsPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : isError ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
-      ) : !data?.length ? (
+      {!isLoading && !isError && !data?.length ? (
         <EmptyState
           icon={Camera}
           title="No snapshots yet"
@@ -108,42 +166,13 @@ export default function SnapshotsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Size</TableHead>
-                <TableHead>Volume</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-10" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">{snap(r).name || r.name || r.id}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={(snap(r).status as string) ?? r.status} />
-                  </TableCell>
-                  <TableCell className="text-sm">{snap(r).size != null ? `${snap(r).size} GB` : "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {volumeName(snap(r).volume_id as string)}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(r)}>
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={isError ? (error as Error) : null}
+          searchPlaceholder="Search snapshots…"
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

@@ -1,20 +1,20 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
+import { Link } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { Column, ColumnDef } from "@tanstack/react-table"
 import { Check, Landmark, X } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { useAdminList } from "@/lib/hooks"
 import { fmtDateTime, fmtMoney } from "@/lib/format"
@@ -31,6 +31,18 @@ function rowId(r: Row): string {
 }
 
 type PendingDecision = { id: string; action: "approve" | "reject" } | null
+
+/** Right-aligned variant of sortableHeader for numeric (amount) columns. */
+function sortableRightHeader<TData>(label: string) {
+  const Inner = sortableHeader<TData>(label)
+  return function SortableRightHeader({ column }: { column: Column<TData, unknown> }) {
+    return (
+      <div className="text-right">
+        <Inner column={column} />
+      </div>
+    )
+  }
+}
 
 export default function BankTransfersPage() {
   const qc = useQueryClient()
@@ -54,15 +66,97 @@ export default function BankTransfersPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<Row, any>[]>(
+    () => [
+      {
+        id: "date",
+        accessorFn: (t) => (t.createdAt as string) ?? "",
+        header: sortableHeader("Date"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDateTime(getValue())}</span>,
+      },
+      {
+        id: "profile",
+        accessorFn: (t) => (t.billingProfileId as string) ?? "",
+        header: "Billing profile",
+        cell: ({ getValue }) =>
+          getValue() ? (
+            <Link
+              className="inline-block py-1 font-mono text-xs hover:underline"
+              to={`/clients/billing-profiles/${getValue()}`}
+            >
+              {getValue()}
+            </Link>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground">—</span>
+          ),
+      },
+      {
+        id: "amount",
+        accessorFn: (t) => Number(t.amount ?? 0),
+        header: sortableRightHeader("Amount"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono text-sm tabular-nums">
+            {fmtMoney(row.original.amount, row.original.currency)}
+          </div>
+        ),
+      },
+      {
+        id: "reference",
+        accessorFn: (t) => (t.referenceNumber as string) ?? "",
+        header: "Reference",
+        cell: ({ getValue }) => <span className="font-mono text-xs">{getValue() || "—"}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (t) => (t.status as string) ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const t = row.original
+          const id = rowId(t)
+          if (t.status !== "PENDING") return null
+          return (
+            <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+              <Button
+                size="sm"
+                disabled={decide.isPending}
+                onClick={() => setPending({ id, action: "approve" })}
+              >
+                <Check className="size-4" /> Approve
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={decide.isPending}
+                onClick={() => setPending({ id, action: "reject" })}
+              >
+                <X className="size-4" /> Reject
+              </Button>
+            </div>
+          )
+        },
+      },
+    ],
+    // decide.isPending drives the disabled state on the row buttons.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [decide.isPending],
+  )
+
   return (
     <>
       <PageHeader
         title="Bank transfers"
+        eyebrow="Clients"
         description="When a customer deposits via a Bank Transfer payment gateway, a pending transfer with a reference number appears here for an operator to approve (credits the account) or reject. Select a Bank Transfer gateway above; if none exists, install one under Integrations."
         actions={
           gateways.length > 1 ? (
             <Select value={gw} onValueChange={setSelected}>
-              <SelectTrigger className="w-64">
+              <SelectTrigger className="w-64" aria-label="Bank-transfer gateway">
                 <SelectValue placeholder="Select a gateway" />
               </SelectTrigger>
               <SelectContent>
@@ -77,82 +171,32 @@ export default function BankTransfersPage() {
         }
       />
 
-      {integrations.isLoading || (!!gw && transfers.isLoading) ? (
-        <Skeleton className="h-64" />
-      ) : integrations.isError ? (
+      {integrations.isError ? (
         <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
           {(integrations.error as Error).message}
         </div>
-      ) : !gw ? (
+      ) : !integrations.isLoading && !gw ? (
         <EmptyState
           icon={Landmark}
           title="Select a bank-transfer gateway"
           hint="No Bank Transfer gateway is configured. Install one under Integrations to start receiving bank-transfer deposits here."
         />
-      ) : transfers.isError ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-          {(transfers.error as Error).message}
-        </div>
-      ) : !rows.length ? (
+      ) : !integrations.isLoading && !transfers.isLoading && !transfers.isError && !rows.length ? (
         <EmptyState
           icon={Landmark}
           title="No pending transfers for this gateway"
           hint="When a customer deposits via this Bank Transfer gateway, a pending transfer with its reference number appears here to approve or reject."
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date</TableHead>
-                <TableHead>Billing profile</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
-                <TableHead>Reference</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((t) => {
-                const id = rowId(t)
-                return (
-                  <TableRow key={id}>
-                    <TableCell className="text-sm text-muted-foreground">{fmtDateTime(t.createdAt)}</TableCell>
-                    <TableCell className="font-mono text-xs">{t.billingProfileId ?? "—"}</TableCell>
-                    <TableCell className="text-right font-mono text-sm tabular-nums">
-                      {fmtMoney(t.amount, t.currency)}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{t.referenceNumber ?? "—"}</TableCell>
-                    <TableCell>
-                      <StatusBadge status={t.status} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {t.status === "PENDING" && (
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            disabled={decide.isPending}
-                            onClick={() => setPending({ id, action: "approve" })}
-                          >
-                            <Check className="size-4" /> Approve
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={decide.isPending}
-                            onClick={() => setPending({ id, action: "reject" })}
-                          >
-                            <X className="size-4" /> Reject
-                          </Button>
-                        </div>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={rows}
+          isLoading={integrations.isLoading || transfers.isLoading}
+          error={transfers.isError ? (transfers.error as Error) : null}
+          searchPlaceholder="Search transfers…"
+          getRowId={rowId}
+          initialSorting={[{ id: "date", desc: true }]}
+        />
       )}
 
       <Dialog open={!!pending} onOpenChange={(o) => !o && setPending(null)}>

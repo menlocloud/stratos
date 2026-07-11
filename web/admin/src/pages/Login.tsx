@@ -1,25 +1,77 @@
+import { useEffect } from "react"
+import { BookOpen } from "lucide-react"
 import { useAuth } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
 
+// Public landing: one job — sign in. Same split layout as the customer
+// console's login, differentiated for the operations plane: the left visual is
+// the Menlo pixel-mosaic hero pattern over a dark textured panel (the console
+// gets the space photograph), and the chip reads "admin". Fully token-driven;
+// works in both themes (the panel is locally forced dark via the .dark class
+// so its tokens re-resolve).
 export function LoginPage() {
   const auth = useAuth()
+
+  useEffect(() => {
+    document.title = "Stratos Admin"
+  }, [])
+
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-[#1e1b4b] px-6 text-white">
-      <div className="w-full max-w-sm">
-        <h1 className="font-display text-4xl font-semibold tracking-tight">
-          Stratos<span className="text-[#f59e0b]">.</span> <span className="text-lg font-normal text-white/50">admin</span>
-        </h1>
-        <p className="mt-3 text-sm text-white/60">Operate the platform: customers, billing, cloud providers.</p>
-        <div className="horizon mt-6" />
-        <Button
-          className="mt-8 w-full bg-[#f59e0b] text-[#2a1a02] hover:bg-[#d97706]"
-          size="lg"
-          disabled={auth.isLoading}
-          onClick={() => void auth.signinRedirect()}
-        >
-          {auth.isLoading ? "Checking session…" : "Sign in"}
-        </Button>
+    <main className="flex min-h-screen w-full gap-3 bg-background p-3 text-foreground md:gap-5 md:p-5">
+      {/* Brand visual — dropped below lg */}
+      <div className="dark relative hidden overflow-hidden rounded-2xl border bg-background bg-texture-subtle text-foreground lg:block lg:w-[55%] xl:w-[58%]">
+        <img
+          src="/brand/hero-pixel-pattern.png"
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="h-full w-full object-cover opacity-90"
+        />
+        <div className="absolute bottom-5 left-5 flex items-center gap-2 rounded-full bg-black/40 px-3 py-1.5 backdrop-blur">
+          <span className="status-dot status-dot-ok" />
+          <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-white/80">
+            Control plane online
+          </span>
+        </div>
       </div>
-    </div>
+
+      {/* Sign-in column */}
+      <div className="flex flex-1 items-center justify-center px-4 py-8">
+        <div className="flex w-full max-w-md flex-col items-center gap-10 text-center">
+          <div className="flex items-center gap-2.5">
+            <img src="/brand/menlo-logo.svg" alt="Menlo" className="h-6 w-auto" />
+            <span className="text-eyebrow rounded border px-1.5 py-0.5">admin</span>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <h1 className="font-display text-4xl font-medium tracking-tight md:text-5xl">
+              Stratos operations<span className="text-primary">.</span>
+            </h1>
+            <p className="text-lg text-muted-foreground md:text-xl">
+              Customers, billing, catalog and cloud providers — the Stratos control plane.
+            </p>
+          </div>
+
+          <div className="flex w-full flex-col gap-3">
+            <Button
+              size="lg"
+              className="w-full"
+              disabled={auth.isLoading}
+              onClick={() => void auth.signinRedirect()}
+            >
+              {auth.isLoading ? "Checking session…" : "Sign in"}
+            </Button>
+            <Button asChild variant="outline" size="lg" className="w-full">
+              <a href="/docs" target="_blank" rel="noopener noreferrer">
+                <BookOpen className="size-5" /> View docs
+              </a>
+            </Button>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Operator access only — sign in with your admin account.
+            </p>
+          </div>
+        </div>
+      </div>
+    </main>
   )
 }

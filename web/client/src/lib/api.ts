@@ -28,7 +28,7 @@ export function setTokenProvider(fn: () => string | undefined) {
 
 export type CloudScope = { serviceId: string; region: string }
 
-type ReqOpts = {
+export type ReqOpts = {
   method?: string
   body?: unknown
   rawBody?: BodyInit
@@ -39,12 +39,22 @@ type ReqOpts = {
   raw?: boolean
 }
 
+// Mock mode (frontend dev without a backend): src/mocks installs a handler at
+// startup when VITE_MOCK=1 and every request short-circuits through it. The
+// handler may throw ApiError to simulate failures.
+export type MockHandler = (path: string, opts: ReqOpts) => Promise<Envelope<unknown>>
+let mockHandler: MockHandler | null = null
+export function setMockHandler(fn: MockHandler) {
+  mockHandler = fn
+}
+
 export async function apiFetch<T = unknown>(path: string, opts: ReqOpts = {}): Promise<T> {
   const res = await apiFetchEnvelope<T>(path, opts)
   return res.data as T
 }
 
 export async function apiFetchEnvelope<T = unknown>(path: string, opts: ReqOpts = {}): Promise<Envelope<T>> {
+  if (mockHandler) return (await mockHandler(path, opts)) as Envelope<T>
   const headers: Record<string, string> = { ...(opts.headers ?? {}) }
   const token = tokenProvider()
   if (token) headers["Authorization"] = `Bearer ${token}`
@@ -89,6 +99,7 @@ export async function apiFetchEnvelope<T = unknown>(path: string, opts: ReqOpts 
 
 // Raw endpoints that return the object directly (no envelope), e.g. /account/details.
 export async function apiFetchRaw<T = unknown>(path: string, opts: ReqOpts = {}): Promise<T> {
+  if (mockHandler) return (await mockHandler(path, opts)).data as T
   const headers: Record<string, string> = { ...(opts.headers ?? {}) }
   const token = tokenProvider()
   if (token) headers["Authorization"] = `Bearer ${token}`

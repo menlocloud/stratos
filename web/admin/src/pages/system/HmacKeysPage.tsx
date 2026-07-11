@@ -1,18 +1,20 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Check, Copy, KeyRound, Plus } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table"
+import { Check, Copy, KeyRound, MoreHorizontal, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { fmtDateTime } from "@/lib/format"
 import { useAdminList } from "@/lib/hooks"
@@ -48,7 +50,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
           }}
           aria-label={`Copy ${label}`}
         >
-          {copied ? <Check className="size-4 text-ok" /> : <Copy className="size-4" />}
+          {copied ? <Check className="size-4 text-primary" /> : <Copy className="size-4" />}
         </Button>
       </div>
     </div>
@@ -86,10 +88,57 @@ export default function HmacKeysPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
+  const columns = useMemo<ColumnDef<HmacKey, any>[]>(
+    () => [
+      {
+        id: "id",
+        accessorFn: (k) => k.id,
+        header: sortableHeader("Key ID (public)"),
+        cell: ({ getValue }) => <span className="font-mono text-xs">{getValue()}</span>,
+      },
+      {
+        id: "description",
+        accessorFn: (k) => k.description ?? "",
+        header: "Description",
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "created",
+        accessorFn: (k) => k.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDateTime(getValue())}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="text-right">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={`Actions for key ${row.original.id}`}>
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem variant="destructive" onClick={() => setDeleting(row.original)}>
+                  <Trash2 className="size-4" /> Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ),
+      },
+    ],
+    // useState setters are stable; formatters are module scope.
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="API keys"
+        eyebrow="System"
         description="SigV4 access-key pairs for the machine-to-machine admin API (/admin-api/v1). The secret is shown once at creation and never again."
         actions={
           <Button size="sm" onClick={() => setGenOpen(true)}>
@@ -97,11 +146,7 @@ export default function HmacKeysPage() {
           </Button>
         }
       />
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : items.length === 0 ? (
+      {!isLoading && !error && items.length === 0 ? (
         <EmptyState
           icon={KeyRound}
           title="No API keys yet"
@@ -113,32 +158,14 @@ export default function HmacKeysPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Key ID (public)</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-24" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((k) => (
-                <TableRow key={k.id}>
-                  <TableCell className="font-mono text-xs">{k.id}</TableCell>
-                  <TableCell className="text-muted-foreground">{k.description || "—"}</TableCell>
-                  <TableCell>{fmtDateTime(k.createdAt)}</TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setDeleting(k)}>
-                      Delete
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={items}
+          isLoading={isLoading}
+          error={error as Error | null}
+          searchPlaceholder="Search keys…"
+          getRowId={(k) => k.id}
+        />
       )}
 
       {/* Generate dialog */}
