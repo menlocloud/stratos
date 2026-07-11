@@ -80,6 +80,26 @@ on("POST /project/:pid/cloud/action", ({ opts }) => {
 
 // --- Per-resource actions ----------------------------------------------------
 
+// Server detail fixtures: instance action log (LIST_EVENTS) + nova console output.
+const serverEvents = [
+  { date: "2026-07-10T08:12:00Z", action: "reboot", message: "", requestId: "req-6f2a1c", userId: "usr-dev-001" },
+  { date: "2026-06-28T14:03:00Z", action: "stop", message: "", requestId: "req-b81d90", userId: "usr-dev-001" },
+  { date: "2026-06-12T16:30:00Z", action: "create", message: "", requestId: "req-3c47ae", userId: "usr-dev-001" },
+]
+
+const consoleOutput = [
+  "[    0.000000] Linux version 6.8.0-45-generic (buildd@lcy02) (gcc 13.2.0)",
+  "[    0.004521] Command line: BOOT_IMAGE=/boot/vmlinuz root=LABEL=cloudimg-rootfs ro console=ttyS0",
+  "[    1.284712] systemd[1]: Detected virtualization kvm.",
+  "[    2.031870] cloud-init[812]: Cloud-init v. 24.1 running 'init' at Thu, 12 Jun 2026 16:30:41 +0000.",
+  "[    2.845003] cloud-init[812]: ci-info: | eth0  | True | 10.0.0.11 | 255.255.255.0 | global |",
+  "[    4.190338] cloud-init[1043]: Cloud-init v. 24.1 finished. Datasource DataSourceOpenStack. Up 4.18 seconds",
+  "",
+  "Ubuntu 24.04 LTS web-01 ttyS0",
+  "",
+  "web-01 login:",
+].join("\n")
+
 on("POST /project/:pid/cloud/:resourceId/action", ({ params, opts }) => {
   const { action, data } = (opts.body ?? {}) as { action?: string; data?: Record<string, any> }
   const r = db.cloud.find((x) => x.id === params.resourceId)
@@ -103,6 +123,11 @@ on("POST /project/:pid/cloud/:resourceId/action", ({ params, opts }) => {
     case "SET_PASSWORD": case "RENAME": return ok()
     case "REMOTECONTROL": return ok({ url: "about:blank" })
     case "ATTACH": case "DETACH": return ok()
+    case "ATTACH_PORT": case "DETACH_PORT": return ok()
+    case "LIST_SECURITY_GROUPS": return ok(db.cloud.filter((x) => x.type === "SECURITY_GROUP"))
+    case "ADD_SECURITY_GROUP": case "REMOVE_SECURITY_GROUP": return ok()
+    case "LIST_EVENTS": return ok(serverEvents)
+    case "SHOW_CONSOLE_OUTPUT": return ok(consoleOutput)
 
     // Volumes
     case "RETYPE": case "EXTEND": return ok()
