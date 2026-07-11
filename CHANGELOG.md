@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Confirming a server resize twice returned `500 internal server error`: the first click finalizes the resize (nova → `ACTIVE`), but the confirm panel stayed visible while the cached status lagged, so a second click sent `confirmResize` to an already-confirmed server and nova's `409` surfaced as a raw 500. The client now treats a `409` on confirm/revert-resize as idempotent success, and the UI hides the confirm/revert buttons as soon as one is clicked. (#28)
+- Confirming a server resize twice returned `500 internal server error`: the first click finalizes the resize (nova → `ACTIVE`), but the confirm panel stayed visible while the cached status lagged, so a second click sent `confirmResize` to an already-confirmed server and nova's `409` surfaced as a raw 500. The client now treats a `409` on confirm/revert-resize as idempotent success, and the UI hides the confirm/revert buttons as soon as one is clicked. (#29)
 - Client cloud-resource audit events (`CLOUD_RESOURCE_CREATE`/`DELETE`/`ACTION`) now record the affected resource's own kind, id, and name — so a bucket (or server, volume, …) create is findable in the audit log by its name. Previously every cloud event was stamped with the project's identity only, so it was logged but appeared as an anonymous project row. (#25)
 - Admin billing-profile **Projects** tab was always empty for greenfield projects: the query matched only a project's own `billingProfileId`, but billing resolves the EFFECTIVE profile (own id, else the owning organization's) and greenfield projects leave the own id blank. The org-fallback leg is now pushed into the query, with an integration test. (#20)
 
