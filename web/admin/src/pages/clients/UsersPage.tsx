@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, RefreshCw, Trash2, Users } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table"
+import { MoreHorizontal, Plus, RefreshCw, Trash2, Users } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -15,14 +16,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
-import { fmtDate } from "@/lib/format"
+import { timeAgo } from "@/lib/format"
 import { useAdminList } from "@/lib/hooks"
+
 
 // GET /admin/user (handler.go listRaw "users") — raw user docs, shaped _id→id.
 export type AdminUser = {
@@ -44,7 +50,6 @@ export default function UsersPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const { data, isLoading, isFetching, error, refetch } = useAdminList<AdminUser>(LIST_PATH)
-  const [q, setQ] = useState("")
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({ email: "", firstName: "", lastName: "" })
   const [projectIds, setProjectIds] = useState<string[]>([])
@@ -54,13 +59,6 @@ export default function UsersPage() {
   const projects = useAdminList<{ id?: string; name?: string }>("/admin/project", createOpen)
 
   const users = data?.data ?? []
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase()
-    if (!needle) return users
-    return users.filter((u) =>
-      [u.email, u.firstName, u.lastName, u.sub].filter(Boolean).join(" ").toLowerCase().includes(needle),
-    )
-  }, [users, q])
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["admin-list", LIST_PATH] })
 
@@ -98,95 +96,122 @@ export default function UsersPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<AdminUser, any>[]>(
+    () => [
+      {
+        id: "email",
+        accessorFn: (u) => u.email ?? "",
+        header: sortableHeader("Email"),
+        cell: ({ row }) => {
+          const u = row.original
+          return u.id ? (
+            <Link
+              to={`/clients/users/${u.id}`}
+              className="inline-block py-1 font-medium hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {u.email ?? "—"}
+            </Link>
+          ) : (
+            <span className="font-medium">{u.email ?? "—"}</span>
+          )
+        },
+      },
+      {
+        id: "name",
+        accessorFn: (u) => userDisplayName(u),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="text-sm">{getValue()}</span>,
+      },
+      {
+        id: "sub",
+        accessorFn: (u) => u.sub ?? "",
+        header: "Sub",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (u) => u.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const u = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${u.email ?? u.sub}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(u)}>
+                    <Trash2 className="size-4" /> Delete user
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Users"
+        eyebrow="Clients"
         description="Every registered client account on the platform."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-              <RefreshCw className={isFetching ? "animate-spin" : ""} />
-              Refresh
+            <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching} aria-label="Refresh">
+              <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus />
-              Create user
+              <Plus className="size-4" /> Create user
             </Button>
           </>
         }
       />
 
-      <div className="mb-4 max-w-sm">
-        <Input placeholder="Search by email, name or sub…" value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
-
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">
-          {(error as Error).message}
-        </div>
-      ) : filtered.length === 0 ? (
+      {!isLoading && !error && users.length === 0 ? (
         <EmptyState
           icon={Users}
-          title={q ? "No users match the search" : "No users yet"}
-          hint={q ? "Try a different query." : "Create the first user to get started."}
+          title="No users yet"
+          hint="Create the first user to get started."
           action={
-            q ? undefined : (
-              <Button size="sm" onClick={() => setCreateOpen(true)}>
-                <Plus />
-                Create user
-              </Button>
-            )
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" /> Create user
+            </Button>
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Email</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Sub</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-10" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((u) => (
-                <TableRow
-                  key={u.id ?? u.sub}
-                  className="cursor-pointer"
-                  onClick={() => u.id && navigate(`/clients/users/${u.id}`)}
-                >
-                  <TableCell className="font-medium">{u.email ?? "—"}</TableCell>
-                  <TableCell>{userDisplayName(u)}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{u.sub ?? "—"}</TableCell>
-                  <TableCell className="text-muted-foreground">{fmtDate(u.createdAt)}</TableCell>
-                  <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Delete user"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setToDelete(u)
-                      }}
-                    >
-                      <Trash2 className="text-muted-foreground" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={users}
+          isLoading={isLoading}
+          error={error as Error | null}
+          searchPlaceholder="Search users…"
+          onRowClick={(u) => u.id && navigate(`/clients/users/${u.id}`)}
+          getRowId={(u) => u.id ?? u.sub ?? u.email ?? ""}
+        />
       )}
 
       {/* Create user */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create user</DialogTitle>
             <DialogDescription>The user is created without a password; set one from their detail page.</DialogDescription>
@@ -198,7 +223,7 @@ export default function UsersPage() {
               createUser.mutate()
             }}
           >
-            <div className="space-y-2">
+            <div className="grid gap-2">
               <Label htmlFor="user-email">Email</Label>
               <Input
                 id="user-email"
@@ -208,8 +233,8 @@ export default function UsersPage() {
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
                 <Label htmlFor="user-first">First name</Label>
                 <Input
                   id="user-first"
@@ -217,7 +242,7 @@ export default function UsersPage() {
                   onChange={(e) => setForm({ ...form, firstName: e.target.value })}
                 />
               </div>
-              <div className="space-y-2">
+              <div className="grid gap-2">
                 <Label htmlFor="user-last">Last name</Label>
                 <Input
                   id="user-last"
@@ -226,7 +251,7 @@ export default function UsersPage() {
                 />
               </div>
             </div>
-            <div className="space-y-2">
+            <div className="grid gap-2">
               <Label>Invite to projects (optional)</Label>
               {(projects.data?.data ?? []).length === 0 ? (
                 <p className="text-xs text-muted-foreground">

@@ -1,13 +1,14 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { ArrowRightLeft, CreditCard, FolderKanban, MoreHorizontal, Pencil, Plus, Trash2, Undo2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -20,9 +21,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { useProjectId, useProjects } from "@/lib/hooks"
+import { cn } from "@/lib/utils"
 import type { BillingSummary, Organization, Project } from "@/lib/types"
 import { useOrg } from "./MembersPage"
 
@@ -149,10 +150,114 @@ export default function ProjectsPage() {
   const bpLabel = (bp: BillingSummary) =>
     `${bp.fullName || bp.id || "Unnamed"}${bp.currency ? ` · ${bp.currency}` : ""}${bp.status ? ` · ${bp.status}` : ""}`
 
+  const cancelDeletionMutate = cancelDeletion.mutate
+  const showMove = orgs.length > 1
+  const columns = useMemo<ColumnDef<Project, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (p) => p.name,
+        header: sortableHeader("Name"),
+        cell: ({ row }) => {
+          const p = row.original
+          const scheduled = p.status === "SCHEDULED_FOR_DELETION"
+          return (
+            <span className={cn("font-medium", scheduled && "text-muted-foreground line-through decoration-muted-foreground/50")}>
+              {p.name}
+            </span>
+          )
+        },
+      },
+      {
+        id: "status",
+        accessorFn: (p) => p.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ row }) => {
+          const p = row.original
+          // Scheduled-for-deletion gets the amber treatment: statusKind would
+          // classify it "muted", which under-signals a project on a timer.
+          return p.status === "SCHEDULED_FOR_DELETION" ? (
+            <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+              <span className="status-dot status-dot-warn" />
+              Scheduled for deletion
+            </span>
+          ) : (
+            <StatusBadge status={p.status} />
+          )
+        },
+      },
+      {
+        id: "id",
+        accessorFn: (p) => p.id,
+        header: "ID",
+        cell: ({ getValue }) => <span className="font-mono text-xs text-muted-foreground">{getValue()}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const p = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${p.name}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setRenaming(p)
+                      setRenameName(p.name)
+                    }}
+                  >
+                    <Pencil className="size-4" /> Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setTargetBp("")
+                      setChangingBilling(p)
+                    }}
+                  >
+                    <CreditCard className="size-4" /> Change billing profile
+                  </DropdownMenuItem>
+                  {showMove && (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setMoveOrg("")
+                        setMovingProj(p)
+                      }}
+                    >
+                      <ArrowRightLeft className="size-4" /> Move to organization
+                    </DropdownMenuItem>
+                  )}
+                  {p.status === "SCHEDULED_FOR_DELETION" ? (
+                    <DropdownMenuItem onClick={() => cancelDeletionMutate(p)}>
+                      <Undo2 className="size-4" /> Cancel deletion
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem variant="destructive" onClick={() => setDeleting(p)}>
+                      <Trash2 className="size-4" /> Delete
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // mutate is referentially stable; the set* dialog openers are stable setters.
+    [showMove, cancelDeletionMutate],
+  )
+
   return (
     <>
       <PageHeader
         title="Projects"
+        eyebrow="Organization"
         description="All projects in this organization."
         actions={
           <Button size="sm" onClick={() => setCreateOpen(true)} disabled={!orgs.length}>
@@ -161,13 +266,7 @@ export default function ProjectsPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
-          {(error as Error).message}
-        </div>
-      ) : !projects?.length ? (
+      {!isLoading && !error && !projects?.length ? (
         <EmptyState
           icon={FolderKanban}
           title="No projects yet"
@@ -179,79 +278,15 @@ export default function ProjectsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>ID</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {projects.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell className="font-medium">
-                    <button className="hover:underline" onClick={() => navigate(`/p/${p.id}/dashboard`)}>
-                      {p.name}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={p.status} />
-                  </TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{p.id}</TableCell>
-                  <TableCell className="text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm">
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setRenaming(p)
-                            setRenameName(p.name)
-                          }}
-                        >
-                          <Pencil className="size-4" /> Rename
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setTargetBp("")
-                            setChangingBilling(p)
-                          }}
-                        >
-                          <CreditCard className="size-4" /> Change billing profile
-                        </DropdownMenuItem>
-                        {orgs.length > 1 && (
-                          <DropdownMenuItem
-                            onClick={() => {
-                              setMoveOrg("")
-                              setMovingProj(p)
-                            }}
-                          >
-                            <ArrowRightLeft className="size-4" /> Move to organization
-                          </DropdownMenuItem>
-                        )}
-                        {p.status === "SCHEDULED_FOR_DELETION" ? (
-                          <DropdownMenuItem onClick={() => cancelDeletion.mutate(p)}>
-                            <Undo2 className="size-4" /> Cancel deletion
-                          </DropdownMenuItem>
-                        ) : (
-                          <DropdownMenuItem variant="destructive" onClick={() => setDeleting(p)}>
-                            <Trash2 className="size-4" /> Delete
-                          </DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={projects}
+          isLoading={isLoading}
+          error={error as Error | null}
+          searchPlaceholder="Search projects…"
+          onRowClick={(p) => navigate(`/p/${p.id}/dashboard`)}
+          getRowId={(p) => p.id}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -260,7 +295,7 @@ export default function ProjectsPage() {
             <DialogTitle>Create project</DialogTitle>
             <DialogDescription>A new project in {org?.name ?? "your organization"}.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="grid gap-4">
             <div>
               <Label className="mb-1.5 block">Project name</Label>
               <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="my-project" />

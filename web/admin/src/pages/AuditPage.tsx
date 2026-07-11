@@ -1,8 +1,15 @@
+// Menlo escape hatch — DOCUMENTED EXCEPTION to the DataTable rule: the audit
+// trail is cursor-paged by the server (paging.nextMarker), so rows arrive in
+// server order and client sorting/filtering would lie about the dataset. It
+// stays a bare styled <Table> on a card surface with an explicit "Load more"
+// cursor walk; only the row presentation is Menlo (mono timestamps, actor
+// chips, StatusBadge outcomes, mono action verbs).
 import { useState } from "react"
 import { useInfiniteQuery } from "@tanstack/react-query"
 import { ScrollText } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
+import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -13,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetchEnvelope } from "@/lib/api"
 import { fmtDateTime } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 type PropertyChange = { field?: string; oldValue?: unknown; newValue?: unknown }
 
@@ -40,13 +48,53 @@ type CursorPaging = { limit?: number; nextMarker?: string; prevMarker?: string }
 
 const PAGE_SIZE = 50
 
+// Identity hues for actor chips — fixed per-actor assignment via a stable
+// hash (Menlo identity-* tokens; full literals so Tailwind emits them).
+const IDENTITY_CHIP = [
+  "bg-identity-1/15 text-identity-1",
+  "bg-identity-2/15 text-identity-2",
+  "bg-identity-3/15 text-identity-3",
+  "bg-identity-4/15 text-identity-4",
+  "bg-identity-5/15 text-identity-5",
+  "bg-identity-6/15 text-identity-6",
+  "bg-identity-7/15 text-identity-7",
+  "bg-identity-8/15 text-identity-8",
+  "bg-identity-9/15 text-identity-9",
+]
+function identityChip(seed: string) {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
+  return IDENTITY_CHIP[Math.abs(h) % IDENTITY_CHIP.length]
+}
+
+/** Initial-avatar chip + display name; the initial's hue is decorative
+ * (per-actor identity color), the adjacent name carries the information. */
+function ActorChip({ id, name }: { id?: string; name?: string }) {
+  const label = name ?? id
+  if (!label) return <span className="text-sm text-muted-foreground">—</span>
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-5 shrink-0 items-center justify-center rounded-full font-display text-[10px] font-semibold",
+          identityChip(id ?? label),
+        )}
+      >
+        {label.charAt(0).toUpperCase()}
+      </span>
+      <span className="text-sm">{label}</span>
+    </span>
+  )
+}
+
 function fmtValue(v: unknown): string {
   if (v === undefined || v === null || v === "") return "—"
   return typeof v === "string" ? v : JSON.stringify(v)
 }
 
 export default function AuditPage() {
-  const q = useInfiniteQuery({
+  const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: ["admin-audit"],
     initialPageParam: "",
     queryFn: ({ pageParam }) =>
@@ -56,19 +104,32 @@ export default function AuditPage() {
     getNextPageParam: (last) => (last.paging as CursorPaging | undefined)?.nextMarker ?? undefined,
   })
 
-  const rows = q.data?.pages.flatMap((p) => p.data ?? []) ?? []
+  const rows = data?.pages.flatMap((p) => p.data ?? []) ?? []
   const [detail, setDetail] = useState<AuditRow | null>(null)
 
   const actorOf = (r: AuditRow) =>
-    r.user?.email ?? r.event.actor?.displayName ?? r.event.actor?.id ?? "—"
+    r.event.actor?.displayName ?? r.user?.email ?? r.event.actor?.id ?? undefined
 
   return (
     <>
-      <PageHeader title="Audit log" description="Every admin, client and system mutation, newest first." />
-      {q.isLoading ? (
-        <Skeleton className="h-64" />
-      ) : q.error ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(q.error as Error).message}</div>
+      <PageHeader
+        title="Audit log"
+        eyebrow="System"
+        description="Every admin, client and system mutation, newest first."
+      />
+
+      {isLoading ? (
+        <Card className="gap-0 overflow-hidden py-0">
+          <div className="space-y-3 p-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-8" />
+            ))}
+          </div>
+        </Card>
+      ) : error ? (
+        <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
+          {(error as Error).message}
+        </div>
       ) : rows.length === 0 ? (
         <EmptyState icon={ScrollText} title="No audit events" hint="Mutations will show up here as they happen." />
       ) : (
@@ -76,12 +137,13 @@ export default function AuditPage() {
           <Card className="overflow-hidden py-0">
             <Table>
               <TableHeader>
-                <TableRow>
+                <TableRow className="hover:bg-transparent">
                   <TableHead>Time</TableHead>
                   <TableHead>Actor</TableHead>
                   <TableHead>Area</TableHead>
                   <TableHead>Action</TableHead>
                   <TableHead>Resource</TableHead>
+                  <TableHead>Outcome</TableHead>
                   <TableHead>Changes</TableHead>
                 </TableRow>
               </TableHeader>
@@ -91,19 +153,28 @@ export default function AuditPage() {
                   const nChanges = e.changes?.length ?? 0
                   return (
                     <TableRow key={e.id ?? i}>
-                      <TableCell className="whitespace-nowrap">{fmtDateTime(e.timestamp)}</TableCell>
-                      <TableCell>{actorOf(r)}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{e.requestInterface ?? "—"}</Badge>
+                      <TableCell className="whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground">
+                        {fmtDateTime(e.timestamp)}
                       </TableCell>
-                      <TableCell className="font-medium">{e.action ?? "—"}</TableCell>
                       <TableCell>
-                        <span>{e.resourceType ?? "—"}</span>
+                        <ActorChip id={e.actor?.id} name={actorOf(r)} />
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">{e.requestInterface ?? "—"}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <span className="font-mono text-xs">{e.action ?? "—"}</span>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {e.resourceType ?? "—"}
                         {e.resourceDisplayName || e.resourceId ? (
                           <span className="ml-2 font-mono text-xs text-muted-foreground">
                             {e.resourceDisplayName ?? e.resourceId}
                           </span>
                         ) : null}
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={e.outcome} />
                       </TableCell>
                       <TableCell>
                         {nChanges > 0 ? (
@@ -120,30 +191,34 @@ export default function AuditPage() {
               </TableBody>
             </Table>
           </Card>
-          {q.hasNextPage ? (
-            <div className="mt-4 flex justify-center">
-              <Button variant="outline" onClick={() => q.fetchNextPage()} disabled={q.isFetchingNextPage}>
-                {q.isFetchingNextPage ? "Loading…" : "Load more"}
+          <div className="mt-4 flex flex-col items-center gap-2">
+            {hasNextPage ? (
+              <Button variant="outline" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
+                {isFetchingNextPage ? "Loading…" : "Load more"}
               </Button>
-            </div>
-          ) : null}
+            ) : null}
+            <p className="font-mono text-xs text-muted-foreground">
+              {rows.length} event{rows.length === 1 ? "" : "s"} loaded{hasNextPage ? "" : " · end of log"}
+            </p>
+          </div>
         </>
       )}
 
       <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle className="font-display">
               {detail?.event.action} — {detail?.event.resourceType}
             </DialogTitle>
             <DialogDescription>
-              {fmtDateTime(detail?.event.timestamp)} by {detail ? actorOf(detail) : ""}
+              {fmtDateTime(detail?.event.timestamp)} by {detail ? (actorOf(detail) ?? "—") : ""}
+              {detail?.organization?.name ? ` · ${detail.organization.name}` : ""}
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-[60vh] overflow-y-auto">
+          <div className="max-h-[60vh] overflow-y-auto rounded-md border">
             <Table>
               <TableHeader>
-                <TableRow>
+                <TableRow className="hover:bg-transparent">
                   <TableHead>Field</TableHead>
                   <TableHead>Old value</TableHead>
                   <TableHead>New value</TableHead>

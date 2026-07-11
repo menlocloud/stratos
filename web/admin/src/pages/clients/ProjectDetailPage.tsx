@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Building2, CreditCard, Pause, Play, Plus, RefreshCw, Server, Trash2, Users } from "lucide-react"
+import { Building2, CreditCard, Pause, Play, Plus, RefreshCw, Server, Trash2, Users } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -112,8 +120,8 @@ function dataField(cr: CloudResource, key: "name" | "status"): string | undefine
 function Field({ label, value, mono }: { label: string; value?: React.ReactNode; mono?: boolean }) {
   return (
     <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`mt-0.5 text-sm ${mono ? "font-mono" : ""}`}>{value || "—"}</p>
+      <p className="text-eyebrow mb-1">{label}</p>
+      <p className={mono ? "font-mono text-xs" : "text-sm"}>{value || "—"}</p>
     </div>
   )
 }
@@ -384,16 +392,27 @@ export default function ProjectDetailPage() {
     <>
       <PageHeader
         title={project?.name ?? (isLoading ? "Loading…" : "Project")}
+        eyebrow="Clients"
         description="Client project detail."
+        breadcrumb={
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink asChild>
+                  <Link to="/clients/projects">Projects</Link>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{project?.name ?? id}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        }
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => navigate("/clients/projects")}>
-              <ArrowLeft />
-              Back to projects
-            </Button>
             <Button variant="outline" size="sm" onClick={() => syncProject.mutate()} disabled={syncProject.isPending}>
-              <RefreshCw className={syncProject.isPending ? "animate-spin" : ""} />
-              Sync
+              <RefreshCw className={syncProject.isPending ? "size-4 animate-spin" : "size-4"} /> Sync
             </Button>
             <Button
               variant="outline"
@@ -401,12 +420,11 @@ export default function ProjectDetailPage() {
               disabled={!project}
               onClick={() => setStatusConfirm(enabled ? "DISABLED" : "ENABLED")}
             >
-              {enabled ? <Pause /> : <Play />}
+              {enabled ? <Pause className="size-4" /> : <Play className="size-4" />}
               {enabled ? "Disable" : "Enable"}
             </Button>
             <Button variant="destructive" size="sm" disabled={!project} onClick={() => setDeleteOpen(true)}>
-              <Trash2 />
-              Delete project
+              <Trash2 className="size-4" /> Delete project
             </Button>
           </>
         }
@@ -433,15 +451,13 @@ export default function ProjectDetailPage() {
               <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <Field label="Name" value={project?.name} />
                 <div>
-                  <p className="text-xs text-muted-foreground">Status</p>
-                  <div className="mt-1">
-                    <StatusBadge status={project?.status} />
-                  </div>
+                  <p className="text-eyebrow mb-1">Status</p>
+                  <StatusBadge status={project?.status} />
                 </div>
                 <Field label="ID" value={project?.id} mono />
                 <div>
-                  <p className="text-xs text-muted-foreground">Organization</p>
-                  <div className="mt-0.5 flex items-center gap-2 text-sm">
+                  <p className="text-eyebrow mb-1">Organization</p>
+                  <div className="flex items-center gap-2 text-sm">
                     {project?.organizationId ? (
                       <Link
                         to={`/clients/organizations/${project.organizationId}`}
@@ -453,14 +469,13 @@ export default function ProjectDetailPage() {
                       <span className="text-muted-foreground">None (imported / unassigned)</span>
                     )}
                     <Button variant="outline" size="sm" onClick={() => setOrgOpen(true)}>
-                      <Building2 />
-                      {project?.organizationId ? "Change" : "Assign"}
+                      <Building2 className="size-4" /> {project?.organizationId ? "Change" : "Assign"}
                     </Button>
                   </div>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Billing profile</p>
-                  <div className="mt-0.5 flex items-center gap-2 text-sm">
+                  <p className="text-eyebrow mb-1">Billing profile</p>
+                  <div className="flex items-center gap-2 text-sm">
                     {project?.billingProfileId ? (
                       <Link
                         to={`/clients/billing-profiles/${project.billingProfileId}`}
@@ -472,8 +487,7 @@ export default function ProjectDetailPage() {
                       <span className="text-muted-foreground">Inherited from organization</span>
                     )}
                     <Button variant="outline" size="sm" onClick={() => setBpOpen(true)}>
-                      <CreditCard />
-                      Change
+                      <CreditCard className="size-4" /> Change
                     </Button>
                   </div>
                 </div>
@@ -612,8 +626,7 @@ export default function ProjectDetailPage() {
           <TabsContent value="members" className="mt-4">
             <div className="mb-3 flex justify-end">
               <Button size="sm" onClick={() => setAddMemberOpen(true)}>
-                <Plus />
-                Add member
+                <Plus className="size-4" /> Add member
               </Button>
             </div>
             {members.isLoading ? (
@@ -651,12 +664,12 @@ export default function ProjectDetailPage() {
                           <TableCell>
                             <Button
                               variant="ghost"
-                              size="icon"
-                              aria-label="Remove member"
+                              size="icon-sm"
+                              aria-label={`Remove ${m.email ?? m.sub ?? "member"}`}
                               disabled={role === "OWNER"}
                               onClick={() => setMemberToRemove(m)}
                             >
-                              <Trash2 className="text-muted-foreground" />
+                              <Trash2 className="size-4 text-muted-foreground" />
                             </Button>
                           </TableCell>
                         </TableRow>
@@ -691,7 +704,18 @@ export default function ProjectDetailPage() {
                     {(resources.data?.data ?? []).map((cr) => (
                       <TableRow key={cr.id ?? cr.externalId}>
                         <TableCell className="font-mono text-xs">{cr.type ?? "—"}</TableCell>
-                        <TableCell className="font-medium">{dataField(cr, "name") ?? "—"}</TableCell>
+                        <TableCell>
+                          {cr.id ? (
+                            <Link
+                              to={`/clients/cloud-resources/${cr.id}`}
+                              className="inline-block py-1 font-medium hover:underline"
+                            >
+                              {dataField(cr, "name") ?? cr.externalId ?? "—"}
+                            </Link>
+                          ) : (
+                            <span className="font-medium">{dataField(cr, "name") ?? "—"}</span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <StatusBadge status={dataField(cr, "status")} />
                         </TableCell>
@@ -738,6 +762,7 @@ export default function ProjectDetailPage() {
                               type="number"
                               min={0}
                               className="w-24"
+                              aria-label={`Limit for ${row.model}`}
                               value={row.limit}
                               onChange={(e) =>
                                 setQuotaRows((rows) => rows.map((r, idx) => (idx === i ? { ...r, limit: e.target.value } : r)))
@@ -748,6 +773,7 @@ export default function ProjectDetailPage() {
                             <Button
                               variant="ghost"
                               size="sm"
+                              aria-label={`Remove limit for ${row.model}`}
                               onClick={() => setQuotaRows((rows) => rows.filter((_, idx) => idx !== i))}
                             >
                               Remove
@@ -760,9 +786,9 @@ export default function ProjectDetailPage() {
                 )}
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="space-y-1.5">
-                    <p className="text-xs text-muted-foreground">GPU model</p>
+                    <p className="text-eyebrow">GPU model</p>
                     <Select value={quotaModel} onValueChange={setQuotaModel}>
-                      <SelectTrigger className="w-56">
+                      <SelectTrigger className="w-56" aria-label="GPU model">
                         <SelectValue placeholder="Select model" />
                       </SelectTrigger>
                       <SelectContent>
@@ -775,11 +801,12 @@ export default function ProjectDetailPage() {
                     </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <p className="text-xs text-muted-foreground">Limit</p>
+                    <p className="text-eyebrow">Limit</p>
                     <Input
                       type="number"
                       min={0}
                       className="w-24"
+                      aria-label="Limit"
                       value={quotaLimit}
                       onChange={(e) => setQuotaLimit(e.target.value)}
                     />
@@ -864,7 +891,7 @@ export default function ProjectDetailPage() {
           </DialogHeader>
           <div className="space-y-2">
             <Select value={bpChoice} onValueChange={setBpChoice}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="Billing profile">
                 <SelectValue placeholder={bps.isLoading ? "Loading billing profiles…" : "Pick a billing profile"} />
               </SelectTrigger>
               <SelectContent>
@@ -907,7 +934,7 @@ export default function ProjectDetailPage() {
           </DialogHeader>
           <div className="space-y-2">
             <Select value={attachChoice} onValueChange={setAttachChoice}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="Cloud provider">
                 <SelectValue placeholder={providers.isLoading ? "Loading providers…" : "Pick a provider"} />
               </SelectTrigger>
               <SelectContent>
@@ -942,7 +969,7 @@ export default function ProjectDetailPage() {
           </DialogHeader>
           <div className="space-y-2">
             <Select value={orgChoice} onValueChange={setOrgChoice}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="Organization">
                 <SelectValue placeholder={orgsList.isLoading ? "Loading organizations…" : "Pick an organization"} />
               </SelectTrigger>
               <SelectContent>
@@ -976,7 +1003,7 @@ export default function ProjectDetailPage() {
           </DialogHeader>
           <div className="space-y-3">
             <Select value={memberChoice} onValueChange={setMemberChoice}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="User">
                 <SelectValue placeholder={users.isLoading ? "Loading users…" : "Pick a user"} />
               </SelectTrigger>
               <SelectContent>
@@ -990,7 +1017,7 @@ export default function ProjectDetailPage() {
               </SelectContent>
             </Select>
             <Select value={memberRole} onValueChange={setMemberRole}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="Role">
                 <SelectValue placeholder="Role" />
               </SelectTrigger>
               <SelectContent>

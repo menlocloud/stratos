@@ -1,14 +1,15 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { Cloud, Plus } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -20,8 +21,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { useAdminList } from "@/lib/hooks"
 
@@ -46,6 +45,13 @@ export type CloudProvider = {
     uidPrefix?: string
     defaultQuotaGiB?: number
   }
+}
+
+// Region chips: OpenStack providers key config.regions; ceph-s3 stores a single config.region.
+function providerRegions(p: CloudProvider): string[] {
+  const keyed = Object.keys(p.config?.regions ?? {})
+  if (keyed.length) return keyed
+  return p.config?.region ? [p.config.region] : []
 }
 
 // ── create form ──────────────────────────────────────────────────────────────
@@ -172,17 +178,17 @@ function CephProviderForm({ form, setForm }: { form: CephFormState; setForm: (f:
       </div>
       <div className="grid gap-2">
         <Label htmlFor="cs-s3">S3 endpoint</Label>
-        <Input id="cs-s3" value={form.s3Endpoint} onChange={(e) => setForm({ ...form, s3Endpoint: e.target.value })} placeholder="https://s3.example.com" />
+        <Input id="cs-s3" className="font-mono" value={form.s3Endpoint} onChange={(e) => setForm({ ...form, s3Endpoint: e.target.value })} placeholder="https://s3.example.com" />
       </div>
       <div className="grid gap-2">
         <Label htmlFor="cs-admin">Admin Ops URL</Label>
-        <Input id="cs-admin" value={form.adminApiUrl} onChange={(e) => setForm({ ...form, adminApiUrl: e.target.value })} placeholder="https://s3.example.com/admin" />
+        <Input id="cs-admin" className="font-mono" value={form.adminApiUrl} onChange={(e) => setForm({ ...form, adminApiUrl: e.target.value })} placeholder="https://s3.example.com/admin" />
       </div>
       <div className="grid gap-2">
         <Label htmlFor="cs-web">Website endpoint (optional)</Label>
-        <Input id="cs-web" value={form.s3WebsiteEndpoint} onChange={(e) => setForm({ ...form, s3WebsiteEndpoint: e.target.value })} placeholder="https://s3-website.example.com" />
+        <Input id="cs-web" className="font-mono" value={form.s3WebsiteEndpoint} onChange={(e) => setForm({ ...form, s3WebsiteEndpoint: e.target.value })} placeholder="https://s3-website.example.com" />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="cs-region">Region (RGW zonegroup)</Label>
           <Input id="cs-region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} placeholder="us-east-1" />
@@ -192,10 +198,10 @@ function CephProviderForm({ form, setForm }: { form: CephFormState; setForm: (f:
           <Input id="cs-prefix" value={form.uidPrefix} onChange={(e) => setForm({ ...form, uidPrefix: e.target.value })} placeholder="prod_" />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="cs-key">Admin access key</Label>
-          <Input id="cs-key" value={form.adminAccessKey} onChange={(e) => setForm({ ...form, adminAccessKey: e.target.value })} autoComplete="off" />
+          <Input id="cs-key" className="font-mono" value={form.adminAccessKey} onChange={(e) => setForm({ ...form, adminAccessKey: e.target.value })} autoComplete="off" />
         </div>
         <div className="grid gap-2">
           <Label htmlFor="cs-secret">Admin secret key</Label>
@@ -230,12 +236,13 @@ function ProviderForm({ form, setForm }: { form: FormState; setForm: (f: FormSta
         <Label htmlFor="cp-identity">Identity URL (Keystone v3)</Label>
         <Input
           id="cp-identity"
+          className="font-mono"
           value={form.identityUrl}
           onChange={(e) => setForm({ ...form, identityUrl: e.target.value })}
           placeholder="https://keystone.example.com:5000/v3"
         />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="cp-user">Admin username</Label>
           <Input id="cp-user" value={form.adminUsername} onChange={(e) => setForm({ ...form, adminUsername: e.target.value })} autoComplete="off" />
@@ -245,7 +252,7 @@ function ProviderForm({ form, setForm }: { form: FormState; setForm: (f: FormSta
           <Input id="cp-project" value={form.adminProjectName} onChange={(e) => setForm({ ...form, adminProjectName: e.target.value })} placeholder="admin" />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="cp-domain">Admin domain</Label>
           <Input id="cp-domain" value={form.adminDomainName} onChange={(e) => setForm({ ...form, adminDomainName: e.target.value })} placeholder="Default" />
@@ -267,10 +274,10 @@ function ProviderForm({ form, setForm }: { form: FormState; setForm: (f: FormSta
       </div>
       <div className="flex items-center justify-between rounded-lg border p-3">
         <div>
-          <div className="text-sm font-medium">Shared provider</div>
+          <Label htmlFor="cp-shared" className="text-sm font-medium">Shared provider</Label>
           <div className="text-xs text-muted-foreground">One OpenStack tenant shared by all projects (no per-project tenant).</div>
         </div>
-        <Switch checked={form.shared} onCheckedChange={(on) => setForm({ ...form, shared: on })} />
+        <Switch id="cp-shared" checked={form.shared} onCheckedChange={(on) => setForm({ ...form, shared: on })} />
       </div>
     </div>
   )
@@ -308,6 +315,56 @@ export default function CloudProvidersPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudProvider, any>[]>(
+    () => [
+      {
+        id: "id",
+        accessorFn: (p) => p.id,
+        header: sortableHeader("ID"),
+        cell: ({ getValue }) => <span className="font-mono text-xs">{getValue()}</span>,
+      },
+      {
+        id: "name",
+        accessorFn: (p) => p.name ?? "",
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue() || "—"}</span>,
+      },
+      {
+        id: "type",
+        accessorFn: (p) => p.type ?? "",
+        header: sortableHeader("Type"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "endpoint",
+        accessorFn: (p) => p.config?.identityUrl ?? p.config?.s3Endpoint ?? "",
+        header: "Identity URL",
+        cell: ({ getValue }) => <span className="font-mono text-xs">{getValue() || "—"}</span>,
+      },
+      {
+        id: "regions",
+        accessorFn: (p) => providerRegions(p).join(", "),
+        header: "Regions",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="flex flex-wrap gap-1">
+            {providerRegions(row.original).map((r) => (
+              <Badge key={r} variant="outline">{r}</Badge>
+            ))}
+          </div>
+        ),
+      },
+      {
+        id: "status",
+        accessorFn: (p) => p.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ row }) => <StatusBadge status={row.original.status} />,
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   const addBtn = (
     <Button size="sm" onClick={() => setCreateOpen(true)}>
       <Plus className="size-4" /> Add provider
@@ -318,14 +375,11 @@ export default function CloudProvidersPage() {
     <>
       <PageHeader
         title="Cloud providers"
+        eyebrow="System"
         description="External services connected to the platform."
         actions={addBtn}
       />
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : items.length === 0 ? (
+      {!isLoading && !error && items.length === 0 ? (
         <EmptyState
           icon={Cloud}
           title="No cloud providers"
@@ -333,51 +387,15 @@ export default function CloudProvidersPage() {
           action={addBtn}
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Identity URL</TableHead>
-                <TableHead>Regions</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((p) => (
-                <TableRow
-                  key={p.id}
-                  className="cursor-pointer"
-                  onClick={() => navigate(`/system/cloud-providers/${p.id}`)}
-                >
-                  <TableCell className="font-mono text-xs">{p.id}</TableCell>
-                  <TableCell className="font-medium">{p.name ?? "—"}</TableCell>
-                  <TableCell>{p.type ?? "—"}</TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {p.config?.identityUrl ?? p.config?.s3Endpoint ?? "—"}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {(Object.keys(p.config?.regions ?? {}).length
-                        ? Object.keys(p.config?.regions ?? {})
-                        : p.config?.region
-                          ? [p.config.region]
-                          : []
-                      ).map((r) => (
-                        <Badge key={r} variant="outline">{r}</Badge>
-                      ))}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={p.status} />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={items}
+          isLoading={isLoading}
+          error={error as Error | null}
+          searchPlaceholder="Search providers…"
+          getRowId={(p) => p.id}
+          onRowClick={(p) => navigate(`/system/cloud-providers/${p.id}`)}
+        />
       )}
 
       <Dialog
@@ -393,7 +411,7 @@ export default function CloudProvidersPage() {
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add cloud provider</DialogTitle>
             <DialogDescription>

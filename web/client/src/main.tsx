@@ -10,15 +10,25 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } },
 })
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <StratosAuthProvider>
-      <AuthBridge>
-        <QueryClientProvider client={queryClient}>
-          <App />
-          <Toaster richColors position="top-right" />
-        </QueryClientProvider>
-      </AuthBridge>
-    </StratosAuthProvider>
-  </StrictMode>,
+// VITE_MOCK=1 (npm run dev:mock) boots the app against in-memory fixtures —
+// no backend, no OIDC. The mock module is loaded lazily so production builds
+// never include it.
+const prepare =
+  import.meta.env.VITE_MOCK === "1"
+    ? import("./mocks").then((m) => m.enableMocks())
+    : Promise.resolve()
+
+void prepare.then(() =>
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <StratosAuthProvider>
+        <AuthBridge>
+          <QueryClientProvider client={queryClient}>
+            <App />
+            <Toaster richColors position="top-right" />
+          </QueryClientProvider>
+        </AuthBridge>
+      </StratosAuthProvider>
+    </StrictMode>,
+  ),
 )

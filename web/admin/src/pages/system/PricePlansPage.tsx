@@ -1,13 +1,14 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Copy, Plus, RefreshCw, Tags, Trash2 } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table"
+import { MoreHorizontal, Plus, RefreshCw, Tags } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -16,12 +17,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { fmtDate } from "@/lib/format"
 import { useAdminList } from "@/lib/hooks"
@@ -111,14 +116,104 @@ export default function PricePlansPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<PricePlan, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (p) => p.name ?? p.id,
+        header: sortableHeader("Name"),
+        cell: ({ row, getValue }) => (
+          <Link
+            className="inline-block py-1 font-medium hover:underline"
+            to={`/system/price-plans/${row.original.id}`}
+          >
+            {getValue()}
+          </Link>
+        ),
+      },
+      {
+        id: "access",
+        accessorFn: (p) => p.accessMode ?? "PUBLIC",
+        header: "Access",
+        cell: ({ getValue }) => (
+          <Badge variant={getValue() === "SCOPED" ? "secondary" : "outline"}>{getValue()}</Badge>
+        ),
+      },
+      {
+        id: "enabled",
+        accessorFn: (p) => !!p.enabled,
+        header: sortableHeader("Enabled"),
+        cell: ({ row }) => {
+          const p = row.original
+          return (
+            <Switch
+              checked={!!p.enabled}
+              disabled={togglePlan.isPending}
+              onCheckedChange={() => togglePlan.mutate(p)}
+              aria-label={`Enable ${p.name ?? p.id}`}
+            />
+          )
+        },
+      },
+      {
+        id: "created",
+        accessorFn: (p) => p.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDate(getValue())}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const p = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="Price plan actions">
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setToClone(p)
+                      setCloneName(`${p.name ?? p.id} (Copy)`)
+                    }}
+                  >
+                    Clone
+                  </DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive" onClick={() => setToDelete(p)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; togglePlan.mutate is stable, isPending drives the disabled state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [togglePlan.isPending],
+  )
+
   return (
     <>
       <PageHeader
         title="Price plans"
+        eyebrow="System"
         description="Rating plans applied to cloud usage."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              aria-label="Refresh"
+            >
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -128,11 +223,7 @@ export default function PricePlansPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : !plans.length ? (
+      {!isLoading && !error && !plans.length ? (
         <EmptyState
           icon={Tags}
           title="No price plans yet"
@@ -144,61 +235,14 @@ export default function PricePlansPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Access</TableHead>
-                <TableHead>Enabled</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-24" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {plans.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell className="font-medium">
-                    <Link className="hover:underline" to={`/system/price-plans/${p.id}`}>
-                      {p.name ?? p.id}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={p.accessMode === "SCOPED" ? "secondary" : "outline"}>
-                      {p.accessMode ?? "PUBLIC"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Switch
-                      checked={!!p.enabled}
-                      disabled={togglePlan.isPending}
-                      onCheckedChange={() => togglePlan.mutate(p)}
-                    />
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{fmtDate(p.createdAt)}</TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        title="Clone plan"
-                        onClick={() => {
-                          setToClone(p)
-                          setCloneName(`${p.name ?? p.id} (Copy)`)
-                        }}
-                      >
-                        <Copy className="size-4 text-muted-foreground" />
-                      </Button>
-                      <Button variant="ghost" size="icon" title="Delete plan" onClick={() => setToDelete(p)}>
-                        <Trash2 className="size-4 text-muted-foreground" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={plans}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search price plans…"
+          getRowId={(p) => p.id}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -213,9 +257,9 @@ export default function PricePlansPage() {
               <Input id="pp-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Standard pricing" />
             </div>
             <div className="grid gap-2">
-              <Label>Access mode</Label>
+              <Label htmlFor="pp-access">Access mode</Label>
               <Select value={accessMode} onValueChange={setAccessMode}>
-                <SelectTrigger>
+                <SelectTrigger id="pp-access">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

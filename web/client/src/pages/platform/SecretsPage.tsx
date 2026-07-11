@@ -1,12 +1,14 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -15,8 +17,6 @@ import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
 import { fmtDateTime, timeAgo } from "@/lib/format"
@@ -40,7 +40,7 @@ export default function SecretsPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
-  const { data, isLoading, refetch, isFetching } = useCloudList(pid, "BARBICAN_SECRET")
+  const { data, isLoading, error, refetch, isFetching } = useCloudList(pid, "BARBICAN_SECRET")
 
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
@@ -81,14 +81,80 @@ export default function SecretsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => secretName(r),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => (
+          <span className="flex items-center gap-2 font-medium">
+            <KeyRound className="size-3.5 text-muted-foreground" aria-hidden="true" />
+            {getValue()}
+          </span>
+        ),
+      },
+      {
+        id: "type",
+        accessorFn: (r) => secretType(r),
+        header: sortableHeader("Type"),
+        cell: ({ getValue }) => <Badge variant="secondary">{getValue()}</Badge>,
+      },
+      {
+        id: "status",
+        accessorFn: (r) => secretStatus(r) ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "expiration",
+        accessorFn: (r) => secretExpiration(r) ?? "",
+        header: sortableHeader("Expiration"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">
+            {getValue() ? fmtDateTime(getValue()) : "Never"}
+          </span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setToDelete(r)}
+                aria-label={`Delete secret ${secretName(r)}`}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+          )
+        },
+      },
+    ],
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Secrets"
+        eyebrow="Platform"
         description="Payloads stored in the key manager (Barbican)."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh secrets">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -98,9 +164,7 @@ export default function SecretsPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : !data?.length ? (
+      {!isLoading && !error && !data?.length ? (
         <EmptyState
           icon={KeyRound}
           title="No secrets yet"
@@ -112,42 +176,13 @@ export default function SecretsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Expiration</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-12" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">{secretName(r)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{secretType(r)}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={secretStatus(r)} />
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {secretExpiration(r) ? fmtDateTime(secretExpiration(r)) : "Never"}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" onClick={() => setToDelete(r)} aria-label="Delete secret">
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={(error as Error | null) ?? null}
+          getRowId={(r) => r.id}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -164,7 +199,7 @@ export default function SecretsPage() {
             <div className="grid gap-2">
               <Label>Secret type</Label>
               <Select value={type} onValueChange={setType}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -180,9 +215,14 @@ export default function SecretsPage() {
                 value={payload}
                 onChange={(e) => setPayload(e.target.value)}
                 placeholder="secret value"
-                rows={4}
-                className="font-mono text-xs"
+                rows={5}
+                spellCheck={false}
+                autoComplete="off"
+                className="max-h-60 resize-y font-mono text-xs leading-relaxed"
               />
+              <p className="text-xs text-muted-foreground">
+                Stored as <span className="font-mono">text/plain</span>; the payload is write-only after creation.
+              </p>
             </div>
           </div>
           <DialogFooter>
