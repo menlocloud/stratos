@@ -257,7 +257,11 @@ export default function UserDetailPage() {
                     <span className="text-sm">—</span>
                   ) : (
                     (user?.identities ?? []).map((idn, i) => (
-                      <Badge key={i} variant="secondary" className="font-mono text-xs">
+                      <Badge
+                        key={i}
+                        variant="secondary"
+                        className="max-w-full whitespace-normal break-all font-mono text-xs"
+                      >
                         {idn.issuer || "unknown"}
                       </Badge>
                     ))

@@ -113,7 +113,7 @@ export default function ValidationsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                className="text-destructive hover:text-destructive"
+                className="text-destructive-text hover:text-destructive-text"
                 disabled={decide.isPending}
                 onClick={() => setPending({ id: v.id, status: "REJECTED", who })}
               >

@@ -368,7 +368,8 @@ function DashboardTab({ bpId, currency }: { bpId: string; currency?: string }) {
         </Card>
       </div>
 
-      <section>
+      {/* min-w-0: the table's min-content must not widen the tab grid (mobile reflow). */}
+      <section className="min-w-0">
         <h3 className="text-eyebrow mb-2">Top cost generators</h3>
         {top.length === 0 ? (
           <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
