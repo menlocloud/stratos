@@ -1,7 +1,10 @@
 import { useMemo } from "react"
 import { Link } from "react-router-dom"
 import { Cell, Pie, PieChart } from "recharts"
-import { CalendarClock, Receipt, Wallet } from "lucide-react"
+import {
+  ArrowUpRight, BookOpen, CalendarClock, Receipt, Server, UserPlus, Wallet,
+  type LucideIcon,
+} from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatCard } from "@/components/stat-card"
 import { Badge } from "@/components/ui/badge"
@@ -9,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { useBillingSummary, useCostInfo, useProject, useProjectId } from "@/lib/hooks"
+import { useBillingSummary, useCostInfo, useFeatures, useProject, useProjectId, useUIMenu } from "@/lib/hooks"
 import { fmtMoney, timeAgo } from "@/lib/format"
 
 // Stable slot assignment: sort categories so a service keeps its color across
@@ -19,6 +22,53 @@ const MAX_SLICES = 7
 function serviceLabel(key: string): string {
   const label = key.toLowerCase().replace(/_/g, " ")
   return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
+// Common next steps, gated like the sidebar: while the menu/features queries
+// load nothing is hidden; once loaded, a disabled service or absent feature
+// drops its action. Pure links — no new endpoints.
+function QuickActions({ pid }: { pid: string }) {
+  const { data: init } = useUIMenu(pid)
+  const { data: features } = useFeatures()
+  const items = init?.menu?.items
+  const featureSet = features ? new Set(features) : undefined
+
+  const actions: Array<{ to: string; label: string; hint: string; icon: LucideIcon; external?: boolean }> = [
+    ...(items && items["compute"]?.enabled !== true
+      ? []
+      : [{ to: `/p/${pid}/servers/new`, label: "Launch a server", hint: "Create a VM", icon: Server }]),
+    ...(featureSet && !featureSet.has("billing")
+      ? []
+      : [{ to: `/p/${pid}/billing/funds`, label: "Add funds", hint: "Top up your balance", icon: Wallet }]),
+    { to: `/p/${pid}/org/members`, label: "Invite a teammate", hint: "Organization members", icon: UserPlus },
+    { to: "/docs", label: "Read the docs", hint: "Guides and how-tos", icon: BookOpen, external: true },
+  ]
+
+  return (
+    <div className="mt-6">
+      <div className="text-eyebrow mb-2">Quick actions</div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {actions.map((a) => (
+          <Link
+            key={a.to}
+            to={a.to}
+            target={a.external ? "_blank" : undefined}
+            rel={a.external ? "noopener noreferrer" : undefined}
+            className="group flex items-center gap-3 rounded-xl border bg-card p-3 shadow-sm transition-colors hover:bg-accent/50"
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-muted/50 text-muted-foreground">
+              <a.icon className="size-4" strokeWidth={1.5} />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium">{a.label}</span>
+              <span className="block truncate text-xs text-muted-foreground">{a.hint}</span>
+            </span>
+            <ArrowUpRight className="ml-auto size-4 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-foreground" />
+          </Link>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 export function DashboardPage() {
@@ -125,9 +175,9 @@ export function DashboardPage() {
             <CardTitle className="text-base">Cost by service</CardTitle>
             <p className="text-sm text-muted-foreground">This month, rated so far.</p>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-1 items-center">
             {byService.length > 0 ? (
-              <div className="flex flex-col items-center gap-4 sm:flex-row sm:gap-6">
+              <div className="flex w-full flex-col items-center gap-4 sm:flex-row sm:gap-6">
                 <div className="relative">
                   <ChartContainer config={donutConfig} className="aspect-square h-44">
                     <PieChart>
@@ -179,15 +229,15 @@ export function DashboardPage() {
                 </div>
               </div>
             ) : (
-              <p className="py-6 text-center text-sm text-muted-foreground">No usage recorded yet this month.</p>
+              <p className="w-full py-6 text-center text-sm text-muted-foreground">No usage recorded yet this month.</p>
             )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="border-b">
-            <CardTitle className="text-base">Top cost generators</CardTitle>
-            <p className="text-sm text-muted-foreground">Most expensive resources this month.</p>
+            <CardTitle className="text-base">Top resources</CardTitle>
+            <p className="text-sm text-muted-foreground">What's driving this month's spend.</p>
           </CardHeader>
           <CardContent className="p-0">
             {projectCost?.topResourcePrices?.length ? (
@@ -227,6 +277,8 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <QuickActions pid={pid} />
     </>
   )
 }

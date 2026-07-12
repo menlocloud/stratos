@@ -73,7 +73,8 @@ export const routes: RouteEntry[] = [
   // Join flow + public docs
   { path: "/join-project", name: "join-project" },
   { path: "/docs", name: "docs", public: true },
-  { path: "/docs/getting-started/launch-your-first-server", name: "docs-article", public: true },
+  // Slug must match src/docs/manifest.ts — a bad slug renders the 404 state.
+  { path: "/docs/getting-started/first-server", name: "docs-article", public: true },
 ]
 
 export const themes = ["light", "dark"] as const

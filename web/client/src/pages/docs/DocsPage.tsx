@@ -6,7 +6,7 @@ import { useEffect } from "react"
 import { Link, useParams } from "react-router-dom"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { BookOpen, Check, Monitor, Moon, PanelsTopLeft, Sun } from "lucide-react"
+import { BookOpen, Check, ChevronDown, Monitor, Moon, PanelsTopLeft, Sun } from "lucide-react"
 import { docsTitle, sections, defaultSlug } from "@/docs/manifest"
 import { useTheme, type ThemePref } from "@/lib/theme"
 import { Button } from "@/components/ui/button"
@@ -59,6 +59,36 @@ function ThemeMenu() {
   )
 }
 
+// Section/page tree, shared by the desktop rail and the mobile disclosure.
+function DocsNav({ slug }: { slug: string }) {
+  return (
+    <nav className="space-y-6 text-sm">
+      {sections.map((s) => (
+        <div key={s.title}>
+          <div className="text-eyebrow mb-2">{s.title}</div>
+          <ul className="space-y-0.5 border-l pl-3">
+            {s.pages.map((p) => (
+              <li key={p.slug}>
+                <Link
+                  to={`/docs/${p.slug}`}
+                  aria-current={slug === p.slug ? "page" : undefined}
+                  className={
+                    slug === p.slug
+                      ? "block rounded-sm px-2 py-1 font-medium text-primary-text"
+                      : "block rounded-sm px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+                  }
+                >
+                  {p.title}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </nav>
+  )
+}
+
 export default function DocsPage() {
   const params = useParams()
   const slug = params["*"] && params["*"] !== "" ? params["*"].replace(/\/$/, "") : defaultSlug
@@ -94,31 +124,22 @@ export default function DocsPage() {
       </header>
       <div className="mx-auto flex w-full max-w-6xl gap-10 px-4 py-8 md:px-6">
         <aside className="hidden w-60 shrink-0 md:block">
-          <nav className="sticky top-[calc(var(--navbar-height)+2rem)] space-y-6 text-sm">
-            {sections.map((s) => (
-              <div key={s.title}>
-                <div className="text-eyebrow mb-2">{s.title}</div>
-                <ul className="space-y-0.5 border-l pl-3">
-                  {s.pages.map((p) => (
-                    <li key={p.slug}>
-                      <Link
-                        to={`/docs/${p.slug}`}
-                        className={
-                          slug === p.slug
-                            ? "block rounded-sm px-2 py-1 font-medium text-primary-text"
-                            : "block rounded-sm px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
-                        }
-                      >
-                        {p.title}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </nav>
+          <div className="sticky top-[calc(var(--navbar-height)+2rem)]">
+            <DocsNav slug={slug} />
+          </div>
         </aside>
-        <main className="min-w-0 flex-1 pb-16">
+        <main className="min-w-0 max-w-3xl flex-1 pb-16">
+          {/* Mobile: the rail is hidden, so docs need a way to move between
+              pages. Keyed by slug so it re-collapses after navigating. */}
+          <details key={slug} className="group mb-6 rounded-xl border bg-card shadow-sm md:hidden">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+              {page?.title ?? "Browse docs"}
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="border-t px-4 py-4">
+              <DocsNav slug={slug} />
+            </div>
+          </details>
           {md ? (
             <>
               {section ? <div className="text-eyebrow mb-3">{section.title}</div> : null}

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { apiFetch } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import { fmtDateTime } from "@/lib/format"
 
 // GET /project-invites/{token} → the invite doc for the CALLER's email + token,
@@ -30,8 +31,33 @@ function BrandShell({ children }: { children: ReactNode }) {
           <span className="text-eyebrow rounded border px-1.5 py-0.5">console</span>
         </div>
         {children}
+        <SignedInFooter />
       </div>
     </main>
+  )
+}
+
+// "Sent to a different email address" is this page's most common dead end —
+// show which account is signed in and give it an exit.
+function SignedInFooter() {
+  const auth = useAuth()
+  const email = auth.user?.profile.email
+  return (
+    <p className="text-center text-xs text-muted-foreground">
+      {email ? (
+        <>
+          Signed in as <span className="font-medium text-foreground">{email}</span>
+          {" · "}
+        </>
+      ) : null}
+      <button
+        type="button"
+        className="underline underline-offset-4 transition-colors hover:text-foreground"
+        onClick={() => void auth.signoutRedirect()}
+      >
+        Sign out
+      </button>
+    </p>
   )
 }
 
@@ -165,7 +191,13 @@ export default function JoinProjectPage() {
             </div>
             <div className="flex items-center justify-between gap-4 px-4 py-2.5">
               <dt className="text-muted-foreground">Project</dt>
-              <dd className="truncate font-mono text-xs">{invite?.projectName ?? invite?.projectId}</dd>
+              <dd className="truncate">
+                {invite?.projectName ? (
+                  <span className="font-medium">{invite.projectName}</span>
+                ) : (
+                  <span className="font-mono text-xs">{invite?.projectId}</span>
+                )}
+              </dd>
             </div>
             <div className="flex items-center justify-between gap-4 px-4 py-2.5">
               <dt className="text-muted-foreground">Expires</dt>

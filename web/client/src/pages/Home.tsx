@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { BookOpen, Mail, RefreshCw } from "lucide-react"
 import { apiFetch } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import { fmtDateTime } from "@/lib/format"
 import { useProjects } from "@/lib/hooks"
 import type { Organization, Project } from "@/lib/types"
@@ -30,8 +31,33 @@ function BrandShell({ children }: { children: ReactNode }) {
           <span className="text-eyebrow rounded border px-1.5 py-0.5">console</span>
         </div>
         {children}
+        <SignedInFooter />
       </div>
     </main>
+  )
+}
+
+// Every pre-project state ("waiting for a project", "invite sent to a different
+// email", …) has "wrong account" as its most likely cause — give it an exit.
+function SignedInFooter() {
+  const auth = useAuth()
+  const email = auth.user?.profile.email
+  return (
+    <p className="text-center text-xs text-muted-foreground">
+      {email ? (
+        <>
+          Signed in as <span className="font-medium text-foreground">{email}</span>
+          {" · "}
+        </>
+      ) : null}
+      <button
+        type="button"
+        className="underline underline-offset-4 transition-colors hover:text-foreground"
+        onClick={() => void auth.signoutRedirect()}
+      >
+        Sign out
+      </button>
+    </p>
   )
 }
 

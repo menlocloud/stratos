@@ -65,7 +65,7 @@ export function LoginPage() {
               </a>
             </Button>
             <p className="mt-1 text-xs text-muted-foreground">
-              New here? Sign-up happens on the sign-in page.
+              New here? Create your account from the sign-in page.
             </p>
           </div>
         </div>

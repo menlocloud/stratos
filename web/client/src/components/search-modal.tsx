@@ -66,8 +66,19 @@ const LIST_PAGES: Record<string, string> = {
   IMAGE: "images",
 }
 
+// Group heading: "SECURITY_GROUP" → "security groups" (the eyebrow class
+// handles the small-caps treatment).
 function typeLabel(t: string): string {
-  return t.replaceAll("_", " ").toLowerCase()
+  const label = t.replaceAll("_", " ").toLowerCase()
+  return label.endsWith("s") ? label : `${label}s`
+}
+
+// Raw API enums ("SHUTOFF", "SCHEDULED_FOR_DELETION") read as debug output —
+// sentence-case them for the row subtitle.
+function humanStatus(v: unknown): string | undefined {
+  if (typeof v !== "string" || !v) return undefined
+  const s = v.replaceAll("_", " ").toLowerCase()
+  return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
 export default function SearchModal({
@@ -189,7 +200,7 @@ export default function SearchModal({
                   {items.map((item, i) => {
                     const id = (item.data?.id as string) ?? ""
                     const name = (item.data?.name as string) || id || "—"
-                    const sub = [item.data?.status, item.data?.ipv4, item.data?.flavor, item.data?.region]
+                    const sub = [humanStatus(item.data?.status), item.data?.ipv4, item.data?.flavor, item.data?.region]
                       .filter((v) => typeof v === "string" && v)
                       .join(" · ")
                     return (

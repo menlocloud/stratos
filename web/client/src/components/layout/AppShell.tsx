@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router-dom"
 import {
-  BarChart3, BookOpen, Boxes, Camera, Check, ChevronsUpDown, CreditCard, Database, FileClock, Globe, HardDrive,
+  BarChart3, BookOpen, Boxes, Camera, Check, ChevronsUpDown, CreditCard, Database, FileClock, FolderKanban, Globe, HardDrive,
   Image, KeyRound, Layers, LayoutDashboard, Lock, LogOut, Monitor, Moon, Network, Receipt,
   ExternalLink, Gift, PiggyBank, Route as RouteIcon, Search as SearchIcon, Server, Settings, Share2, Shield, Sun, UserCircle, Users, Wallet, Waypoints, Zap,
 } from "lucide-react"
@@ -234,6 +234,10 @@ export function AppShell() {
                       {p.id === pid && <Check className="ml-auto size-4" />}
                     </DropdownMenuItem>
                   ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => navigate(`/p/${pid}/org/projects`)}>
+                    <FolderKanban className="mr-2 size-4" /> All projects
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </SidebarMenuItem>
@@ -308,8 +312,15 @@ export function AppShell() {
                   <span className="hidden max-w-44 truncate lg:inline">{email ?? "Account"}</span>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel className="font-mono text-xs">{auth.user?.profile.sub}</DropdownMenuLabel>
+              <DropdownMenuContent align="end" className="w-60">
+                {/* Identity first (the email people recognize); the opaque OIDC
+                    subject stays visible but demoted to fine print. */}
+                <DropdownMenuLabel className="flex flex-col gap-0.5">
+                  <span className="truncate font-medium">{email ?? "Account"}</span>
+                  <span className="truncate font-mono text-[11px] font-normal text-muted-foreground">
+                    {auth.user?.profile.sub}
+                  </span>
+                </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => navigate(`/p/${pid}/account`)}>
                   <UserCircle className="mr-2 size-4" /> Account settings
