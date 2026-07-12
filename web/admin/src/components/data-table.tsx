@@ -239,7 +239,7 @@ export function sortableHeader<TData>(label: string) {
       <Button
         variant="ghost"
         size="sm"
-        className="-ml-2 h-8 gap-1.5 px-2 font-medium data-[state=open]:bg-accent"
+        className="-ml-2 h-8 gap-1.5 bg-transparent px-2 font-medium hover:bg-accent dark:bg-transparent data-[state=open]:bg-accent"
         onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
       >
         {label}

@@ -78,6 +78,7 @@ export function StatCard({
                 {trend.label}
               </span>
             )}
+            {trend && hint && <span aria-hidden className="text-muted-foreground/60">·</span>}
             {hint && <span className="text-muted-foreground">{hint}</span>}
           </div>
         )}

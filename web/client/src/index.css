@@ -195,17 +195,18 @@
     --input: oklch(0.92 0.005 60);
     --ring: #FF5C00;
 
-    /* Charts: chart-1 is the brand; 2-5 per Menlo tokens; 6-9 extend from the
-       identity hues, interleaved warm/cool for CVD-safe adjacency. Beyond ~7
+    /* Charts: chart-1 is the brand; slots alternate warm/cool so adjacent
+       categories (donut slices, stacked series) never read as near-neighbors
+       — in particular orange and amber are held four slots apart. Beyond ~7
        categories fold into "Other" (--chart-other), never cycle. */
     --chart-1: var(--primary);
-    --chart-2: var(--palette-green);
-    --chart-3: var(--palette-blue);
-    --chart-4: var(--palette-amber);
-    --chart-5: var(--palette-red);
+    --chart-2: var(--palette-blue);
+    --chart-3: var(--palette-green);
+    --chart-4: var(--palette-purple);
+    --chart-5: var(--palette-amber);
     --chart-6: var(--palette-teal);
-    --chart-7: var(--palette-purple);
-    --chart-8: var(--palette-pink);
+    --chart-7: var(--palette-pink);
+    --chart-8: var(--palette-red);
     --chart-9: var(--palette-slate);
     --chart-other: var(--palette-gray-light);
 
