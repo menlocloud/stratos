@@ -78,6 +78,9 @@ export default function BucketExplorePage() {
   const [folderOpen, setFolderOpen] = useState(false)
   const [folderName, setFolderName] = useState("")
   const [deleteTarget, setDeleteTarget] = useState<BucketObject | null>(null)
+  // Going public exposes every object to the internet — always confirm first.
+  // Going back to private is safe and applies immediately.
+  const [confirmPublic, setConfirmPublic] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
   const bucketLabel = (bucket?.data?.bucketName as string) || bucket?.externalId || "Bucket"
@@ -209,7 +212,7 @@ export default function BucketExplorePage() {
               <Switch
                 checked={visibility.data === true}
                 disabled={visibility.isLoading || setPublic.isPending}
-                onCheckedChange={(v) => setPublic.mutate(v)}
+                onCheckedChange={(v) => (v ? setConfirmPublic(true) : setPublic.mutate(false))}
                 aria-label="Toggle public access"
               />
             </div>
@@ -390,6 +393,32 @@ export default function BucketExplorePage() {
             </Button>
             <Button onClick={() => createFolder.mutate()} disabled={!folderName.trim() || createFolder.isPending}>
               {createFolder.isPending ? "Creating…" : "Create folder"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmPublic} onOpenChange={setConfirmPublic}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Make bucket public</DialogTitle>
+            <DialogDescription>
+              Anyone on the internet will be able to read every object in {bucketLabel}. You can make it
+              private again at any time.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmPublic(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setPublic.mutate(true)
+                setConfirmPublic(false)
+              }}
+            >
+              Make public
             </Button>
           </DialogFooter>
         </DialogContent>

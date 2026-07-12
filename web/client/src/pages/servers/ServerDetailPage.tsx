@@ -13,7 +13,7 @@ import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
-  Camera, HardDrive, MoreVertical, Play, Plus, Power, RotateCw, Square, Trash2, X,
+  Camera, HardDrive, MoreVertical, Play, Plus, RotateCw, Square, Trash2, X,
 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatusBadge } from "@/components/status-badge"
@@ -42,7 +42,7 @@ import { useCloudList, useCloudResource, useCloudScope, useProjectId } from "@/l
 import type { CloudResource } from "@/lib/types"
 import { serverFlavor, serverIPs, serverName, serverStatus } from "./ServersPage"
 
-type PendingAction = { action: string; label: string; destructive?: boolean } | null
+type PendingAction = { action: string; title: string; label: string; destructive?: boolean } | null
 type FormDialog = "rename" | "resize" | "rebuild" | "password" | "delete" | null
 
 type Flavor = {
@@ -206,7 +206,7 @@ export function ServerDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPending({ action: "START", label: "start this server" })}
+              onClick={() => setPending({ action: "START", title: "Start server", label: "start this server" })}
               disabled={status === "ACTIVE"}
             >
               <Play className="size-4" /> Start
@@ -214,7 +214,7 @@ export function ServerDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPending({ action: "STOP", label: "stop this server" })}
+              onClick={() => setPending({ action: "STOP", title: "Stop server", label: "stop this server" })}
               disabled={status === "SHUTOFF"}
             >
               <Square className="size-4" /> Stop
@@ -222,7 +222,7 @@ export function ServerDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPending({ action: "SOFTREBOOT", label: "reboot this server" })}
+              onClick={() => setPending({ action: "SOFTREBOOT", title: "Reboot server", label: "reboot this server" })}
             >
               <RotateCw className="size-4" /> Reboot
             </Button>
@@ -259,13 +259,13 @@ export function ServerDetailPage() {
                 </DropdownMenuItem>
                 {status === "RESCUE" ? (
                   <DropdownMenuItem
-                    onClick={() => setPending({ action: "UNRESCUE", label: "take this server out of rescue mode" })}
+                    onClick={() => setPending({ action: "UNRESCUE", title: "Unrescue server", label: "take this server out of rescue mode" })}
                   >
                     Unrescue
                   </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem
-                    onClick={() => setPending({ action: "RESCUE", label: "put this server into rescue mode" })}
+                    onClick={() => setPending({ action: "RESCUE", title: "Rescue server", label: "put this server into rescue mode" })}
                   >
                     Rescue
                   </DropdownMenuItem>
@@ -393,7 +393,7 @@ export function ServerDetailPage() {
       <Dialog open={!!pending} onOpenChange={(o) => !o && setPending(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm action</DialogTitle>
+            <DialogTitle>{pending?.title ?? "Confirm action"}</DialogTitle>
             <DialogDescription>Are you sure you want to {pending?.label}?</DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -406,7 +406,7 @@ export function ServerDetailPage() {
                 setPending(null)
               }}
             >
-              <Power className="size-4" /> Confirm
+              {pending?.title ?? "Confirm"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -956,14 +956,16 @@ function EventsTab({ pid, resourceId, scope }: { pid: string; resourceId: string
           <TableRow>
             <TableHead>Time</TableHead>
             <TableHead>Action</TableHead>
+            <TableHead>Message</TableHead>
             <TableHead>User</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {events.data.map((e, i) => (
             <TableRow key={`${e.requestId ?? i}`}>
-              <TableCell className="text-sm text-muted-foreground">{fmtDateTime(e.date)}</TableCell>
+              <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{fmtDateTime(e.date)}</TableCell>
               <TableCell className="font-medium">{e.action ?? "—"}</TableCell>
+              <TableCell className="text-sm text-muted-foreground">{e.message || "—"}</TableCell>
               <TableCell className="font-mono text-xs">{e.userId ?? "—"}</TableCell>
             </TableRow>
           ))}

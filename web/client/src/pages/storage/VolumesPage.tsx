@@ -212,11 +212,14 @@ export default function VolumesPage() {
       },
       {
         id: "attached",
-        accessorFn: (r) => attachedCount(r),
+        accessorFn: (r) =>
+          attachments(r)
+            .map((a) => serverName(a.serverId))
+            .join(", "),
         header: "Attached to",
         cell: ({ getValue }) => (
-          <span className="text-sm text-muted-foreground">
-            {getValue() ? `${getValue()} server${getValue() > 1 ? "s" : ""}` : "—"}
+          <span className="block max-w-48 truncate text-sm text-muted-foreground" title={getValue() || undefined}>
+            {getValue() || "—"}
           </span>
         ),
       },
@@ -283,8 +286,10 @@ export default function VolumesPage() {
         },
       },
     ],
-    // useState setters are stable; helpers are module-scope.
-    [],
+    // useState setters are stable; helpers are module-scope. serverName reads
+    // the servers list, so the "Attached to" column re-derives when it loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [servers],
   )
 
   return (

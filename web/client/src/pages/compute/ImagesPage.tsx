@@ -52,7 +52,9 @@ const publicColumns: ColumnDef<Record<string, any>, any>[] = [
     accessorFn: (im) => (im.size as number) ?? 0,
     header: sortableHeader("Size"),
     cell: ({ getValue }) => (
-      <span className="text-sm tabular-nums text-muted-foreground">{gb(getValue())} GB</span>
+      <span className="text-sm tabular-nums text-muted-foreground">
+        {getValue() ? `${gb(getValue())} GB` : "—"}
+      </span>
     ),
   },
   {
@@ -136,7 +138,9 @@ export default function ImagesPage() {
         accessorFn: (r) => (r.data?.image?.size as number) ?? 0,
         header: sortableHeader("Size"),
         cell: ({ getValue }) => (
-          <span className="text-sm tabular-nums text-muted-foreground">{gb(getValue())} GB</span>
+          <span className="text-sm tabular-nums text-muted-foreground">
+            {getValue() ? `${gb(getValue())} GB` : "—"}
+          </span>
         ),
       },
       {

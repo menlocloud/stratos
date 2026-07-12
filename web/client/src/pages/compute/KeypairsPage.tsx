@@ -58,7 +58,7 @@ export default function KeypairsPage() {
       }),
     onSuccess: (res) => {
       const kpName = name.trim()
-      toast.success(`Keypair "${kpName}" created`)
+      toast.success(`Key pair "${kpName}" created`)
       setCreateOpen(false)
       setName("")
       setPublicKey("")
@@ -73,7 +73,7 @@ export default function KeypairsPage() {
     mutationFn: (r: CloudResource) =>
       apiFetch(`/project/${pid}/cloud/${r.id}`, { method: "DELETE", cloud: scope }),
     onSuccess: (_d, r) => {
-      toast.success(`Keypair "${keypairName(r)}" deleted`)
+      toast.success(`Key pair "${keypairName(r)}" deleted`)
       invalidate()
     },
     onError: (e: Error) => toast.error(e.message),
@@ -150,16 +150,16 @@ export default function KeypairsPage() {
   return (
     <>
       <PageHeader
-        title="Keypairs"
+        title="Key pairs"
         eyebrow="Compute"
-        description="SSH keypairs injected into servers at boot."
+        description="SSH key pairs injected into servers at boot."
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" /> Create keypair
+              <Plus className="size-4" /> Create key pair
             </Button>
           </>
         }
@@ -168,11 +168,11 @@ export default function KeypairsPage() {
       {!isLoading && !error && !data?.length ? (
         <EmptyState
           icon={KeyRound}
-          title="No keypairs yet"
-          hint="Create a keypair to SSH into your servers — import your public key or let the cloud generate one."
+          title="No key pairs yet"
+          hint="Create a key pair to SSH into your servers — import your public key or let the cloud generate one."
           action={
             <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" /> Create keypair
+              <Plus className="size-4" /> Create key pair
             </Button>
           }
         />
@@ -182,16 +182,16 @@ export default function KeypairsPage() {
           data={data}
           isLoading={isLoading}
           error={error ? (error as Error) : null}
-          searchPlaceholder="Search keypairs…"
+          searchPlaceholder="Search key pairs…"
         />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create keypair</DialogTitle>
+            <DialogTitle>Create key pair</DialogTitle>
             <DialogDescription>
-              Leave the public key empty to have a new keypair generated — the private key is shown only once.
+              Leave the public key empty to have a new key pair generated — the private key is shown only once.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
@@ -216,7 +216,7 @@ export default function KeypairsPage() {
               Cancel
             </Button>
             <Button onClick={() => create.mutate()} disabled={!name.trim() || create.isPending}>
-              {create.isPending ? "Creating…" : "Create keypair"}
+              {create.isPending ? "Creating…" : "Create key pair"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -247,9 +247,9 @@ export default function KeypairsPage() {
       <Dialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete keypair</DialogTitle>
+            <DialogTitle>Delete key pair</DialogTitle>
             <DialogDescription>
-              Delete keypair “{toDelete ? keypairName(toDelete) : ""}”? This cannot be undone.
+              Delete key pair “{toDelete ? keypairName(toDelete) : ""}”? This cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

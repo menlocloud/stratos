@@ -239,6 +239,16 @@ export default function CreateServerPage() {
     !!scope && !!imageId && !!flavorId && netIds.length > 0 && !!name.trim() &&
     (!wantFip || !netsVisible || !!fipNet)
 
+  // What still blocks Create — shown next to the disabled button so nobody
+  // has to scroll back up hunting for the unfinished step.
+  const missing = [
+    !imageId && "an image",
+    !flavorId && "a flavor",
+    netIds.length === 0 && "a network",
+    wantFip && netsVisible && !fipNet && "a public network",
+    !name.trim() && "a name",
+  ].filter((x): x is string => !!x)
+
   if (locations.isLoading) {
     return (
       <>
@@ -348,8 +358,8 @@ export default function CreateServerPage() {
                               {selected ? <Check className="size-4 shrink-0 text-primary" /> : null}
                             </div>
                             <div className="mt-1 text-xs text-muted-foreground">
-                              {[im.os_distro, im.os_version].filter(Boolean).join(" ") || "—"} ·{" "}
-                              {gb(im.size as number)} GB
+                              {[im.os_distro, im.os_version].filter(Boolean).join(" ") || "—"}
+                              {im.size ? ` · ${gb(im.size as number)} GB` : ""}
                             </div>
                             <div className="mt-2">
                               <StatusBadge status={im.status as string} className="text-xs" />
@@ -641,7 +651,7 @@ export default function CreateServerPage() {
             </div>
           </Step>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <Button onClick={() => create.mutate()} disabled={!ready || create.isPending}>
               <Server className="size-4" />
               {create.isPending ? "Creating…" : "Create server"}
@@ -649,6 +659,15 @@ export default function CreateServerPage() {
             <Button variant="outline" asChild>
               <Link to={`/p/${pid}/servers`}>Cancel</Link>
             </Button>
+            {missing.length > 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Still needed:{" "}
+                {missing.length > 1
+                  ? `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`
+                  : missing[0]}
+                .
+              </p>
+            ) : null}
           </div>
         </div>
       )}

@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { MoreVertical, Play, Plus, RefreshCw, RotateCw, Server, Square, Trash2 } from "lucide-react"
+import { MoreHorizontal, Play, Plus, RefreshCw, RotateCw, Server, Square, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
@@ -156,7 +156,7 @@ export function ServersPage() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${name}`}>
-                    <MoreVertical className="size-4" />
+                    <MoreHorizontal className="size-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
