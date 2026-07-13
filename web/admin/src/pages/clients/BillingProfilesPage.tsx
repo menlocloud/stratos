@@ -1,14 +1,15 @@
 import { useMemo } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import type { Column, ColumnDef } from "@tanstack/react-table"
+import type { ColumnDef } from "@tanstack/react-table"
 import { RefreshCw, Wallet } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
-import { DataTable, sortableHeader } from "@/components/data-table"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import { useAdminList } from "@/lib/hooks"
 import { fmtMoney, timeAgo } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 // GET /admin/billing-profile — shaped profile doc + computed financials
 // (balance/accountCredit/promotionalCredit/currentMonth/lastMonth/forecastedMonthEnd as JSON numbers).
@@ -19,16 +20,21 @@ export function profileName(p: BpRow): string {
   return (p.fullName as string) || full || (p.companyName as string) || (p.email as string) || (p.id as string)
 }
 
-/** Right-aligned variant of sortableHeader for numeric (amount) columns. */
-function sortableRightHeader<TData>(label: string) {
-  const Inner = sortableHeader<TData>(label)
-  return function SortableRightHeader({ column }: { column: Column<TData, unknown> }) {
-    return (
-      <div className="text-right">
-        <Inner column={column} />
-      </div>
-    )
-  }
+/** Money cell: mono right-aligned, muted when zero, destructive when negative
+ * (a negative balance is client debt — the row an operator scans for). */
+function moneyCell(value: unknown, currency?: string) {
+  const n = Number(value ?? 0)
+  return (
+    <div
+      className={cn(
+        "text-right font-mono text-sm tabular-nums",
+        n === 0 && "text-muted-foreground",
+        n < 0 && "text-destructive-text",
+      )}
+    >
+      {fmtMoney(n, currency)}
+    </div>
+  )
 }
 
 export default function BillingProfilesPage() {
@@ -40,20 +46,26 @@ export default function BillingProfilesPage() {
     () => [
       {
         id: "client",
-        accessorFn: (p) => `${profileName(p)} ${p.email ?? ""}`,
+        accessorFn: (p) => `${profileName(p)} ${p.email ?? ""} ${p.companyName ?? ""}`,
         header: sortableHeader("Client"),
-        cell: ({ row }) => (
-          <div>
-            <Link
-              to={`/clients/billing-profiles/${row.original.id}`}
-              className="inline-block py-1 font-medium hover:underline"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {profileName(row.original)}
-            </Link>
-            <p className="text-xs text-muted-foreground">{row.original.email ?? "—"}</p>
-          </div>
-        ),
+        cell: ({ row }) => {
+          const p = row.original
+          const company = p.companyName && p.companyName !== profileName(p) ? p.companyName : null
+          return (
+            <div>
+              <Link
+                to={`/clients/billing-profiles/${p.id}`}
+                className="inline-block py-0.5 font-medium hover:underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {profileName(p)}
+              </Link>
+              <p className="text-xs text-muted-foreground">
+                {[p.email, company].filter(Boolean).join(" · ") || "—"}
+              </p>
+            </div>
+          )
+        },
       },
       {
         id: "status",
@@ -71,21 +83,13 @@ export default function BillingProfilesPage() {
         id: "balance",
         accessorFn: (p) => Number(p.balance ?? 0),
         header: sortableRightHeader("Balance"),
-        cell: ({ row }) => (
-          <div className="text-right font-mono text-sm tabular-nums">
-            {fmtMoney(row.original.balance, row.original.currency)}
-          </div>
-        ),
+        cell: ({ row }) => moneyCell(row.original.balance, row.original.currency),
       },
       {
         id: "currentMonth",
         accessorFn: (p) => Number(p.currentMonth ?? 0),
         header: sortableRightHeader("This month"),
-        cell: ({ row }) => (
-          <div className="text-right font-mono text-sm tabular-nums">
-            {fmtMoney(row.original.currentMonth, row.original.currency)}
-          </div>
-        ),
+        cell: ({ row }) => moneyCell(row.original.currentMonth, row.original.currency),
       },
       {
         id: "created",
