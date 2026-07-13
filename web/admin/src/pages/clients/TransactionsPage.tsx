@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import type { Column, ColumnDef } from "@tanstack/react-table"
+import type { ColumnDef } from "@tanstack/react-table"
 import { CreditCard, Download, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
-import { DataTable, sortableHeader } from "@/components/data-table"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
-import { useAdminList } from "@/lib/hooks"
+import { useAdminList, useTabParam } from "@/lib/hooks"
 import { fmtDateTime, fmtMoney } from "@/lib/format"
 
 // Platform-wide transaction lists (the old admin's global Financial → Transactions):
@@ -46,18 +46,6 @@ async function downloadResponse(resp: Response, fallback: string) {
   URL.revokeObjectURL(url)
 }
 
-/** Right-aligned variant of sortableHeader for numeric (amount) columns. */
-function sortableRightHeader<TData>(label: string) {
-  const Inner = sortableHeader<TData>(label)
-  return function SortableRightHeader({ column }: { column: Column<TData, unknown> }) {
-    return (
-      <div className="text-right">
-        <Inner column={column} />
-      </div>
-    )
-  }
-}
-
 function BpCell({ id }: { id?: string }) {
   return id ? (
     <Link
@@ -73,6 +61,7 @@ function BpCell({ id }: { id?: string }) {
 
 export default function TransactionsPage() {
   const qc = useQueryClient()
+  const [tab, setTab] = useTabParam("credits")
   const profiles = useAdminList<Row>("/admin/billing-profile")
   const [selected, setSelected] = useState("") // "" = all profiles
 
@@ -145,24 +134,29 @@ export default function TransactionsPage() {
         id: "actions",
         header: () => null,
         enableSorting: false,
-        cell: ({ row }) => (
-          <div className="text-right" onClick={(e) => e.stopPropagation()}>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Re-sync transaction ${row.original.id}`}
-              disabled={sync.isPending}
-              onClick={() => sync.mutate(row.original.id)}
-            >
-              <RefreshCw className={sync.isPending ? "size-4 animate-spin" : "size-4"} />
-            </Button>
-          </div>
-        ),
+        cell: ({ row }) => {
+          // Gateway re-sync only re-drives a PENDING deposit; settled rows get no dead button.
+          if ((row.original.status as string) !== "PENDING") return null
+          const busy = sync.isPending && sync.variables === row.original.id
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Re-sync transaction ${row.original.id}`}
+                disabled={sync.isPending}
+                onClick={() => sync.mutate(row.original.id)}
+              >
+                <RefreshCw className={busy ? "size-4 animate-spin" : "size-4"} />
+              </Button>
+            </div>
+          )
+        },
       },
     ],
-    // sync.isPending drives the disabled state on the row buttons.
+    // sync.isPending/variables drive the row buttons' disabled/spinner state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sync.isPending],
+    [sync.isPending, sync.variables],
   )
 
   const collectColumns = useMemo<ColumnDef<Row, any>[]>(
@@ -263,10 +257,14 @@ export default function TransactionsPage() {
           {(credits.error as Error).message}
         </div>
       ) : (
-        <Tabs defaultValue="credits">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
-            <TabsTrigger value="credits">Account credit</TabsTrigger>
-            <TabsTrigger value="collects">Collect</TabsTrigger>
+            <TabsTrigger value="credits">
+              Account credit{credits.data ? ` (${creditRows.length})` : ""}
+            </TabsTrigger>
+            <TabsTrigger value="collects">
+              Collect{collects.data ? ` (${collectRows.length})` : ""}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="credits" className="mt-4">

@@ -53,7 +53,8 @@ export function timeAgo(v: string | number | Date | undefined): string {
 export function statusKind(status?: string): "ok" | "warn" | "error" | "muted" {
   const s = (status ?? "").toUpperCase()
   if (["ACTIVE", "ENABLED", "SUCCESS", "PAID", "RUNNING", "ONLINE", "AVAILABLE", "IN-USE", "UP"].includes(s)) return "ok"
-  if (["ERROR", "FAILED", "SUSPENDED", "DISABLED", "DOWN", "DELETED", "REJECTED"].includes(s)) return "error"
+  if (["ERROR", "FAILED", "SUSPENDED", "DISABLED", "DOWN", "DELETED", "REJECTED", "UNPAID", "OVERDUE"].includes(s))
+    return "error"
   if (["BUILD", "PENDING", "CREATING", "PAUSED", "SHUTOFF", "PENDING_CREATE", "OPEN", "SENT", "NEW"].includes(s)) return "warn"
   // Compound OpenStack states — Heat (CREATE_COMPLETE, UPDATE_FAILED, …) and
   // Octavia (PENDING_UPDATE, DEGRADED) report VERB_PHASE strings.
