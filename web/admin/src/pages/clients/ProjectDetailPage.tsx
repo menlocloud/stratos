@@ -437,16 +437,21 @@ export default function ProjectDetailPage() {
         <ErrorPanel error={error} />
       ) : (
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="members">
-              Members{members.data?.data ? ` (${members.data.data.length})` : ""}
-            </TabsTrigger>
-            <TabsTrigger value="resources">
-              Cloud resources{counts.data?.TOTAL != null ? ` (${counts.data.TOTAL})` : ""}
-            </TabsTrigger>
-            <TabsTrigger value="quota">Quota</TabsTrigger>
-          </TabsList>
+          {/* Labels carry live counts — on a narrow viewport the four triggers
+              overflow, so the wrapper scrolls horizontally instead of forcing
+              document-level scroll (WCAG reflow). */}
+          <div className="-mx-1 overflow-x-auto px-1 pb-1">
+            <TabsList className="w-max">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="members">
+                Members{members.data?.data ? ` (${members.data.data.length})` : ""}
+              </TabsTrigger>
+              <TabsTrigger value="resources">
+                Cloud resources{counts.data?.TOTAL != null ? ` (${counts.data.TOTAL})` : ""}
+              </TabsTrigger>
+              <TabsTrigger value="quota">Quota</TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="overview" className="mt-4 space-y-6">
             <Card>
