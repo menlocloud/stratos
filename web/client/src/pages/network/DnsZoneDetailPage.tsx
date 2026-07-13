@@ -193,10 +193,22 @@ export default function DnsZoneDetailPage() {
                     {rs.records?.join(", ") || "—"}
                   </TableCell>
                   <TableCell className="text-right">
-                    {/* NS/SOA are zone-managed; deleting them fails server-side, so the button stays generic. */}
-                    <Button variant="ghost" size="icon-sm" onClick={() => setToDelete(rs)} aria-label="Delete record set">
-                      <Trash2 className="size-4 text-muted-foreground" />
-                    </Button>
+                    {/* NS/SOA are zone-managed — designate rejects deleting them,
+                        so don't offer a button that can only fail. */}
+                    {rs.type === "SOA" || rs.type === "NS" ? (
+                      <span className="pr-2 text-xs text-muted-foreground" title="Managed by the zone — cannot be deleted">
+                        Zone-managed
+                      </span>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setToDelete(rs)}
+                        aria-label={`Delete record set ${rs.name ?? ""}`}
+                      >
+                        <Trash2 className="size-4 text-muted-foreground" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -292,7 +304,7 @@ export default function DnsZoneDetailPage() {
               onClick={() => toDelete?.id && deleteRecord.mutate(toDelete.id)}
               disabled={deleteRecord.isPending}
             >
-              {deleteRecord.isPending ? "Deleting…" : "Delete"}
+              {deleteRecord.isPending ? "Deleting…" : "Delete record set"}
             </Button>
           </DialogFooter>
         </DialogContent>

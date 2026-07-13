@@ -39,6 +39,7 @@ export default function FloatingIPsPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [toDelete, setToDelete] = useState<CloudResource | null>(null)
   const [toAssign, setToAssign] = useState<CloudResource | null>(null)
+  const [toUnassign, setToUnassign] = useState<CloudResource | null>(null)
 
   // create form: external networks from GET /project/{pid}/public-networks (already filtered by
   // the project's allow-list server-side), with a manual-ID fallback for anything not listed.
@@ -80,6 +81,7 @@ export default function FloatingIPsPage() {
     onSuccess: (_d, { action }) => {
       toast.success(action === "ASSIGN" ? "Floating IP assigned" : "Floating IP unassigned")
       setToAssign(null)
+      setToUnassign(null)
       setAssignPort("")
       invalidate()
     },
@@ -119,7 +121,16 @@ export default function FloatingIPsPage() {
       },
       {
         id: "port",
-        accessorFn: (r) => (r.data?.floatingIp?.port_id as string) ?? "",
+        // Name the port when the cache knows it; the raw UUID means nothing at
+        // a glance. Falls back to the id for ports outside the cache.
+        accessorFn: (r) => {
+          const portId = (r.data?.floatingIp?.port_id as string) ?? ""
+          if (!portId) return ""
+          const port = (ports ?? []).find(
+            (p) => ((p.data?.port?.id as string) ?? p.externalId) === portId,
+          )
+          return (port?.data?.port?.name as string) || portId
+        },
         header: "Port",
         cell: ({ getValue }) => (
           <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
@@ -141,7 +152,7 @@ export default function FloatingIPsPage() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   {fipAssigned(r) ? (
-                    <DropdownMenuItem onClick={() => act.mutate({ r, action: "UNASSIGN" })}>
+                    <DropdownMenuItem onClick={() => setToUnassign(r)}>
                       <Link2Off className="size-4" /> Unassign
                     </DropdownMenuItem>
                   ) : (
@@ -160,9 +171,8 @@ export default function FloatingIPsPage() {
         },
       },
     ],
-    // act is a stable useMutation object; setters are stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    // Setters are stable; ports feeds the port-name lookup.
+    [ports],
   )
 
   return (
@@ -312,13 +322,41 @@ export default function FloatingIPsPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!toUnassign} onOpenChange={(o) => !o && setToUnassign(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Unassign floating IP</DialogTitle>
+            <DialogDescription>
+              Unassign <span className="font-mono">{toUnassign ? fipAddress(toUnassign) : ""}</span> from its
+              port? Anything reaching the instance through this address loses connectivity. The address stays
+              allocated to the project.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setToUnassign(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => toUnassign && act.mutate({ r: toUnassign, action: "UNASSIGN" })}
+              disabled={act.isPending}
+            >
+              {act.isPending ? "Unassigning…" : "Unassign floating IP"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Release floating IP</DialogTitle>
             <DialogDescription>
-              Release <span className="font-mono">{toDelete ? fipAddress(toDelete) : ""}</span>? The address
-              returns to the pool.
+              Release <span className="font-mono">{toDelete ? fipAddress(toDelete) : ""}</span>?
+              {toDelete && fipAssigned(toDelete)
+                ? " It is currently assigned — anything reaching the instance through it loses connectivity. "
+                : " "}
+              The address returns to the pool and may be re-allocated to another project.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

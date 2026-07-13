@@ -81,7 +81,7 @@ export default function NetworkDetailPage() {
       <PageHeader
         title={networkName(network)}
         eyebrow="Network"
-        description="Network detail."
+        description={`${subnets.length} ${subnets.length === 1 ? "subnet" : "subnets"} — servers, subnets and settings for this network.`}
         breadcrumb={<NetworkBreadcrumb pid={pid} name={networkName(network)} />}
       />
 

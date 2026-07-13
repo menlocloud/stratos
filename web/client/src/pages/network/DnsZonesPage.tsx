@@ -282,7 +282,7 @@ export default function DnsZonesPage() {
               onClick={() => toDelete && del.mutate(toDelete.id)}
               disabled={del.isPending}
             >
-              {del.isPending ? "Deleting…" : "Delete"}
+              {del.isPending ? "Deleting…" : "Delete zone"}
             </Button>
           </DialogFooter>
         </DialogContent>

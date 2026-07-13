@@ -181,6 +181,7 @@ export default function SecretsPage() {
           data={data}
           isLoading={isLoading}
           error={(error as Error | null) ?? null}
+          searchPlaceholder="Search secrets…"
           getRowId={(r) => r.id}
         />
       )}
@@ -254,7 +255,7 @@ export default function SecretsPage() {
               onClick={() => toDelete && del.mutate(toDelete.id)}
               disabled={del.isPending}
             >
-              {del.isPending ? "Deleting…" : "Delete"}
+              {del.isPending ? "Deleting…" : "Delete secret"}
             </Button>
           </DialogFooter>
         </DialogContent>

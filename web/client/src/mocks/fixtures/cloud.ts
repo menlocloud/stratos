@@ -112,12 +112,15 @@ export function seedCloudResources(): CloudResource[] {
   ]
   const webExt = servers[0].externalId!
 
+  // externalId mirrors the real API (like volumes above): the cache row's
+  // externalId IS the neutron network id — subnet.network_id and router
+  // external_gateway_info.network_id join against it.
   const networkPrivate = res("NETWORK", "net-private", {
     network: { id: "net-priv-1", name: "net-private", status: "ACTIVE", shared: false, "router:external": false, subnets: ["sub-priv-1"] },
-  })
+  }, { externalId: "net-priv-1" })
   const networkPublic = res("NETWORK", "public", {
     network: { id: "net-public-ext", name: "public", status: "ACTIVE", shared: true, "router:external": true, subnets: [] },
-  })
+  }, { externalId: "net-public-ext" })
 
   return [
     ...servers,

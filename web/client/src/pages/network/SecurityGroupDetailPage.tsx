@@ -322,7 +322,7 @@ export default function SecurityGroupDetailPage() {
               onClick={() => ruleToDelete?.id && deleteRule.mutate(ruleToDelete.id)}
               disabled={deleteRule.isPending}
             >
-              {deleteRule.isPending ? "Deleting…" : "Delete"}
+              {deleteRule.isPending ? "Deleting…" : "Delete rule"}
             </Button>
           </DialogFooter>
         </DialogContent>

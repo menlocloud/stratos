@@ -302,7 +302,8 @@ export default function NetworksPage() {
           <DialogHeader>
             <DialogTitle>Delete network</DialogTitle>
             <DialogDescription>
-              Delete network "{toDelete ? networkName(toDelete) : ""}"? This cannot be undone.
+              Delete network "{toDelete ? networkName(toDelete) : ""}"? Its subnets are deleted with it. This
+              cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

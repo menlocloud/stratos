@@ -164,11 +164,18 @@ export default function RoutersPage() {
       },
       {
         id: "gateway",
-        accessorFn: (r) => (routerGatewayId(r) ? "connected" : ""),
+        // Name the gateway network when the cache knows it; "Connected" is the
+        // honest fallback for pools outside the project's visibility.
+        accessorFn: (r) => {
+          const gw = routerGatewayId(r)
+          if (!gw) return ""
+          const net = (networks ?? []).find((n) => n.externalId === gw)
+          return net ? networkName(net) : "Connected"
+        },
         header: sortableHeader("External gateway"),
-        cell: ({ row }) =>
-          routerGatewayId(row.original) ? (
-            <Badge variant="secondary">Connected</Badge>
+        cell: ({ getValue }) =>
+          getValue() ? (
+            <Badge variant="secondary">{getValue()}</Badge>
           ) : (
             <span className="text-sm text-muted-foreground">—</span>
           ),
@@ -210,8 +217,8 @@ export default function RoutersPage() {
         },
       },
     ],
-    // useState setters are stable; helpers are module-scope.
-    [],
+    // useState setters are stable; networks feeds the gateway-name lookup.
+    [networks],
   )
 
   return (

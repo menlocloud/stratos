@@ -235,7 +235,7 @@ export default function SecurityGroupsPage() {
               onClick={() => toDelete && del.mutate(toDelete.id)}
               disabled={del.isPending}
             >
-              {del.isPending ? "Deleting…" : "Delete"}
+              {del.isPending ? "Deleting…" : "Delete security group"}
             </Button>
           </DialogFooter>
         </DialogContent>

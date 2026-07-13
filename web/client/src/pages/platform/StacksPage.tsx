@@ -125,7 +125,19 @@ export default function StacksPage() {
         id: "name",
         accessorFn: (r) => stackName(r),
         header: sortableHeader("Name"),
-        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+        // Name opens the details sheet — the keyboard-accessible path to the
+        // row's primary surface (row click is pointer-only).
+        cell: ({ row, getValue }) => (
+          <button
+            className="inline-block py-1 font-medium hover:underline"
+            onClick={(e) => {
+              e.stopPropagation()
+              setDetailsFor(row.original)
+            }}
+          >
+            {getValue()}
+          </button>
+        ),
       },
       {
         id: "status",
@@ -145,6 +157,9 @@ export default function StacksPage() {
         enableSorting: false,
         cell: ({ row }) => {
           const r = row.original
+          // Offer the action that applies: Resume for suspended stacks,
+          // Suspend otherwise (suspending twice only errors server-side).
+          const suspended = (stackStatus(r) ?? "").toUpperCase().startsWith("SUSPEND")
           return (
             <div className="text-right" onClick={(e) => e.stopPropagation()}>
               <DropdownMenu>
@@ -157,12 +172,15 @@ export default function StacksPage() {
                   <DropdownMenuItem onClick={() => setDetailsFor(r)}>
                     <FileCode2 className="size-4" /> Details
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => act.mutate({ id: r.id, action: "SUSPEND_STACK" })}>
-                    <Pause className="size-4" /> Suspend
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => act.mutate({ id: r.id, action: "RESUME_STACK" })}>
-                    <Play className="size-4" /> Resume
-                  </DropdownMenuItem>
+                  {suspended ? (
+                    <DropdownMenuItem onClick={() => act.mutate({ id: r.id, action: "RESUME_STACK" })}>
+                      <Play className="size-4" /> Resume
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem onClick={() => act.mutate({ id: r.id, action: "SUSPEND_STACK" })}>
+                      <Pause className="size-4" /> Suspend
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
                     <Trash2 className="size-4" /> Delete
                   </DropdownMenuItem>
@@ -213,6 +231,7 @@ export default function StacksPage() {
           data={data}
           isLoading={isLoading}
           error={(error as Error | null) ?? null}
+          searchPlaceholder="Search stacks…"
           onRowClick={(r) => setDetailsFor(r)}
           getRowId={(r) => r.id}
         />
@@ -271,7 +290,7 @@ export default function StacksPage() {
               onClick={() => toDelete && del.mutate(toDelete.id)}
               disabled={del.isPending}
             >
-              {del.isPending ? "Deleting…" : "Delete"}
+              {del.isPending ? "Deleting…" : "Delete stack"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -331,9 +350,9 @@ function StackDetailsSheet({
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="overflow-y-auto sm:max-w-2xl">
-        <SheetHeader>
+        <SheetHeader className="border-b">
           <div className="text-eyebrow">Stack</div>
-          <SheetTitle className="font-display">{stackName(stack)}</SheetTitle>
+          <SheetTitle className="font-display text-lg tracking-tight">{stackName(stack)}</SheetTitle>
           <SheetDescription>Events, template and resources of this stack.</SheetDescription>
         </SheetHeader>
 
@@ -349,16 +368,18 @@ function StackDetailsSheet({
               {events.isLoading ? (
                 <Skeleton className="h-32" />
               ) : events.isError ? (
-                <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                <p className="rounded-lg border bg-card p-3 text-sm text-muted-foreground">
                   {(events.error as Error).message}
                 </p>
               ) : !events.data?.result?.length ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No events recorded.</p>
+                <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  No events recorded.
+                </p>
               ) : (
-                <div className="overflow-hidden rounded-lg border">
+                <div className="overflow-hidden rounded-xl border bg-card">
                   <Table>
                     <TableHeader>
-                      <TableRow>
+                      <TableRow className="hover:bg-transparent">
                         <TableHead>Resource</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Time</TableHead>
@@ -390,11 +411,13 @@ function StackDetailsSheet({
               {tpl.isLoading ? (
                 <Skeleton className="h-32" />
               ) : tpl.isError ? (
-                <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                <p className="rounded-lg border bg-card p-3 text-sm text-muted-foreground">
                   {(tpl.error as Error).message}
                 </p>
               ) : !rawTemplate ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No template returned.</p>
+                <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  No template returned.
+                </p>
               ) : (
                 <pre className="max-h-[60vh] overflow-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs leading-relaxed">
                   {prettyTemplate}
@@ -406,16 +429,18 @@ function StackDetailsSheet({
               {resources.isLoading ? (
                 <Skeleton className="h-32" />
               ) : resources.isError ? (
-                <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                <p className="rounded-lg border bg-card p-3 text-sm text-muted-foreground">
                   {(resources.error as Error).message}
                 </p>
               ) : !resources.data?.result?.length ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No resources in this stack.</p>
+                <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  No resources in this stack.
+                </p>
               ) : (
-                <div className="overflow-hidden rounded-lg border">
+                <div className="overflow-hidden rounded-xl border bg-card">
                   <Table>
                     <TableHeader>
-                      <TableRow>
+                      <TableRow className="hover:bg-transparent">
                         <TableHead>Name</TableHead>
                         <TableHead>Type</TableHead>
                         <TableHead>Status</TableHead>

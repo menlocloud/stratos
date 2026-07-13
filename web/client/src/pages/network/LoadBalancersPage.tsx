@@ -264,7 +264,7 @@ export default function LoadBalancersPage() {
               onClick={() => toDelete && del.mutate(toDelete.id)}
               disabled={del.isPending}
             >
-              {del.isPending ? "Deleting…" : "Delete"}
+              {del.isPending ? "Deleting…" : "Delete load balancer"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -324,6 +324,8 @@ function LbManageSheet({
   const [confirm, setConfirm] = useState<{
     title: string
     description: string
+    /** Verb-specific destructive CTA ("Delete listener"), never a bare "Confirm". */
+    confirmLabel: string
     action: string
     data: Record<string, any>
     keys: string[]
@@ -425,7 +427,8 @@ function LbManageSheet({
                               onClick={() =>
                                 setConfirm({
                                   title: "Delete listener",
-                                  description: `Delete listener "${l.name || l.id}"? This cannot be undone.`,
+                                  description: `Delete listener "${l.name || l.id}"? Traffic on port ${l.protocol_port ?? "—"} stops being accepted. This cannot be undone.`,
+                                  confirmLabel: "Delete listener",
                                   action: "DELETE_LISTENER",
                                   data: { id: l.id },
                                   keys: ["lb-listeners"],
@@ -482,7 +485,8 @@ function LbManageSheet({
                             onClick={() =>
                               setConfirm({
                                 title: "Delete pool",
-                                description: `Delete pool "${p.name || p.id}" and its members? This cannot be undone.`,
+                                description: `Delete pool "${p.name || p.id}" and its members? Its listener stops routing traffic. This cannot be undone.`,
+                                confirmLabel: "Delete pool",
                                 action: "DELETE_POOL",
                                 data: { id: p.id },
                                 keys: ["lb-pools"],
@@ -522,7 +526,8 @@ function LbManageSheet({
                                     onClick={() =>
                                       setConfirm({
                                         title: "Remove member",
-                                        description: `Remove member ${m.address}:${m.protocol_port} from "${p.name || p.id}"?`,
+                                        description: `Remove member ${m.address}:${m.protocol_port} from "${p.name || p.id}"? It stops receiving traffic immediately.`,
+                                        confirmLabel: "Remove member",
                                         action: "DELETE_MEMBER",
                                         data: { poolId: p.id, id: m.id },
                                         keys: ["lb-pools"],
@@ -585,7 +590,8 @@ function LbManageSheet({
                               onClick={() =>
                                 setConfirm({
                                   title: "Delete health monitor",
-                                  description: `Delete monitor "${m.name || m.id}"? This cannot be undone.`,
+                                  description: `Delete monitor "${m.name || m.id}"? Unhealthy members are no longer ejected from the pool. This cannot be undone.`,
+                                  confirmLabel: "Delete monitor",
                                   action: "DELETE_MONITOR",
                                   data: { id: m.id },
                                   keys: ["lb-monitors"],
@@ -947,7 +953,7 @@ function LbManageSheet({
                 }
                 disabled={run.isPending}
               >
-                {run.isPending ? "Working…" : "Confirm"}
+                {run.isPending ? "Working…" : (confirm?.confirmLabel ?? "Confirm")}
               </Button>
             </DialogFooter>
           </DialogContent>
