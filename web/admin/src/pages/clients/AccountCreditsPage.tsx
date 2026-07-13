@@ -12,6 +12,7 @@ import {
 import { apiFetch } from "@/lib/api"
 import { useAdminList } from "@/lib/hooks"
 import { fmtMoney, timeAgo } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 // GET /admin/account-credit?billingProfileId= — the credits of ONE billing profile (the route
 // always filters by billingProfileId; there is no global list), returned as a bare {data:[…]}
@@ -33,6 +34,17 @@ function sortableRightHeader<TData>(label: string) {
       </div>
     )
   }
+}
+
+/** Right-aligned mono money, muted when zero (a fully-consumed credit has
+ * nothing left to spend — operators scan for the balances that still carry). */
+function moneyCell(value: unknown, currency?: string) {
+  const n = Number(value ?? 0)
+  return (
+    <div className={cn("text-right font-mono text-sm tabular-nums", n === 0 && "text-muted-foreground")}>
+      {fmtMoney(n, currency)}
+    </div>
+  )
 }
 
 export default function AccountCreditsPage() {
@@ -73,21 +85,13 @@ export default function AccountCreditsPage() {
         id: "amount",
         accessorFn: (c) => Number(c.amount ?? 0),
         header: sortableRightHeader("Amount"),
-        cell: ({ row }) => (
-          <div className="text-right font-mono text-sm tabular-nums">
-            {fmtMoney(row.original.amount, row.original.currency)}
-          </div>
-        ),
+        cell: ({ row }) => moneyCell(row.original.amount, row.original.currency),
       },
       {
         id: "initial",
         accessorFn: (c) => Number(c.initialAmount ?? 0),
         header: sortableRightHeader("Initial"),
-        cell: ({ row }) => (
-          <div className="text-right font-mono text-sm tabular-nums">
-            {fmtMoney(row.original.initialAmount, row.original.currency)}
-          </div>
-        ),
+        cell: ({ row }) => moneyCell(row.original.initialAmount, row.original.currency),
       },
       {
         id: "currency",

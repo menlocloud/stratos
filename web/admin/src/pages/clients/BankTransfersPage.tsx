@@ -123,6 +123,7 @@ export default function BankTransfersPage() {
           return (
             <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
               <Button
+                variant="outline"
                 size="sm"
                 disabled={decide.isPending}
                 onClick={() => setPending({ id, action: "approve" })}
@@ -132,6 +133,7 @@ export default function BankTransfersPage() {
               <Button
                 variant="outline"
                 size="sm"
+                className="text-destructive-text hover:text-destructive-text"
                 disabled={decide.isPending}
                 onClick={() => setPending({ id, action: "reject" })}
               >
