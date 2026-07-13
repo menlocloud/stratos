@@ -45,3 +45,25 @@
 - [x] `/docs-img/invite-member.png` — Organization > Members page with the email invite field and Send invite button, plus the existing-member "Add to project" picker — page: `client-manual/user-invitation.md`
 - [skip: needs a live invite token; sending an invite is a write] `/docs-img/join-project-accept.png` — The /join-project screen showing the pending invitation with Accept invite and Decline buttons — page: `client-manual/user-invitation.md`
 - [x] `/docs-img/admin-console-first-login.png` — Stratos admin console right after first sign-in on a fresh install — page: `operators-manual/kubernetes-install.md`
+
+## client-compute
+
+VM lifecycle shots for the "Launch Your First Server" walkthrough. Captured on the live cloud.menlo.ai portal against a throwaway `docs-demo` server (m5.large, developer network, allow-all security group), which was deleted right after, 2026-07-13.
+
+- [x] `/docs-img/create-server-form.png` — The Create server form (single 8-section page) filled in: image, flavor m5.large, developer network, Assign floating IP on, allow-all security group, name docs-demo — page: `getting-started/first-server.md`
+- [x] `/docs-img/server-building.png` — Servers list filtered to docs-demo showing the amber **Build** status right after launch — page: `getting-started/first-server.md`
+- [x] `/docs-img/server-active.png` — Servers list filtered to docs-demo showing the green **Active** status with its IP addresses assigned (VM IPs blurred) — page: `getting-started/first-server.md`
+- [x] `/docs-img/server-detail-actions.png` — Server detail page with the Start/Stop/Reboot header buttons and the More actions menu open (Delete highlighted); VM IPs and the account email (top-right) blurred — page: `getting-started/first-server.md`
+- [x] `/docs-img/server-delete-confirm.png` — The "Delete server" confirmation dialog ("This cannot be undone.") — page: `getting-started/first-server.md`
+
+## client-storage
+
+Storage-guide shots. Captured on the live cloud.menlo.ai portal against throwaway resources (volume `docs-demo-vol`, bucket `menlo-docs-demo-bucket`), all deleted right after, 2026-07-13.
+
+- [x] `/docs-img/create-volume.png` — The Create volume dialog (name, size in GB, optional type/AZ) — page: `guides/volumes.md`
+- [x] `/docs-img/volume-attach.png` — Volume `docs-demo-vol` (ceph-ssd1) attached to the `docs-demo` server, shown on the server detail Volumes tab (VM IP blurred) — page: `guides/volumes.md`
+- [x] `/docs-img/volume-snapshot.png` — The Snapshots list showing `docs-demo-snap` (a snapshot of `docs-demo-vol`) — page: `guides/volumes.md`
+- [x] `/docs-img/create-bucket.png` — Create bucket dialog showing the Swift/S3-(Ceph) backend picker, globally-unique-name note and object-lock option — page: `guides/object-storage.md`
+- [x] `/docs-img/bucket-objects.png` — Bucket object explorer with a folder and two uploaded files, and the Private toggle — page: `guides/object-storage.md`
+- [x] `/docs-img/s3-access-keys.png` — S3 access keys page: project credentials + additional scoped keys. **Access key IDs replaced with AWS example values, the secret left masked, and the `s3.menlo.ai` endpoint blurred (both the Endpoint field and the CLI example) — never publish real keys/endpoints** — page: `guides/object-storage.md`
+- [x] `/docs-img/bucket-settings.png` — Bucket settings dialog (General tab: versioning/object-lock/quota) with the General/Website/Access/Lifecycle/Policy tab bar — page: `guides/object-storage.md`

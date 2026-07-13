@@ -20,7 +20,7 @@ Open **System > Cloud providers**, select the provider, and move to the **Servic
 | Object storage | Swift API (Ceph RGW) | Buckets / containers |
 | DNS | Designate | DNS zones |
 
-On OpenStack 2025.1 (kolla), Octavia, Manila, and Ceph RGW-backed object storage work out of the box — but only switch them on in regions where the backing service is genuinely deployed.
+On OpenStack 2026.1 (kolla), Octavia, Manila, and Ceph RGW-backed object storage work out of the box — but only switch them on in regions where the backing service is genuinely deployed.
 
 ## How far a toggle reaches
 

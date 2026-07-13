@@ -7,7 +7,7 @@ Stratos can show per-instance utilization charts â€” CPU, memory, and network â€
 - **Ceilometer** running and polling compute metrics.
 - **Gnocchi** running as the metric backend and reachable from Stratos through the service catalog.
 
-On a kolla-ansible 2025.1 deployment, enable both:
+On a kolla-ansible 2026.1 deployment, enable both:
 
 ```yaml
 # /etc/kolla/globals.yml
