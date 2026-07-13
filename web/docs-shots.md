@@ -65,12 +65,12 @@ Captured 2026-07-10 on the live `menlo.ai` project (light theme). Dialog/step-ca
 
 ## client-storage
 
-Storage-guide shots. Captured on the live cloud.menlo.ai portal against throwaway resources (volume `docs-demo-vol`, bucket `menlo-docs-demo-bucket`), all deleted right after, 2026-07-13.
+Storage-guide shots, captured 2026-07-13 against throwaway demo resources (a volume, its snapshot, and a bucket) that were deleted right after.
 
 - [x] `/docs-img/create-volume.png` — The Create volume dialog (name, size in GB, optional type/AZ) — page: `guides/volumes.md`
 - [x] `/docs-img/volume-attach.png` — Volume `docs-demo-vol` (ceph-ssd1) attached to the `docs-demo` server, shown on the server detail Volumes tab (VM IP blurred) — page: `guides/volumes.md`
 - [x] `/docs-img/volume-snapshot.png` — The Snapshots list showing `docs-demo-snap` (a snapshot of `docs-demo-vol`) — page: `guides/volumes.md`
 - [x] `/docs-img/create-bucket.png` — Create bucket dialog showing the Swift/S3-(Ceph) backend picker, globally-unique-name note and object-lock option — page: `guides/object-storage.md`
 - [x] `/docs-img/bucket-objects.png` — Bucket object explorer with a folder and two uploaded files, and the Private toggle — page: `guides/object-storage.md`
-- [x] `/docs-img/s3-access-keys.png` — S3 access keys page: project credentials + additional scoped keys. **Access key IDs replaced with AWS example values, the secret left masked, and the `s3.menlo.ai` endpoint blurred (both the Endpoint field and the CLI example) — never publish real keys/endpoints** — page: `guides/object-storage.md`
+- [x] `/docs-img/s3-access-keys.png` — S3 access keys page: project credentials + additional scoped keys. **Access key IDs replaced with AWS example values, the secret left masked, and the S3 endpoint hostname blurred (both the Endpoint field and the CLI example) — never publish real keys/endpoints** — page: `guides/object-storage.md`
 - [x] `/docs-img/bucket-settings.png` — Bucket settings dialog (General tab: versioning/object-lock/quota) with the General/Website/Access/Lifecycle/Policy tab bar — page: `guides/object-storage.md`
