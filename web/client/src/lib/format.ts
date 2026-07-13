@@ -5,6 +5,19 @@ export function fmtMoney(v: number | string | undefined, currency = "USD"): stri
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(n)
 }
 
+// Money without noise: drops the ".00" tail on whole amounts (tier chips,
+// axis ticks) but keeps cents whenever they carry information.
+export function fmtMoneyTight(v: number | string | undefined, currency = "USD"): string {
+  if (v === undefined || v === null) return "—"
+  const n = typeof v === "string" ? parseFloat(v) : v
+  if (Number.isNaN(n)) return "—"
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: Number.isInteger(n) ? 0 : 2,
+  }).format(n)
+}
+
 export function fmtDate(v: string | number | Date | undefined): string {
   if (!v) return "—"
   const d = new Date(v)

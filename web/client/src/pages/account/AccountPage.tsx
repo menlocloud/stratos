@@ -322,12 +322,24 @@ export default function AccountPage() {
           </DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <Label className="mb-1.5 block">First name</Label>
-              <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} maxLength={100} />
+              <Label className="mb-1.5 block" htmlFor="account-first-name">First name</Label>
+              <Input
+                id="account-first-name"
+                autoComplete="given-name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                maxLength={100}
+              />
             </div>
             <div>
-              <Label className="mb-1.5 block">Last name</Label>
-              <Input value={lastName} onChange={(e) => setLastName(e.target.value)} maxLength={100} />
+              <Label className="mb-1.5 block" htmlFor="account-last-name">Last name</Label>
+              <Input
+                id="account-last-name"
+                autoComplete="family-name"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                maxLength={100}
+              />
             </div>
           </div>
           <DialogFooter>
@@ -349,12 +361,26 @@ export default function AccountPage() {
           </DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <Label className="mb-1.5 block">Key</Label>
-              <Input value={ciKey} onChange={(e) => setCiKey(e.target.value)} placeholder="lang" />
+              <Label className="mb-1.5 block" htmlFor="ci-key">Key</Label>
+              <Input
+                id="ci-key"
+                autoComplete="off"
+                className="font-mono"
+                value={ciKey}
+                onChange={(e) => setCiKey(e.target.value)}
+                placeholder="lang"
+              />
             </div>
             <div>
-              <Label className="mb-1.5 block">Value</Label>
-              <Input value={ciValue} onChange={(e) => setCiValue(e.target.value)} placeholder="en-us" />
+              <Label className="mb-1.5 block" htmlFor="ci-value">Value</Label>
+              <Input
+                id="ci-value"
+                autoComplete="off"
+                className="font-mono"
+                value={ciValue}
+                onChange={(e) => setCiValue(e.target.value)}
+                placeholder="en-us"
+              />
             </div>
           </div>
           <DialogFooter>

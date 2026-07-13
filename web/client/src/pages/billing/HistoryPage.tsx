@@ -15,6 +15,7 @@ import { apiFetch } from "@/lib/api"
 import { fmtDate, fmtDateTime, fmtMoney } from "@/lib/format"
 import { useBillingSummary, useProjectId } from "@/lib/hooks"
 import type { Bill, Transaction } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 // Fetch an authed endpoint as a blob and trigger a browser download.
 export async function downloadPdf(path: string, filename: string) {
@@ -111,11 +112,15 @@ function BillsTab({ pid, bp }: { pid: string; bp: string }) {
         id: "unpaid",
         accessorFn: (b) => b.unpaidGrossAmount ?? 0,
         header: sortableRightHeader("Unpaid"),
-        cell: ({ row }) => (
-          <div className="text-right font-mono tabular-nums">
-            {fmtMoney(row.original.unpaidGrossAmount, row.original.invoiceCurrency)}
-          </div>
-        ),
+        // A settled bill's $0.00 is non-information — mute it so open balances pop.
+        cell: ({ row }) => {
+          const unpaid = Number(row.original.unpaidGrossAmount ?? 0)
+          return (
+            <div className={cn("text-right font-mono tabular-nums", unpaid === 0 && "text-muted-foreground")}>
+              {fmtMoney(row.original.unpaidGrossAmount, row.original.invoiceCurrency)}
+            </div>
+          )
+        },
       },
     ],
     [],

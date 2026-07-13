@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { apiFetch } from "@/lib/api"
@@ -177,10 +177,13 @@ function RedeemCard({ pid, bp }: { pid: string; bp: string }) {
         <CardTitle className="flex items-center gap-2 text-base">
           <BadgePercent className="size-4 text-primary" /> Redeem a promo code
         </CardTitle>
+        <CardDescription>Promo codes mint promotional credit onto this profile.</CardDescription>
       </CardHeader>
       <CardContent className="flex gap-2">
         <Input
           placeholder="Promo code"
+          aria-label="Promo code"
+          autoComplete="off"
           className="font-mono"
           value={code}
           onChange={(e) => setCode(e.target.value)}

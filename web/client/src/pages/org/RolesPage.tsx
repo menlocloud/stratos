@@ -276,13 +276,21 @@ export default function RolesPage() {
           <div className="grid gap-4">
             {!editing ? (
               <div>
-                <Label className="mb-1.5 block">Name</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="billing-viewer" />
+                <Label className="mb-1.5 block" htmlFor="role-name">Name</Label>
+                <Input
+                  id="role-name"
+                  autoComplete="off"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="billing-viewer"
+                />
               </div>
             ) : null}
             <div>
-              <Label className="mb-1.5 block">Description</Label>
+              <Label className="mb-1.5 block" htmlFor="role-description">Description</Label>
               <Input
+                id="role-description"
+                autoComplete="off"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="What this role is for"

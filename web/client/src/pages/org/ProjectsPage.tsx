@@ -297,8 +297,14 @@ export default function ProjectsPage() {
           </DialogHeader>
           <div className="grid gap-4">
             <div>
-              <Label className="mb-1.5 block">Project name</Label>
-              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="my-project" />
+              <Label className="mb-1.5 block" htmlFor="project-name">Project name</Label>
+              <Input
+                id="project-name"
+                autoComplete="off"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="my-project"
+              />
             </div>
             {orgs.length > 1 && (
               <div>
@@ -335,8 +341,13 @@ export default function ProjectsPage() {
             <DialogTitle>Rename project</DialogTitle>
           </DialogHeader>
           <div>
-            <Label className="mb-1.5 block">New name</Label>
-            <Input value={renameName} onChange={(e) => setRenameName(e.target.value)} />
+            <Label className="mb-1.5 block" htmlFor="project-rename">New name</Label>
+            <Input
+              id="project-rename"
+              autoComplete="off"
+              value={renameName}
+              onChange={(e) => setRenameName(e.target.value)}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenaming(null)}>

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { PiggyBank } from "lucide-react"
+import { CalendarPlus, MoreHorizontal, PiggyBank, XCircle } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
@@ -14,6 +14,9 @@ import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -21,7 +24,7 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { apiFetch } from "@/lib/api"
-import { fmtDate, fmtMoney } from "@/lib/format"
+import { fmtDate, fmtMoney, fmtMoneyTight } from "@/lib/format"
 import { useBillingSummary, useProjectId } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
 
@@ -158,7 +161,7 @@ function PlanCard({ plan, currency, onPurchase }: { plan: SavingsPlan; currency:
                 <span className="text-eyebrow">{s.durationMonths}-month term</span>
                 {s.maxAmount !== undefined ? (
                   <span className="text-xs text-muted-foreground tabular-nums">
-                    up to {fmtMoney(s.maxAmount, currency)}/mo
+                    up to {fmtMoneyTight(s.maxAmount, currency)}/mo
                   </span>
                 ) : null}
               </div>
@@ -174,7 +177,7 @@ function PlanCard({ plan, currency, onPurchase }: { plan: SavingsPlan; currency:
                   <tbody>
                     {tierRows(s).map((row) => (
                       <tr key={row.start} className="border-b last:border-0">
-                        <td className="px-3 py-1.5 font-mono tabular-nums">{fmtMoney(row.start, currency)}+</td>
+                        <td className="px-3 py-1.5 font-mono tabular-nums">{fmtMoneyTight(row.start, currency)}+</td>
                         <td className="px-3 py-1.5 text-right font-mono tabular-nums">{pct(row.noUpfront)}</td>
                         <td className="px-3 py-1.5 text-right font-mono font-medium text-primary-text tabular-nums">
                           {pct(row.upfront)}
@@ -265,9 +268,9 @@ function PurchaseDialog({
 
         <div className="space-y-4">
           <div>
-            <Label className="mb-1.5 block">Duration</Label>
+            <Label className="mb-1.5 block" htmlFor="sp-duration">Duration</Label>
             <Select value={duration} onValueChange={setDuration}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger id="sp-duration" className="w-full">
                 <SelectValue placeholder="Select duration" />
               </SelectTrigger>
               <SelectContent>
@@ -280,11 +283,13 @@ function PurchaseDialog({
             </Select>
           </div>
           <div>
-            <Label className="mb-1.5 block">Monthly committed amount</Label>
+            <Label className="mb-1.5 block" htmlFor="sp-amount">Monthly committed amount</Label>
             <div className="relative">
               <Input
+                id="sp-amount"
                 className="h-11 pr-14 font-mono text-lg tabular-nums md:text-lg"
                 type="number"
+                inputMode="decimal"
                 min={0}
                 placeholder="0.00"
                 value={amount}
@@ -302,9 +307,9 @@ function PurchaseDialog({
             ) : null}
           </div>
           <div>
-            <Label className="mb-1.5 block">Starts</Label>
+            <Label className="mb-1.5 block" htmlFor="sp-start">Starts</Label>
             <Select value={start} onValueChange={setStart}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger id="sp-start" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -423,24 +428,34 @@ function ContractsSection({ bp, currency }: { bp: string; currency: string }) {
         enableSorting: false,
         cell: ({ row }) => {
           const c = row.original
+          const active = c.status === "ACTIVE"
+          // Ended contracts have no actions — no point rendering an empty menu.
+          if (!active) return null
           return (
-            <div className="text-right">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setExtending(c)}
-                disabled={c.status !== "ACTIVE"}
-              >
-                Extend
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setCancelling(c)}
-                disabled={c.status !== "ACTIVE" || c.paidUpfront === true}
-              >
-                Cancel
-              </Button>
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Actions for ${c.savingsPlanName ?? c.savingsPlanId ?? "contract"}`}
+                  >
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setExtending(c)}>
+                    <CalendarPlus className="size-4" /> Extend
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => setCancelling(c)}
+                    disabled={c.paidUpfront === true}
+                  >
+                    <XCircle className="size-4" /> Cancel contract
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           )
         },

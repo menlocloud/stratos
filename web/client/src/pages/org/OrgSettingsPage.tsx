@@ -145,6 +145,8 @@ export default function OrgSettingsPage() {
             <Label className="mb-1.5 block" htmlFor="org-delete-confirm">Organization name</Label>
             <Input
               id="org-delete-confirm"
+              autoComplete="off"
+              spellCheck={false}
               value={confirmName}
               onChange={(e) => setConfirmName(e.target.value)}
               placeholder={org?.name}

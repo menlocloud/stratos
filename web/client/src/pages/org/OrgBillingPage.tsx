@@ -17,7 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useBillingSummary, useOrgCostInfo, useProjectId, useProjects } from "@/lib/hooks"
 import type { CostInfo } from "@/lib/types"
-import { fmtMoney } from "@/lib/format"
+import { fmtMoney, fmtMoneyTight } from "@/lib/format"
 
 const n = (v: unknown) => Number(v ?? 0)
 
@@ -188,7 +188,7 @@ export default function OrgBillingPage() {
 
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard
-          label={proj === "__all__" ? "Selected scope" : projName(proj)}
+          label={proj === "__all__" ? "All projects" : projName(proj)}
           numericValue={scopeTotal}
           format={{ style: "currency", currency }}
           hint={month === "current" ? "This month" : "Last month"}
@@ -230,7 +230,7 @@ export default function OrgBillingPage() {
                 <BarChart data={projBars} layout="vertical" margin={{ left: 8, right: 16 }}>
                   <XAxis
                     type="number"
-                    tickFormatter={(v) => fmtMoney(Number(v), currency)}
+                    tickFormatter={(v) => fmtMoneyTight(Number(v), currency)}
                     tick={{ fontSize: 11 }}
                     tickLine={false}
                     axisLine={false}
@@ -331,7 +331,7 @@ export default function OrgBillingPage() {
                         <span className="size-2 rounded-full" style={{ backgroundColor: t.color }} />
                         <span className="text-muted-foreground">{t.label}</span>
                       </span>
-                      <span className="font-medium tabular-nums">{fmtMoney(t.value, currency)}</span>
+                      <span className="font-mono font-medium tabular-nums">{fmtMoney(t.value, currency)}</span>
                     </div>
                   ))}
                 </div>

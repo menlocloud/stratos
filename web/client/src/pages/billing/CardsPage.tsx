@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { loadStripe, type Stripe, type StripeCardElement } from "@stripe/stripe-js"
-import { CreditCard as CreditCardIcon, Plus, Star, Trash2 } from "lucide-react"
+import { CreditCard as CreditCardIcon, MoreHorizontal, Plus, Star, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
@@ -12,6 +12,9 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import { apiFetch } from "@/lib/api"
 import { fmtDate } from "@/lib/format"
@@ -112,18 +115,25 @@ export default function CardsPage() {
         cell: ({ row }) => {
           const c = row.original
           return (
-            <div className="text-right">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setDefault.mutate(c.id)}
-                disabled={c.id === defaultCardId || setDefaultPending}
-              >
-                <Star className="size-4" /> Set default
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setDeleting(c)}>
-                <Trash2 className="size-4" /> Delete
-              </Button>
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for card ${c.panMasked ?? c.id}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onClick={() => setDefault.mutate(c.id)}
+                    disabled={c.id === defaultCardId || setDefaultPending}
+                  >
+                    <Star className="size-4" /> Set as default
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleting(c)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           )
         },

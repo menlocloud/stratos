@@ -19,7 +19,7 @@ import {
 import { Combobox } from "@/components/ui/combobox"
 import { Skeleton } from "@/components/ui/skeleton"
 import { apiFetch } from "@/lib/api"
-import { fmtMoney } from "@/lib/format"
+import { fmtMoney, fmtMoneyTight } from "@/lib/format"
 import { useBillingSummary, useProjectId } from "@/lib/hooks"
 import type { CreditCard } from "@/lib/types"
 
@@ -85,7 +85,7 @@ export default function FundsPage() {
             {needsDetails ? (
               <BillingDetailsCard bp={bp} onSaved={() => void qc.invalidateQueries({ queryKey: ["billing-summary", pid] })} />
             ) : (
-              <DepositCard pid={pid} bp={bp} currency={currency} />
+              <DepositCard pid={pid} bp={bp} currency={currency} defaultCardId={summary?.defaultCardId} />
             )}
             <PromoCard pid={pid} bp={bp} />
           </div>
@@ -97,7 +97,9 @@ export default function FundsPage() {
 
 // Deposit via a saved card (POST /payment/deposit/{bp}/card, CollectRequest {cardId, amount})
 // or via a new card (POST /payment/deposit/{bp} → PaymentIntent → Stripe Elements confirm).
-function DepositCard({ pid, bp, currency }: { pid: string; bp: string; currency: string }) {
+function DepositCard({
+  pid, bp, currency, defaultCardId,
+}: { pid: string; bp: string; currency: string; defaultCardId?: string }) {
   const qc = useQueryClient()
   const [amount, setAmount] = useState("50")
   const [cardId, setCardId] = useState("")
@@ -111,6 +113,14 @@ function DepositCard({ pid, bp, currency }: { pid: string; bp: string; currency:
     queryKey: ["cards", bp],
     queryFn: () => apiFetch<CreditCard[]>(`/card/${bp}`),
   })
+
+  // Preselect the profile's default card so the primary flow is one click —
+  // never auto-pick a non-default card for a charge.
+  useEffect(() => {
+    if (!cardId && defaultCardId && cards?.some((c) => c.id === defaultCardId)) {
+      setCardId(defaultCardId)
+    }
+  }, [cards, defaultCardId, cardId])
 
   const gw = gateways?.find((g) => g.addFunds)
   // New-card deposits confirm client-side with Stripe Elements — need the Stripe public key.
@@ -145,15 +155,16 @@ function DepositCard({ pid, bp, currency }: { pid: string; bp: string; currency:
       </CardHeader>
       <CardContent className="space-y-5">
         <div>
-          <Label className="mb-2 block">Amount</Label>
+          <Label className="mb-2 block" htmlFor="deposit-amount">Amount</Label>
           <div className="relative">
             <Input
+              id="deposit-amount"
               className="h-12 pr-16 font-mono text-2xl font-medium tabular-nums md:text-2xl"
               type="number"
+              inputMode="decimal"
               min={minDeposit || 1}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              aria-label={`Deposit amount in ${currency}`}
             />
             <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 font-mono text-xs text-muted-foreground">
               {currency}
@@ -169,12 +180,12 @@ function DepositCard({ pid, bp, currency }: { pid: string; bp: string; currency:
                 className="font-mono tabular-nums"
                 onClick={() => setAmount(String(t))}
               >
-                {fmtMoney(t, currency)}
+                {fmtMoneyTight(t, currency)}
               </Button>
             ))}
             {minDeposit > 0 ? (
               <span className="text-xs text-muted-foreground">
-                Minimum {fmtMoney(minDeposit, currency)}
+                Minimum {fmtMoneyTight(minDeposit, currency)}
               </span>
             ) : null}
           </div>
@@ -376,6 +387,8 @@ function PromoCard({ pid, bp }: { pid: string; bp: string }) {
       <CardContent className="flex gap-2">
         <Input
           placeholder="Promo code"
+          aria-label="Promo code"
+          autoComplete="off"
           className="font-mono"
           value={code}
           onChange={(e) => setCode(e.target.value)}
@@ -423,13 +436,21 @@ function BillingDetailsCard({ bp, onSaved }: { bp: string; onSaved: () => void }
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="First name"><Input autoComplete="given-name" value={form.firstName} onChange={set("firstName")} /></Field>
-          <Field label="Last name"><Input autoComplete="family-name" value={form.lastName} onChange={set("lastName")} /></Field>
-          <Field label="Street address" className="sm:col-span-2">
-            <Input autoComplete="street-address" value={form.address} onChange={set("address")} />
+          <Field label="First name" htmlFor="bd-first-name">
+            <Input id="bd-first-name" name="given-name" autoComplete="given-name" value={form.firstName} onChange={set("firstName")} />
           </Field>
-          <Field label="City"><Input autoComplete="address-level2" value={form.city} onChange={set("city")} /></Field>
-          <Field label="ZIP code"><Input autoComplete="postal-code" value={form.zipCode} onChange={set("zipCode")} /></Field>
+          <Field label="Last name" htmlFor="bd-last-name">
+            <Input id="bd-last-name" name="family-name" autoComplete="family-name" value={form.lastName} onChange={set("lastName")} />
+          </Field>
+          <Field label="Street address" htmlFor="bd-address" className="sm:col-span-2">
+            <Input id="bd-address" name="street-address" autoComplete="street-address" value={form.address} onChange={set("address")} />
+          </Field>
+          <Field label="City" htmlFor="bd-city">
+            <Input id="bd-city" name="city" autoComplete="address-level2" value={form.city} onChange={set("city")} />
+          </Field>
+          <Field label="ZIP code" htmlFor="bd-zip">
+            <Input id="bd-zip" name="postal-code" autoComplete="postal-code" value={form.zipCode} onChange={set("zipCode")} />
+          </Field>
           <Field label="Country">
             <Combobox
               options={(countries ?? []).map((c) => ({ value: c.cca2, label: c.name }))}
@@ -439,7 +460,9 @@ function BillingDetailsCard({ bp, onSaved }: { bp: string; onSaved: () => void }
               searchPlaceholder="Search country…"
             />
           </Field>
-          <Field label="Phone"><Input autoComplete="tel" placeholder="+1 555 0100" value={form.phone} onChange={set("phone")} /></Field>
+          <Field label="Phone" htmlFor="bd-phone">
+            <Input id="bd-phone" name="tel" type="tel" autoComplete="tel" placeholder="+1 555 0100" value={form.phone} onChange={set("phone")} />
+          </Field>
         </div>
         <Button onClick={() => save.mutate()} disabled={incomplete || save.isPending}>
           {save.isPending ? "Saving…" : "Save billing details"}
@@ -449,10 +472,12 @@ function BillingDetailsCard({ bp, onSaved }: { bp: string; onSaved: () => void }
   )
 }
 
-function Field({ label, className, children }: { label: string; className?: string; children: React.ReactNode }) {
+function Field({
+  label, htmlFor, className, children,
+}: { label: string; htmlFor?: string; className?: string; children: React.ReactNode }) {
   return (
     <div className={className}>
-      <Label className="mb-1.5 block">{label}</Label>
+      <Label className="mb-1.5 block" htmlFor={htmlFor}>{label}</Label>
       {children}
     </div>
   )

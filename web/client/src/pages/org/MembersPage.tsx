@@ -403,9 +403,11 @@ export default function MembersPage() {
             </DialogDescription>
           </DialogHeader>
           <div>
-            <Label className="mb-1.5 block">Email</Label>
+            <Label className="mb-1.5 block" htmlFor="invite-email">Email</Label>
             <Input
+              id="invite-email"
               type="email"
+              autoComplete="email"
               placeholder="teammate@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -433,18 +435,20 @@ export default function MembersPage() {
           </DialogHeader>
           <div className="grid gap-4">
             <div>
-              <Label className="mb-1.5 block">Email</Label>
+              <Label className="mb-1.5 block" htmlFor="add-member-email">Email</Label>
               <Input
+                id="add-member-email"
                 type="email"
+                autoComplete="email"
                 placeholder="teammate@example.com"
                 value={addEmail}
                 onChange={(e) => setAddEmail(e.target.value)}
               />
             </div>
             <div>
-              <Label className="mb-1.5 block">Role</Label>
+              <Label className="mb-1.5 block" htmlFor="add-member-role">Role</Label>
               <Select value={addRole} onValueChange={setAddRole}>
-                <SelectTrigger className="w-full" aria-label="Role">
+                <SelectTrigger id="add-member-role" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -500,10 +504,10 @@ export default function MembersPage() {
           </DialogHeader>
           <div className="grid gap-4">
             <div>
-              <Label className="mb-1.5 block">Member</Label>
+              <Label className="mb-1.5 block" htmlFor="pm-member">Member</Label>
               {addCandidates.length ? (
                 <Select value={pmSub} onValueChange={setPmSub}>
-                  <SelectTrigger className="w-full" aria-label="Member">
+                  <SelectTrigger id="pm-member" className="w-full">
                     <SelectValue placeholder="Pick a member" />
                   </SelectTrigger>
                   <SelectContent>
@@ -521,9 +525,9 @@ export default function MembersPage() {
               )}
             </div>
             <div>
-              <Label className="mb-1.5 block">Role</Label>
+              <Label className="mb-1.5 block" htmlFor="pm-role">Role</Label>
               <Select value={pmRole} onValueChange={setPmRole}>
-                <SelectTrigger className="w-full" aria-label="Project role">
+                <SelectTrigger id="pm-role" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
