@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Cloud, RefreshCw, Trash2 } from "lucide-react"
+import { Cloud, Copy, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
@@ -191,8 +191,20 @@ export default function CloudResourceDetailPage() {
         </Card>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">Raw data</CardTitle>
+            {res.data && Object.keys(res.data).length ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(JSON.stringify(res.data, null, 2))
+                  toast.success("Raw JSON copied")
+                }}
+              >
+                <Copy className="size-4" /> Copy JSON
+              </Button>
+            ) : null}
           </CardHeader>
           <CardContent>
             {res.data && Object.keys(res.data).length ? (

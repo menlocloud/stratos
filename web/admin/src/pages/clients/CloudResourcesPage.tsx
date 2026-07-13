@@ -124,7 +124,7 @@ export default function CloudResourcesPage() {
       {
         id: "region",
         accessorFn: (r) => (r.region as string) ?? "",
-        header: "Region",
+        header: sortableHeader("Region"),
         cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
       },
       {
