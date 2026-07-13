@@ -3,10 +3,10 @@
 // Editing docs = editing markdown; no code changes needed for new pages
 // beyond a manifest entry.
 import { useEffect } from "react"
-import { Link, useParams } from "react-router-dom"
+import { Link, useLocation, useParams } from "react-router-dom"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { BookOpen, Check, Monitor, Moon, PanelsTopLeft, Sun } from "lucide-react"
+import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, Monitor, Moon, PanelsTopLeft, Sun } from "lucide-react"
 import { docsTitle, sections, defaultSlug } from "@/docs/manifest"
 import { useTheme, type ThemePref } from "@/lib/theme"
 import { Button } from "@/components/ui/button"
@@ -24,6 +24,24 @@ const files = import.meta.glob("../../docs/content/**/*.md", {
 
 function contentFor(slug: string): string | undefined {
   return files[`../../docs/content/${slug}.md`] ?? files[`../../docs/content/${slug}/index.md`]
+}
+
+// Slugified heading ids so sections deep-link (#building-a-plan); scroll-mt
+// keeps the target clear of the sticky header.
+function headingText(node: React.ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node)
+  if (Array.isArray(node)) return node.map(headingText).join("")
+  if (node && typeof node === "object" && "props" in node) {
+    return headingText((node as { props: { children?: React.ReactNode } }).props.children)
+  }
+  return ""
+}
+function headingId(children: React.ReactNode): string {
+  return headingText(children)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
 }
 
 const THEME_OPTIONS: Array<{ value: ThemePref; label: string; icon: React.ComponentType<{ className?: string }> }> = [
@@ -59,17 +77,58 @@ function ThemeMenu() {
   )
 }
 
+// Section list shared by the desktop sidebar and the mobile disclosure.
+function SectionNav({ slug }: { slug: string }) {
+  return (
+    <>
+      {sections.map((s) => (
+        <div key={s.title}>
+          <div className="text-eyebrow mb-2">{s.title}</div>
+          <ul className="space-y-0.5 border-l pl-3">
+            {s.pages.map((p) => (
+              <li key={p.slug}>
+                <Link
+                  to={`/docs/${p.slug}`}
+                  aria-current={slug === p.slug ? "page" : undefined}
+                  className={
+                    slug === p.slug
+                      ? "block rounded-sm px-2 py-1 font-medium text-primary-text"
+                      : "block rounded-sm px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+                  }
+                >
+                  {p.title}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </>
+  )
+}
+
+// Reading-order pager: the manifest flattened, with each page's section title
+// kept for the prev/next footer eyebrows.
+const flatPages = sections.flatMap((s) => s.pages.map((p) => ({ ...p, section: s.title })))
+
 export default function DocsPage() {
   const params = useParams()
+  const { hash } = useLocation()
   const slug = params["*"] && params["*"] !== "" ? params["*"].replace(/\/$/, "") : defaultSlug
   const md = contentFor(slug)
   const section = sections.find((s) => s.pages.some((p) => p.slug === slug))
   const page = section?.pages.find((p) => p.slug === slug)
+  const flatIndex = flatPages.findIndex((p) => p.slug === slug)
+  const prev = flatIndex > 0 ? flatPages[flatIndex - 1] : undefined
+  const next = flatIndex >= 0 && flatIndex < flatPages.length - 1 ? flatPages[flatIndex + 1] : undefined
 
   useEffect(() => {
     document.title = `${page?.title ?? slug} — ${docsTitle}`
-    window.scrollTo(0, 0)
-  }, [slug, page?.title])
+    // Honor a heading deep link (#building-a-plan); otherwise start at the top.
+    const target = hash ? document.getElementById(hash.slice(1)) : null
+    if (target) target.scrollIntoView()
+    else window.scrollTo(0, 0)
+  }, [slug, page?.title, hash])
 
   return (
     // Theme class lives on <html> (lib/theme + the pre-paint script); this
@@ -94,31 +153,24 @@ export default function DocsPage() {
       </header>
       <div className="mx-auto flex w-full max-w-6xl gap-10 px-4 py-8 md:px-6">
         <aside className="hidden w-60 shrink-0 md:block">
-          <nav className="sticky top-[calc(var(--navbar-height)+2rem)] space-y-6 text-sm">
-            {sections.map((s) => (
-              <div key={s.title}>
-                <div className="text-eyebrow mb-2">{s.title}</div>
-                <ul className="space-y-0.5 border-l pl-3">
-                  {s.pages.map((p) => (
-                    <li key={p.slug}>
-                      <Link
-                        to={`/docs/${p.slug}`}
-                        className={
-                          slug === p.slug
-                            ? "block rounded-sm px-2 py-1 font-medium text-primary-text"
-                            : "block rounded-sm px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
-                        }
-                      >
-                        {p.title}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+          <nav
+            aria-label="Docs sections"
+            className="sticky top-[calc(var(--navbar-height)+2rem)] space-y-6 text-sm"
+          >
+            <SectionNav slug={slug} />
           </nav>
         </aside>
         <main className="min-w-0 flex-1 pb-16">
+          {/* Mobile substitute for the hidden sidebar: same nav, disclosed. */}
+          <details className="group mb-6 rounded-lg border md:hidden">
+            <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-sm font-medium [&::-webkit-details-marker]:hidden">
+              Browse docs
+              <ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
+            </summary>
+            <nav aria-label="Docs sections" className="space-y-6 border-t px-3 py-3 text-sm">
+              <SectionNav slug={slug} />
+            </nav>
+          </details>
           {md ? (
             <>
               {section ? <div className="text-eyebrow mb-3">{section.title}</div> : null}
@@ -133,16 +185,39 @@ export default function DocsPage() {
                       <div className="horizon mb-6 mt-3 max-w-[420px]" />
                     </>
                   ),
-                  h2: (p) => (
-                    <h2 className="mb-3 mt-10 border-b pb-2 font-display text-2xl font-semibold tracking-tight" {...p} />
+                  h2: ({ children, ...p }) => (
+                    <h2
+                      id={headingId(children)}
+                      className="mb-3 mt-10 scroll-mt-[calc(var(--navbar-height)+1rem)] border-b pb-2 font-display text-2xl font-semibold tracking-tight"
+                      {...p}
+                    >
+                      {children}
+                    </h2>
                   ),
-                  h3: (p) => <h3 className="mb-2 mt-6 font-display text-xl font-semibold" {...p} />,
+                  h3: ({ children, ...p }) => (
+                    <h3
+                      id={headingId(children)}
+                      className="mb-2 mt-6 scroll-mt-[calc(var(--navbar-height)+1rem)] font-display text-xl font-semibold"
+                      {...p}
+                    >
+                      {children}
+                    </h3>
+                  ),
                   p: (p) => <p className="my-3 leading-7" {...p} />,
                   ul: (p) => <ul className="my-3 list-disc space-y-1 pl-6" {...p} />,
                   ol: (p) => <ol className="my-3 list-decimal space-y-1 pl-6" {...p} />,
-                  a: (p) => (
-                    <a className="font-medium text-primary-text underline underline-offset-4" {...p} />
-                  ),
+                  // Internal /docs links stay client-side; external ones open a tab.
+                  a: ({ href, ...p }) =>
+                    href?.startsWith("/docs") ? (
+                      <Link to={href} className="font-medium text-primary-text underline underline-offset-4" {...p} />
+                    ) : (
+                      <a
+                        href={href}
+                        className="font-medium text-primary-text underline underline-offset-4"
+                        {...(href?.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {})}
+                        {...p}
+                      />
+                    ),
                   blockquote: (p) => (
                     <blockquote className="my-4 border-l-2 border-primary/50 pl-4 text-muted-foreground" {...p} />
                   ),
@@ -175,6 +250,36 @@ export default function DocsPage() {
               >
                 {md}
               </ReactMarkdown>
+              {(prev || next) && (
+                <nav aria-label="Docs pager" className="mt-12 grid gap-3 border-t pt-6 sm:grid-cols-2">
+                  {prev ? (
+                    <Link
+                      to={`/docs/${prev.slug}`}
+                      className="group rounded-lg border p-4 transition-colors hover:border-primary/40 hover:bg-muted/40"
+                    >
+                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <ArrowLeft className="size-3.5 transition-transform group-hover:-translate-x-0.5" aria-hidden="true" />
+                        Previous · {prev.section}
+                      </span>
+                      <span className="mt-1 block font-medium">{prev.title}</span>
+                    </Link>
+                  ) : (
+                    <span className="hidden sm:block" />
+                  )}
+                  {next ? (
+                    <Link
+                      to={`/docs/${next.slug}`}
+                      className="group rounded-lg border p-4 text-right transition-colors hover:border-primary/40 hover:bg-muted/40"
+                    >
+                      <span className="flex items-center justify-end gap-1.5 text-xs text-muted-foreground">
+                        Next · {next.section}
+                        <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                      </span>
+                      <span className="mt-1 block font-medium">{next.title}</span>
+                    </Link>
+                  ) : null}
+                </nav>
+              )}
             </>
           ) : (
             <EmptyState

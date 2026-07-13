@@ -166,12 +166,17 @@ export default function AuditPage() {
                         <span className="font-mono text-xs">{e.action ?? "—"}</span>
                       </TableCell>
                       <TableCell className="text-sm">
-                        {e.resourceType ?? "—"}
-                        {e.resourceDisplayName || e.resourceId ? (
-                          <span className="ml-2 font-mono text-xs text-muted-foreground">
-                            {e.resourceDisplayName ?? e.resourceId}
-                          </span>
-                        ) : null}
+                        <span className="flex items-baseline gap-2">
+                          <span className="whitespace-nowrap">{e.resourceType ?? "—"}</span>
+                          {e.resourceDisplayName || e.resourceId ? (
+                            <span
+                              className="max-w-40 truncate font-mono text-xs text-muted-foreground 2xl:max-w-md"
+                              title={e.resourceDisplayName ?? e.resourceId}
+                            >
+                              {e.resourceDisplayName ?? e.resourceId}
+                            </span>
+                          ) : null}
+                        </span>
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={e.outcome} />
