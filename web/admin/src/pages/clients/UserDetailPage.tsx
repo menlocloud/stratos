@@ -1,12 +1,20 @@
 import { useState } from "react"
-import { useNavigate, useParams } from "react-router-dom"
+import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Building2, FolderKanban, KeyRound, Server, Trash2, UserCog } from "lucide-react"
+import { Building2, FolderKanban, KeyRound, Server, Trash2, UserCog } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -92,8 +100,8 @@ function dataField(cr: CloudResource, key: "name" | "status"): string | undefine
 function Field({ label, value, mono }: { label: string; value?: React.ReactNode; mono?: boolean }) {
   return (
     <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`mt-0.5 text-sm ${mono ? "font-mono" : ""}`}>{value || "—"}</p>
+      <p className="text-eyebrow mb-1">{label}</p>
+      <p className={mono ? "font-mono text-xs" : "text-sm"}>{value || "—"}</p>
     </div>
   )
 }
@@ -189,29 +197,38 @@ export default function UserDetailPage() {
     <>
       <PageHeader
         title={user?.email ?? (isLoading ? "Loading…" : "User")}
+        eyebrow="Clients"
         description="Client account detail."
+        breadcrumb={
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink asChild>
+                  <Link to="/clients/users">Users</Link>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{user?.email ?? id}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        }
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => navigate("/clients/users")}>
-              <ArrowLeft />
-              Back to users
-            </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={() => impersonate.mutate()}
               disabled={!user || impersonate.isPending}
             >
-              <UserCog />
-              Impersonate
+              <UserCog className="size-4" /> Impersonate
             </Button>
             <Button variant="outline" size="sm" onClick={() => setResetOpen(true)} disabled={!sub}>
-              <KeyRound />
-              Reset password
+              <KeyRound className="size-4" /> Reset password
             </Button>
             <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)} disabled={!user}>
-              <Trash2 />
-              Delete user
+              <Trash2 className="size-4" /> Delete user
             </Button>
           </>
         }
@@ -234,13 +251,17 @@ export default function UserDetailPage() {
               <Field label="Sub" value={user?.sub} mono />
               <Field label="Created" value={fmtDateTime(user?.createdAt)} />
               <div>
-                <p className="text-xs text-muted-foreground">Identity issuers</p>
-                <div className="mt-1 flex flex-wrap gap-1.5">
+                <p className="text-eyebrow mb-1">Identity issuers</p>
+                <div className="flex flex-wrap gap-1.5">
                   {(user?.identities ?? []).length === 0 ? (
                     <span className="text-sm">—</span>
                   ) : (
                     (user?.identities ?? []).map((idn, i) => (
-                      <Badge key={i} variant="secondary" className="font-mono text-xs">
+                      <Badge
+                        key={i}
+                        variant="secondary"
+                        className="max-w-full whitespace-normal break-all font-mono text-xs"
+                      >
                         {idn.issuer || "unknown"}
                       </Badge>
                     ))
@@ -251,7 +272,7 @@ export default function UserDetailPage() {
           </Card>
 
           <div>
-            <h2 className="mb-3 font-display text-lg font-semibold">Organizations</h2>
+            <h2 className="text-eyebrow mb-3">Organizations</h2>
             {orgs.isLoading && sub ? (
               <Skeleton className="h-24" />
             ) : orgs.error ? (
@@ -276,7 +297,19 @@ export default function UserDetailPage() {
                         className="cursor-pointer"
                         onClick={() => docId(o) && navigate(`/clients/organizations/${docId(o)}`)}
                       >
-                        <TableCell className="font-medium">{o.name ?? "—"}</TableCell>
+                        <TableCell>
+                          {docId(o) ? (
+                            <Link
+                              to={`/clients/organizations/${docId(o)}`}
+                              className="inline-block py-1 font-medium hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {o.name ?? "—"}
+                            </Link>
+                          ) : (
+                            <span className="font-medium">{o.name ?? "—"}</span>
+                          )}
+                        </TableCell>
                         <TableCell className="font-mono text-xs text-muted-foreground">{docId(o) ?? "—"}</TableCell>
                         <TableCell className="font-mono text-xs text-muted-foreground">
                           {o.billingProfileId ?? "—"}
@@ -291,7 +324,7 @@ export default function UserDetailPage() {
           </div>
 
           <div>
-            <h2 className="mb-3 font-display text-lg font-semibold">Projects</h2>
+            <h2 className="text-eyebrow mb-3">Projects</h2>
             {projects.isLoading && sub ? (
               <Skeleton className="h-24" />
             ) : projects.error ? (
@@ -316,7 +349,19 @@ export default function UserDetailPage() {
                         className="cursor-pointer"
                         onClick={() => docId(p) && navigate(`/clients/projects/${docId(p)}`)}
                       >
-                        <TableCell className="font-medium">{p.name ?? "—"}</TableCell>
+                        <TableCell>
+                          {docId(p) ? (
+                            <Link
+                              to={`/clients/projects/${docId(p)}`}
+                              className="inline-block py-1 font-medium hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {p.name ?? "—"}
+                            </Link>
+                          ) : (
+                            <span className="font-medium">{p.name ?? "—"}</span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <StatusBadge status={p.status} />
                         </TableCell>
@@ -331,7 +376,7 @@ export default function UserDetailPage() {
           </div>
 
           <div>
-            <h2 className="mb-3 font-display text-lg font-semibold">Cloud resources</h2>
+            <h2 className="text-eyebrow mb-3">Cloud resources</h2>
             {resources.isLoading ? (
               <Skeleton className="h-32" />
             ) : resources.error ? (
@@ -365,7 +410,7 @@ export default function UserDetailPage() {
           </div>
 
           <div>
-            <h2 className="mb-3 font-display text-lg font-semibold">Credentials</h2>
+            <h2 className="text-eyebrow mb-3">Credentials</h2>
             {creds.isLoading && sub ? (
               <Skeleton className="h-24" />
             ) : creds.error ? (
@@ -409,12 +454,12 @@ export default function UserDetailPage() {
                         <TableCell>
                           <Button
                             variant="ghost"
-                            size="icon"
-                            aria-label="Delete credential"
+                            size="icon-sm"
+                            aria-label={`Delete ${c.type ?? ""} credential`}
                             disabled={!c.id}
                             onClick={() => setCredToDelete(c)}
                           >
-                            <Trash2 className="text-muted-foreground" />
+                            <Trash2 className="size-4 text-muted-foreground" />
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -441,7 +486,7 @@ export default function UserDetailPage() {
               resetPassword.mutate()
             }}
           >
-            <div className="space-y-2">
+            <div className="grid gap-2">
               <Label htmlFor="new-password">New password</Label>
               <Input
                 id="new-password"

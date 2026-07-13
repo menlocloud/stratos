@@ -46,15 +46,22 @@
 - [skip: needs a live invite token; sending an invite is a write] `/docs-img/join-project-accept.png` — The /join-project screen showing the pending invitation with Accept invite and Decline buttons — page: `client-manual/user-invitation.md`
 - [x] `/docs-img/admin-console-first-login.png` — Stratos admin console right after first sign-in on a fresh install — page: `operators-manual/kubernetes-install.md`
 
-## client-compute
+## client-first-server
 
-VM lifecycle shots for the "Launch Your First Server" walkthrough. Captured on the live cloud.menlo.ai portal against a throwaway `docs-demo` server (m5.large, developer network, allow-all security group), which was deleted right after, 2026-07-13.
+Captured 2026-07-10 on the live `menlo.ai` project (light theme). Dialog/step-card shots are element-scoped (no top-bar/email chrome); the server detail/actions shots are viewport shots of the real `my-first-server` VM that was created and then deleted. Page: `getting-started/first-server.md`.
 
-- [x] `/docs-img/create-server-form.png` — The Create server form (single 8-section page) filled in: image, flavor m5.large, developer network, Assign floating IP on, allow-all security group, name docs-demo — page: `getting-started/first-server.md`
-- [x] `/docs-img/server-building.png` — Servers list filtered to docs-demo showing the amber **Build** status right after launch — page: `getting-started/first-server.md`
-- [x] `/docs-img/server-active.png` — Servers list filtered to docs-demo showing the green **Active** status with its IP addresses assigned (VM IPs blurred) — page: `getting-started/first-server.md`
-- [x] `/docs-img/server-detail-actions.png` — Server detail page with the Start/Stop/Reboot header buttons and the More actions menu open (Delete highlighted); VM IPs and the account email (top-right) blurred — page: `getting-started/first-server.md`
-- [x] `/docs-img/server-delete-confirm.png` — The "Delete server" confirmation dialog ("This cannot be undone.") — page: `getting-started/first-server.md`
+- [x] `/docs-img/first-server-keypair-create.png` — Compute → Key pairs, Create keypair dialog with a name filled and the "private key shown only once" hint
+- [x] `/docs-img/first-server-keypair-private.png` — "Save your private key" one-time dialog with Copy / Download .pem (throwaway generated key, keypair since removed)
+- [x] `/docs-img/first-server-servers-header.png` — Servers page header cropped to the title + Create server button
+- [x] `/docs-img/first-server-create-image.png` — Create-server step 3 Image table with Ubuntu Server 24.04 LTS selected
+- [x] `/docs-img/first-server-create-flavor.png` — Create-server step 4 Flavor table with t3.small selected (general/burstable families visible)
+- [x] `/docs-img/first-server-create-network.png` — Create-server step 5 Network with the project network checked and Fixed IP field revealed
+- [x] `/docs-img/first-server-create-access.png` — Create-server step 7 Access: Password login (username + password) and the allow-all security group checked (allow-all is used for demo simplicity only — not a recommended default; real servers should use an SSH-only group scoped to the user's IP)
+- [x] `/docs-img/first-server-create-name.png` — Create-server step 8 Name with `my-first-server` entered
+- [x] `/docs-img/first-server-building.png` — Server detail page for `my-first-server` in the Build state (no addresses yet)
+- [x] `/docs-img/first-server-detail.png` — Server detail page for `my-first-server` now Active, showing IP addresses, power buttons and tabs
+- [x] `/docs-img/first-server-actions.png` — Server detail with the More actions menu open (Rename, Resize, Rebuild, Rescue, Set password, Console (VNC), Delete)
+- [skip: element shot kept catching the sticky top bar; step described in prose] `/docs-img/first-server-create-publicip.png` — Create-server step 6 Public IP with the Assign floating IP toggle on
 
 ## client-storage
 

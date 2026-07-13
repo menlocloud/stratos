@@ -1,9 +1,12 @@
 import { useEffect } from "react"
+import { BookOpen } from "lucide-react"
 import { useAuth } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
 
-// Public landing: one job — sign in. Night-sky brand moment with the horizon
-// gradient as the only decoration.
+// Public landing: one job — sign in. Split layout after the Menlo product
+// logins: a full-bleed brand visual on the left (space photography over the
+// pixel-mosaic texture), a centered sign-in column on the right. Fully
+// token-driven; works in both themes.
 export function LoginPage() {
   const auth = useAuth()
 
@@ -12,27 +15,61 @@ export function LoginPage() {
   }, [])
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-[#0b1220] px-6 text-white">
-      <div className="w-full max-w-sm">
-        <h1 className="font-display text-4xl font-semibold tracking-tight">
-          Stratos<span className="text-[#22d3ee]">.</span>
-        </h1>
-        <p className="mt-3 text-sm text-white/60">
-          Compute, networking, storage and billing for your cloud — in one console.
-        </p>
-        <div className="horizon mt-6" />
-        <Button
-          className="mt-8 w-full bg-[#4f46e5] text-white hover:bg-[#4338ca]"
-          size="lg"
-          disabled={auth.isLoading}
-          onClick={() => void auth.signinRedirect()}
-        >
-          {auth.isLoading ? "Checking session…" : "Sign in"}
-        </Button>
-        <p className="mt-4 text-center text-xs text-white/40">
-          New here? Sign-up happens on the sign-in page.
-        </p>
+    <main className="flex min-h-screen w-full gap-3 bg-background p-3 text-foreground md:gap-5 md:p-5">
+      {/* Brand visual — dropped below lg */}
+      <div className="relative hidden overflow-hidden rounded-2xl border lg:block lg:w-[55%] xl:w-[58%]">
+        <img
+          src="/brand/space.webp"
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="h-full w-full object-cover"
+        />
+        <div className="absolute bottom-5 left-5 flex items-center gap-2 rounded-full bg-black/40 px-3 py-1.5 backdrop-blur">
+          <span className="status-dot status-dot-ok" />
+          <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-white/80">
+            All regions operational
+          </span>
+        </div>
       </div>
-    </div>
+
+      {/* Sign-in column */}
+      <div className="flex flex-1 items-center justify-center px-4 py-8">
+        <div className="flex w-full max-w-md flex-col items-center gap-10 text-center">
+          <div className="flex items-center gap-2.5">
+            <img src="/brand/menlo-logo.svg" alt="Menlo" className="h-6 w-auto" />
+            <span className="text-eyebrow rounded border px-1.5 py-0.5">console</span>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <h1 className="font-display text-4xl font-medium tracking-tight md:text-5xl">
+              Stratos<span className="text-primary">.</span>
+            </h1>
+            <p className="text-lg text-muted-foreground md:text-xl">
+              Compute, networking, storage and billing for your cloud — in one console.
+            </p>
+          </div>
+
+          <div className="flex w-full flex-col gap-3">
+            <Button
+              size="lg"
+              className="w-full"
+              disabled={auth.isLoading}
+              onClick={() => void auth.signinRedirect()}
+            >
+              {auth.isLoading ? "Checking session…" : "Sign in"}
+            </Button>
+            <Button asChild variant="outline" size="lg" className="w-full">
+              <a href="/docs" target="_blank" rel="noopener noreferrer">
+                <BookOpen className="size-5" /> View docs
+              </a>
+            </Button>
+            <p className="mt-1 text-xs text-muted-foreground">
+              New here? Sign-up happens on the sign-in page.
+            </p>
+          </div>
+        </div>
+      </div>
+    </main>
   )
 }

@@ -114,7 +114,7 @@ attribute schema (`BillingResourceType`):
 | Resource type | Provider | Metered attributes (selected) | Not billed when |
 |---|---|---|---|
 | `instance` | `ServerProvider` (`server.go`) | `instance_type`, `ram_mb`, `ram_gb`, `vcpus`, `root_disk_gb`, `is_bareMetal`, `availability_zone`, `image`, `status` | nova status `DELETED`/`ERROR`/`UNKNOWN`/`BUILD` |
-| `instance_traffic` | `ServerProvider` | `incoming/outgoing × private/public × _traffic_mb`, `total_*_traffic_mb` (usage attrs, read from Gnocchi metrics for the month) | server ineligible |
+| `instance_traffic` | `ServerProvider` | `incoming/outgoing × private/public × _traffic_mb`, `total_*_traffic_mb` (usage attrs, read from the provider's configured metrics source for the month — Gnocchi by default, or a Prometheus-compatible endpoint via `config.metrics`; see `docs/jobs-scheduling.md`) | server ineligible |
 | `volume` | `VolumeProvider` (`volume.go`) | `size`, `bootable`, `type`, `status`, `availability_zone` | cinder status `error`/`deleting`/`creating`/`error_deleting` |
 | `floating_ip` | `FloatingIPProvider` (`floatingip.go`) | `status`, `floating_network_id` (typically a flat per-IP charge) | — |
 | `load_balancer` | `LoadBalancerProvider` (`loadbalancer.go`) | `flavor_id`, `operating_status` | operating status `ERROR` |

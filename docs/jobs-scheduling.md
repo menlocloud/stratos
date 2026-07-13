@@ -123,7 +123,7 @@ cron specs from `scheduler.go`. All specs are 6-field seconds-first, UTC.
 | `minutelyCharge` | `30 * * * * *` | every minute at :30 | 5m / 30s | Charge each ACTIVE billing profile for the `minute` time unit |
 | `hourlyCharge` | `0 0 * * * *` | top of every hour | 5m / 30s | Charge each ACTIVE profile for the `hour` time unit |
 | `monthlyCharge` | `0 0 * * * *` | top of every hour | 5m / 30s | Charge each ACTIVE profile for the `month` time unit (shares the hourly spec; the charge filters rules by exact time unit) |
-| `gnocchiMetricsFetch` | `0 0 * * * *` | top of every hour | 10m / 30s | Ingest gnocchi network-traffic usage into `gnocchiMetrics` |
+| `gnocchiMetricsFetch` | `0 0 * * * *` | top of every hour | 10m / 30s | Ingest network-traffic usage into `gnocchiMetrics` from the provider's metrics source (`config.metrics.source`: gnocchi default, `prometheus` for a Prometheus/Mimir endpoint, `none` skips the provider) |
 | `savingsContractExpiration` | `0 0 0 * * *` | daily 00:00 | 10m / 30s | Expire savings contracts past their end date |
 | `savingsContractExpiryReminders` | `0 0 0 * * *` | daily 00:00 | 10m / 30s | Schedule reminder docs for ACTIVE contracts nearing expiry |
 | `reminderNotifications` | `0 0 * * * *` | top of every hour | 10m / 30s | Dispatch the due scheduled reminders (re-evaluates days-until-expiry each run) |
@@ -221,7 +221,7 @@ is the read-only `GET /debug/cloud` connectivity probe):
 | Trigger | Runs |
 |---|---|
 | `run-sync` | one cloud resource sync pass |
-| `run-metrics` | one gnocchi metrics ingestion pass |
+| `run-metrics` | one metrics ingestion pass (gnocchi or prometheus per provider config) |
 | `run-charge?timeUnit=minute\|hour\|month` | one charge pass (defaults to `minute`) |
 | `run-savings-expire` | expire savings contracts |
 | `run-expiry-reminders` | schedule expiry reminder docs |

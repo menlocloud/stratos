@@ -732,7 +732,7 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 	if assignFIP && (req.Type == cloud.TypeServer || req.Type == cloud.TypeBaremetalServer) {
 		h.autoAssignFloatingIP(ws, proj, svcID, region, uid, cr.ExternalID, strAny(req.Data["name"]), fipNetID)
 	}
-	h.projectAudit(u, proj, "CLOUD_RESOURCE_CREATE")
+	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_CREATE", "", cr)
 	httpx.OK(w, *cr)
 }
 
@@ -814,7 +814,7 @@ func (h *Handler) cloudDelete(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, err)
 			return
 		}
-		h.projectAudit(u, proj, "CLOUD_RESOURCE_DELETE")
+		h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_DELETE", "", cr)
 		httpx.Accepted(w)
 		return
 	}
@@ -839,7 +839,7 @@ func (h *Handler) cloudDelete(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	h.projectAudit(u, proj, "CLOUD_RESOURCE_DELETE")
+	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_DELETE", "", live)
 	httpx.Accepted(w)
 }
 
@@ -1385,7 +1385,7 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 			h.failWebsite(w, err)
 			return
 		}
-		h.projectAudit(u, proj, "CLOUD_RESOURCE_ACTION")
+		h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", req.Action, cr)
 		httpx.OK(w, map[string]any{"result": site})
 		return
 	case "DISABLE_WEBSITE":
@@ -1399,7 +1399,7 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 			h.failWebsite(w, err)
 			return
 		}
-		h.projectAudit(u, proj, "CLOUD_RESOURCE_ACTION")
+		h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", req.Action, cr)
 		httpx.OK(w, map[string]any{"result": &client.BucketWebsite{}})
 		return
 	case "DELETE_OBJECT":
@@ -1728,7 +1728,7 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	h.projectAudit(u, proj, "CLOUD_RESOURCE_ACTION")
+	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", req.Action, cr)
 	httpx.OK(w, map[string]any{"result": res})
 }
 
@@ -1768,7 +1768,7 @@ func (h *Handler) cloudMetadata(w http.ResponseWriter, r *http.Request) {
 			cr = saved
 		}
 	}
-	h.projectAudit(u, proj, "CLOUD_RESOURCE_ACTION")
+	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", "SET_METADATA", cr)
 	httpx.OK(w, *cr)
 }
 
@@ -1881,7 +1881,7 @@ func (h *Handler) cloudUploadBucketFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h.refreshBucketCache(r.Context(), cc, cr)
-	h.projectAudit(u, proj, "CLOUD_RESOURCE_ACTION")
+	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", "UPLOAD_OBJECT", cr)
 	w.WriteHeader(http.StatusNoContent)
 }
 

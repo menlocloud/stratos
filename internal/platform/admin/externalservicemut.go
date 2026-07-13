@@ -48,11 +48,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/menlocloud/stratos/internal/cloud/metrics"
 	"github.com/menlocloud/stratos/internal/pgdoc"
+	"github.com/menlocloud/stratos/internal/platform/externalservice"
 
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
@@ -84,6 +88,10 @@ func (h *Handler) routeExternalServiceMut(r chi.Router) {
 	r.Put("/service/{id}/availability-zones", h.externalServiceUpdateAvailabilityZones)
 	r.Put("/service/{id}/gnocchi-granularity", h.externalServiceUpdateGnocchiGranularity)
 	r.Put("/service/{id}/vhi-ostor", h.externalServiceUpdateVhiOstor)
+	// usage-metrics source (gnocchi | prometheus | none) + prometheus connection config; the
+	// POST probes the configured prometheus endpoint live (metricstest.go).
+	r.Put("/service/{id}/metrics-config", h.externalServiceUpdateMetricsConfig)
+	r.Post("/service/{id}/metrics-test", h.externalServiceMetricsTest)
 }
 
 // serviceNotFoundErr is the 404 returned when a service id is not found
@@ -474,6 +482,123 @@ func (h *Handler) externalServiceUpdateVhiOstor(w http.ResponseWriter, r *http.R
 		}
 		return nil
 	})
+}
+
+// externalServiceUpdateMetricsConfig handles PUT /{id}/metrics-config:
+// config.metrics = {source, prometheus:{…}} plus, when supplied, the encrypted credential
+// leaves secret.prometheusBasicPassword / secret.prometheusBearerToken (blank = leave the
+// stored value unchanged, the vhi-ostor convention; "-" = clear). The response strips
+// `secret` via shapeExternalService like every other field-set PUT.
+func (h *Handler) externalServiceUpdateMetricsConfig(w http.ResponseWriter, r *http.Request) {
+	h.serviceFieldSet(w, r, h.applyMetricsConfig)
+}
+
+// applyMetricsConfig is the metrics-config apply closure, named so the validation matrix is
+// unit-testable without the repo. Semantics: config.metrics is MERGED, not replaced — a
+// source-only toggle (the natural payload for switching to none/gnocchi and back) must not
+// discard the stored prometheus connection config. When the effective source is prometheus,
+// a usable URL must exist (supplied now or already stored) — otherwise the failure would
+// surface as hourly per-server job errors with traffic silently unbilled, exactly what the
+// /metrics-test probe exists to prevent.
+func (h *Handler) applyMetricsConfig(req *http.Request, doc pgdoc.M) *httpx.HTTPError {
+	var body struct {
+		Source     string `json:"source"`
+		Prometheus *struct {
+			URL            string            `json:"url"`
+			Schema         string            `json:"schema"`
+			Headers        map[string]string `json:"headers"`
+			BasicUser      string            `json:"basicUser"`
+			InsecureTLS    bool              `json:"insecureTls"`
+			CACert         string            `json:"caCert"`
+			TimeoutSeconds int               `json:"timeoutSeconds"`
+		} `json:"prometheus"`
+		PrometheusAuth *struct {
+			BasicPassword string `json:"basicPassword"`
+			BearerToken   string `json:"bearerToken"`
+		} `json:"prometheusAuth"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		return httpx.BadRequest("Invalid request body")
+	}
+	switch body.Source {
+	case externalservice.MetricsSourceGnocchi, externalservice.MetricsSourcePrometheus, externalservice.MetricsSourceNone:
+	default:
+		return httpx.BadRequest("source must be one of: gnocchi, prometheus, none")
+	}
+	cfg := ensureConfig(doc)
+	metricsCfg := ensureMap(cfg, "metrics")
+	metricsCfg["source"] = body.Source
+	if body.Prometheus != nil {
+		p := body.Prometheus
+		if p.URL != "" && !strings.HasPrefix(p.URL, "http://") && !strings.HasPrefix(p.URL, "https://") {
+			return httpx.BadRequest("prometheus.url must be an http(s) URL")
+		}
+		// Credentials must go through prometheusAuth (encrypted at rest, stripped from admin
+		// reads) — config.* is returned to read-only admins, so plaintext side-doors are
+		// rejected: no userinfo in the URL, no Authorization-class headers.
+		if u, err := url.Parse(p.URL); err == nil && u.User != nil {
+			return httpx.BadRequest("prometheus.url must not embed credentials — use prometheusAuth")
+		}
+		switch p.Schema {
+		case "", metrics.PromSchemaLibvirtExporter, metrics.PromSchemaCeilometerPushgw, metrics.PromSchemaCeilometerExporter:
+		default:
+			return httpx.BadRequest("prometheus.schema must be one of: libvirt-exporter, ceilometer-pushgateway, ceilometer-exporter")
+		}
+		if p.TimeoutSeconds < 0 {
+			return httpx.BadRequest("prometheus.timeoutSeconds must be zero (default) or positive")
+		}
+		headers := pgdoc.M{}
+		for k, v := range p.Headers {
+			if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Proxy-Authorization") {
+				return httpx.BadRequest("prometheus.headers must not carry Authorization — use prometheusAuth")
+			}
+			if k != "" && v != "" {
+				headers[k] = v
+			}
+		}
+		metricsCfg["prometheus"] = pgdoc.M{
+			"url": p.URL, "schema": p.Schema, "headers": headers,
+			"basicUser": p.BasicUser, "insecureTls": p.InsecureTLS,
+			"caCert": p.CACert, "timeoutSeconds": p.TimeoutSeconds,
+		}
+	}
+	if body.Source == externalservice.MetricsSourcePrometheus && storedPromURL(metricsCfg) == "" {
+		return httpx.BadRequest("prometheus.url is required when source is prometheus (none stored)")
+	}
+	if body.PrometheusAuth != nil {
+		secret := ensureMap(doc, "secret")
+		setSecretLeaf(h, secret, "prometheusBasicPassword", body.PrometheusAuth.BasicPassword)
+		setSecretLeaf(h, secret, "prometheusBearerToken", body.PrometheusAuth.BearerToken)
+	}
+	return nil
+}
+
+// storedPromURL reads metrics.prometheus.url out of the (merged) metrics config map
+// (pgdoc.M is a map[string]any alias, so this covers fresh writes and stored docs alike).
+func storedPromURL(metricsCfg pgdoc.M) string {
+	if p, ok := metricsCfg["prometheus"].(map[string]any); ok {
+		s, _ := p["url"].(string)
+		return s
+	}
+	return ""
+}
+
+// setSecretLeaf applies the blank-keeps / "-"-clears convention to one encrypted secret
+// leaf: a non-blank value is encrypted and stored, blank leaves the stored value untouched,
+// and the literal "-" removes it (so an operator can revoke a credential without pasting a
+// replacement).
+func setSecretLeaf(h *Handler, secret pgdoc.M, key, value string) {
+	switch value {
+	case "":
+	case "-":
+		delete(secret, key)
+	default:
+		if h.esSvc != nil {
+			secret[key] = h.esSvc.EncryptSecret(value)
+		} else {
+			secret[key] = value
+		}
+	}
 }
 
 // serviceFieldSet is the shared body for every persisted field-set PUT (and the no-op /update):

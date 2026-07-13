@@ -1,12 +1,13 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { HardDrive, MoreHorizontal, Plus, RefreshCw } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -18,8 +19,6 @@ import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
@@ -181,14 +180,122 @@ export default function VolumesPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => vol(r).name || r.name || r.id,
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (r) => (vol(r).status as string) ?? r.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "size",
+        accessorFn: (r) => (vol(r).size as number) ?? null,
+        header: sortableHeader("Size"),
+        cell: ({ getValue }) => (
+          <span className="text-sm tabular-nums">{getValue() != null ? `${getValue()} GB` : "—"}</span>
+        ),
+      },
+      {
+        id: "type",
+        accessorFn: (r) => (vol(r).volume_type as string) || "",
+        header: "Type",
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "attached",
+        accessorFn: (r) => attachedCount(r),
+        header: "Attached to",
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">
+            {getValue() ? `${getValue()} server${getValue() > 1 ? "s" : ""}` : "—"}
+          </span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="Volume actions">
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {attachedCount(r) === 0 && (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setAttachServer("")
+                        setAttachTarget(r)
+                      }}
+                    >
+                      Attach to server
+                    </DropdownMenuItem>
+                  )}
+                  {attachedCount(r) > 0 && (
+                    <DropdownMenuItem onClick={() => setDetachTarget(r)}>Detach</DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setExtendSize(String((vol(r).size as number) ?? ""))
+                      setExtendTarget(r)
+                    }}
+                  >
+                    Extend
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setNewType("")
+                      setMigrationPolicy("never")
+                      setRetypeTarget(r)
+                    }}
+                  >
+                    Change type
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(r)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Volumes"
+        eyebrow="Storage"
         description="Block-storage volumes in this project."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -198,11 +305,7 @@ export default function VolumesPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : isError ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
-      ) : !data?.length ? (
+      {!isLoading && !isError && !data?.length ? (
         <EmptyState
           icon={HardDrive}
           title="No volumes yet"
@@ -214,83 +317,13 @@ export default function VolumesPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Size</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Attached to</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-10" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">{vol(r).name || r.name || r.id}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={(vol(r).status as string) ?? r.status} />
-                  </TableCell>
-                  <TableCell className="text-sm">{vol(r).size != null ? `${vol(r).size} GB` : "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{vol(r).volume_type || "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {attachedCount(r) ? `${attachedCount(r)} server${attachedCount(r) > 1 ? "s" : ""}` : "—"}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm">
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {attachedCount(r) === 0 && (
-                          <DropdownMenuItem
-                            onClick={() => {
-                              setAttachServer("")
-                              setAttachTarget(r)
-                            }}
-                          >
-                            Attach to server
-                          </DropdownMenuItem>
-                        )}
-                        {attachedCount(r) > 0 && (
-                          <DropdownMenuItem onClick={() => setDetachTarget(r)}>Detach</DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setExtendSize(String((vol(r).size as number) ?? ""))
-                            setExtendTarget(r)
-                          }}
-                        >
-                          Extend
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setNewType("")
-                            setMigrationPolicy("never")
-                            setRetypeTarget(r)
-                          }}
-                        >
-                          Change type
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(r)}>
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={isError ? (error as Error) : null}
+          searchPlaceholder="Search volumes…"
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

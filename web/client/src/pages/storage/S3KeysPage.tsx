@@ -1,8 +1,10 @@
-import { useId, useState } from "react"
+import { useId, useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { Copy, Eye, EyeOff, KeyRound, MoreHorizontal, Plus, RefreshCw, RotateCw } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -15,7 +17,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ApiError, apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useProjectId } from "@/lib/hooks"
@@ -41,10 +42,10 @@ function SecretField({ label, value }: { label: string; value: string }) {
       <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
       <div className="flex items-center gap-2">
         <Input id={id} readOnly value={shown ? value : "•".repeat(Math.min(value.length, 40))} className="font-mono text-xs" />
-        <Button variant="outline" size="sm" onClick={() => setShown((s) => !s)} aria-label={shown ? "Hide" : "Reveal"}>
+        <Button variant="outline" size="icon-sm" onClick={() => setShown((s) => !s)} aria-label={shown ? "Hide" : "Reveal"}>
           {shown ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
         </Button>
-        <Button variant="outline" size="sm" onClick={() => void copy(label, value)} aria-label={`Copy ${label}`}>
+        <Button variant="outline" size="icon-sm" onClick={() => void copy(label, value)} aria-label={`Copy ${label}`}>
           <Copy className="size-4" />
         </Button>
       </div>
@@ -59,7 +60,7 @@ function PlainField({ label, value }: { label: string; value: string }) {
       <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
       <div className="flex items-center gap-2">
         <Input id={id} readOnly value={value} className="font-mono text-xs" />
-        <Button variant="outline" size="sm" onClick={() => void copy(label, value)} aria-label={`Copy ${label}`}>
+        <Button variant="outline" size="icon-sm" onClick={() => void copy(label, value)} aria-label={`Copy ${label}`}>
           <Copy className="size-4" />
         </Button>
       </div>
@@ -124,13 +125,91 @@ export default function S3KeysPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<S3Key, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (k) => k.name,
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "accessKey",
+        accessorFn: (k) => k.accessKey,
+        header: "Access key",
+        cell: ({ getValue }) => (
+          <span className="inline-flex items-center gap-1.5 font-mono text-xs">
+            {getValue()}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="size-6"
+              onClick={() => void copy("Access key", getValue())}
+              aria-label="Copy access key"
+            >
+              <Copy className="size-3.5" />
+            </Button>
+          </span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (k) => k.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const k = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${k.name}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => void copy("Access key", k.accessKey)}>
+                    <Copy className="size-4" /> Copy access key
+                  </DropdownMenuItem>
+                  {k.secretKey ? (
+                    <DropdownMenuItem onClick={() => void copy("Secret key", k.secretKey as string)}>
+                      <Copy className="size-4" /> Copy secret key
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuItem onClick={() => setRotateTarget(k)}>
+                    <RotateCw className="size-4" /> Rotate
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(k)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    [],
+  )
+
   // A 400 means the project has no ceph-s3 service — a normal state, show the empty page. Any OTHER error
   // (403 no permission, 5xx, network) is a real failure and must surface, not masquerade as "not available".
   if (creds.isError) {
     const status = creds.error instanceof ApiError ? creds.error.status : 0
     return (
       <>
-        <PageHeader title="S3 access keys" description="Use these credentials with the AWS CLI or any S3 client." />
+        <PageHeader
+          title="S3 access keys"
+          eyebrow="Storage"
+          description="Use these credentials with the AWS CLI or any S3 client."
+        />
         {status === 400 ? (
           <EmptyState
             icon={KeyRound}
@@ -148,6 +227,7 @@ export default function S3KeysPage() {
     <>
       <PageHeader
         title="S3 access keys"
+        eyebrow="Storage"
         description="Use these credentials with the AWS CLI or any S3-compatible client."
         actions={
           <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -157,13 +237,21 @@ export default function S3KeysPage() {
       />
 
       {creds.isLoading ? (
-        <Skeleton className="h-56" />
+        <div className="mb-6 grid gap-3 rounded-xl border bg-card p-4">
+          <Skeleton className="h-5 w-44" />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Skeleton className="h-9" />
+            <Skeleton className="h-9" />
+            <Skeleton className="h-9" />
+            <Skeleton className="h-9" />
+          </div>
+        </div>
       ) : creds.data ? (
         <Card className="mb-6 p-4">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-4">
             <div>
-              <h2 className="text-sm font-medium">Project credentials</h2>
-              <p className="text-xs text-muted-foreground">
+              <h2 className="text-eyebrow">Project credentials</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
                 Full access to every bucket in this project. Treat the secret key like a password.
               </p>
             </div>
@@ -171,28 +259,26 @@ export default function S3KeysPage() {
               <RotateCw className="size-4" /> Rotate
             </Button>
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <PlainField label="Endpoint" value={creds.data.s3Endpoint} />
             <PlainField label="Region" value={creds.data.region} />
             <PlainField label="Access key" value={creds.data.accessKey} />
             <SecretField label="Secret key" value={creds.data.secretKey} />
           </div>
-          <pre className="mt-4 overflow-x-auto rounded-md bg-muted p-3 text-xs">
+          <pre className="mt-4 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
 {`aws --endpoint-url ${creds.data.s3Endpoint} s3 ls`}
           </pre>
         </Card>
       ) : null}
 
       <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-sm font-medium text-muted-foreground">Additional keys</h2>
+        <h2 className="text-eyebrow">Additional keys</h2>
         <Button variant="outline" size="sm" onClick={() => void keys.refetch()} disabled={keys.isFetching} aria-label="Refresh keys">
           <RefreshCw className={keys.isFetching ? "size-4 animate-spin" : "size-4"} />
         </Button>
       </div>
 
-      {keys.isLoading ? (
-        <Skeleton className="h-40" />
-      ) : !keys.data?.length ? (
+      {!keys.isLoading && !keys.isError && !keys.data?.length ? (
         <EmptyState
           icon={KeyRound}
           title="No additional keys"
@@ -204,52 +290,12 @@ export default function S3KeysPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Access key</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-10" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {keys.data.map((k) => (
-                <TableRow key={k.id}>
-                  <TableCell className="font-medium">{k.name}</TableCell>
-                  <TableCell className="font-mono text-xs">{k.accessKey}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{timeAgo(k.createdAt)}</TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm" aria-label={`Actions for ${k.name}`}>
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => void copy("Access key", k.accessKey)}>
-                          <Copy className="size-4" /> Copy access key
-                        </DropdownMenuItem>
-                        {k.secretKey ? (
-                          <DropdownMenuItem onClick={() => void copy("Secret key", k.secretKey as string)}>
-                            <Copy className="size-4" /> Copy secret key
-                          </DropdownMenuItem>
-                        ) : null}
-                        <DropdownMenuItem onClick={() => setRotateTarget(k)}>
-                          <RotateCw className="size-4" /> Rotate
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(k)}>
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={keys.data}
+          isLoading={keys.isLoading}
+          error={keys.isError ? (keys.error as Error) : null}
+        />
       )}
 
       <p className="mt-4 text-xs text-muted-foreground">

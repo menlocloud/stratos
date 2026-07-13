@@ -1,11 +1,19 @@
 import { useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, FolderKanban, Pencil, Plus, Trash2, Users } from "lucide-react"
+import { FolderKanban, Pencil, Plus, Trash2, Users } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -87,8 +95,8 @@ const MEMBER_ROLES = ["OWNER", "MEMBER"] as const
 function Field({ label, value, mono }: { label: string; value?: React.ReactNode; mono?: boolean }) {
   return (
     <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`mt-0.5 text-sm ${mono ? "font-mono" : ""}`}>{value || "—"}</p>
+      <p className="text-eyebrow mb-1">{label}</p>
+      <p className={mono ? "font-mono text-xs" : "text-sm"}>{value || "—"}</p>
     </div>
   )
 }
@@ -203,13 +211,25 @@ export default function OrganizationDetailPage() {
     <>
       <PageHeader
         title={org?.name ?? (isLoading ? "Loading…" : "Organization")}
+        eyebrow="Clients"
         description="Client organization detail."
+        breadcrumb={
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink asChild>
+                  <Link to="/clients/organizations">Organizations</Link>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{org?.name ?? id}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        }
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => navigate("/clients/organizations")}>
-              <ArrowLeft />
-              Back to organizations
-            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -219,12 +239,10 @@ export default function OrganizationDetailPage() {
                 setEditOpen(true)
               }}
             >
-              <Pencil />
-              Edit
+              <Pencil className="size-4" /> Edit
             </Button>
             <Button variant="destructive" size="sm" disabled={!org} onClick={() => setDeleteOpen(true)}>
-              <Trash2 />
-              Delete organization
+              <Trash2 className="size-4" /> Delete organization
             </Button>
           </>
         }
@@ -265,11 +283,11 @@ export default function OrganizationDetailPage() {
                 {org?.billingProfileId ? (
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div>
-                      <p className="text-xs text-muted-foreground">Profile</p>
-                      <p className="mt-0.5 text-sm">
+                      <p className="text-eyebrow mb-1">Profile</p>
+                      <p className="text-sm">
                         <Link
                           to={`/clients/billing-profiles/${org.billingProfileId}`}
-                          className="font-mono text-xs underline-offset-2 hover:underline"
+                          className="inline-block py-1 font-mono text-xs underline-offset-2 hover:underline"
                         >
                           {org.billingProfileId}
                         </Link>
@@ -280,10 +298,8 @@ export default function OrganizationDetailPage() {
                       value={org.billingProfile?.name ?? org.billingProfile?.email}
                     />
                     <div>
-                      <p className="text-xs text-muted-foreground">Status</p>
-                      <div className="mt-1">
-                        <StatusBadge status={org.billingProfile?.status} />
-                      </div>
+                      <p className="text-eyebrow mb-1">Status</p>
+                      <StatusBadge status={org.billingProfile?.status} />
                     </div>
                     <Field label="Currency" value={org.billingProfile?.currency} />
                   </div>
@@ -297,8 +313,7 @@ export default function OrganizationDetailPage() {
           <TabsContent value="members" className="mt-4">
             <div className="mb-3 flex justify-end">
               <Button size="sm" onClick={() => setAddMemberOpen(true)}>
-                <Plus />
-                Add member
+                <Plus className="size-4" /> Add member
               </Button>
             </div>
             {members.isLoading ? (
@@ -335,7 +350,10 @@ export default function OrganizationDetailPage() {
                             value={(m.role ?? "MEMBER").toUpperCase()}
                             onValueChange={(role) => m.sub && setRoleChange({ member: m, role })}
                           >
-                            <SelectTrigger className="h-8 w-32">
+                            <SelectTrigger
+                              className="h-8 w-32"
+                              aria-label={`Role for ${m.email ?? m.sub ?? "member"}`}
+                            >
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -350,12 +368,12 @@ export default function OrganizationDetailPage() {
                         <TableCell>
                           <Button
                             variant="ghost"
-                            size="icon"
-                            aria-label="Remove member"
+                            size="icon-sm"
+                            aria-label={`Remove ${m.email ?? m.sub ?? "member"}`}
                             disabled={(m.role ?? "").toUpperCase() === "OWNER"}
                             onClick={() => setMemberToRemove(m)}
                           >
-                            <Trash2 className="text-muted-foreground" />
+                            <Trash2 className="size-4 text-muted-foreground" />
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -391,7 +409,19 @@ export default function OrganizationDetailPage() {
                         className="cursor-pointer"
                         onClick={() => docId(p) && navigate(`/clients/projects/${docId(p)}`)}
                       >
-                        <TableCell className="font-medium">{p.name ?? "—"}</TableCell>
+                        <TableCell>
+                          {docId(p) ? (
+                            <Link
+                              to={`/clients/projects/${docId(p)}`}
+                              className="inline-block py-1 font-medium hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {p.name ?? "—"}
+                            </Link>
+                          ) : (
+                            <span className="font-medium">{p.name ?? "—"}</span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <StatusBadge status={p.status} />
                         </TableCell>
@@ -478,33 +508,39 @@ export default function OrganizationDetailPage() {
             <DialogTitle>Add member</DialogTitle>
             <DialogDescription>Adds an existing user to {org?.name ?? "this organization"}.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <Select value={memberChoice} onValueChange={setMemberChoice}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder={users.isLoading ? "Loading users…" : "Pick a user"} />
-              </SelectTrigger>
-              <SelectContent>
-                {(users.data?.data ?? []).map((u) =>
-                  u.id ? (
-                    <SelectItem key={u.id} value={u.id}>
-                      {u.email ?? [u.firstName, u.lastName].filter(Boolean).join(" ") ?? u.id}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor="add-member-user">User</Label>
+              <Select value={memberChoice} onValueChange={setMemberChoice}>
+                <SelectTrigger id="add-member-user" className="w-full">
+                  <SelectValue placeholder={users.isLoading ? "Loading users…" : "Pick a user"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {(users.data?.data ?? []).map((u) =>
+                    u.id ? (
+                      <SelectItem key={u.id} value={u.id}>
+                        {u.email ?? [u.firstName, u.lastName].filter(Boolean).join(" ") ?? u.id}
+                      </SelectItem>
+                    ) : null,
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="add-member-role">Role</Label>
+              <Select value={memberRole} onValueChange={setMemberRole}>
+                <SelectTrigger id="add-member-role" className="w-full">
+                  <SelectValue placeholder="Role" />
+                </SelectTrigger>
+                <SelectContent>
+                  {MEMBER_ROLES.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r.charAt(0) + r.slice(1).toLowerCase()}
                     </SelectItem>
-                  ) : null,
-                )}
-              </SelectContent>
-            </Select>
-            <Select value={memberRole} onValueChange={setMemberRole}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Role" />
-              </SelectTrigger>
-              <SelectContent>
-                {MEMBER_ROLES.map((r) => (
-                  <SelectItem key={r} value={r}>
-                    {r.charAt(0) + r.slice(1).toLowerCase()}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddMemberOpen(false)}>

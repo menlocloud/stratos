@@ -1,10 +1,16 @@
+// Menlo escape hatch — DOCUMENTED EXCEPTION to the DataTable rule: the audit
+// trail is cursor-paged by the server (paging.nextMarker), so rows arrive in
+// server order and client sorting/filtering would lie about the dataset. It
+// stays a bare styled <Table> on a card surface with an explicit "Load more"
+// cursor walk; only the row presentation is Menlo (mono timestamps, actor
+// chips, StatusBadge outcomes, mono action verbs).
 import { useState } from "react"
 import { useInfiniteQuery } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { Download, ScrollText } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
-import { Badge } from "@/components/ui/badge"
+import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -12,6 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { apiFetch, apiFetchEnvelope } from "@/lib/api"
 import { fmtDateTime } from "@/lib/format"
 import { useProjectId } from "@/lib/hooks"
+import { cn } from "@/lib/utils"
 import { useOrg } from "./MembersPage"
 
 type AuditEvent = {
@@ -26,6 +33,54 @@ type AuditEvent = {
 }
 
 const LIMIT = 50
+
+// WORKAROUND (escalated): Tailwind v4 only emits @utility classes whose
+// literal names appear in scanned source, and StatusBadge composes
+// `status-dot-${kind}` dynamically — so the error/muted dot flavors were
+// never generated and FAILED outcomes rendered dot-less app-wide. Keep the
+// full set visible to the scanner until a proper safelist (@source inline in
+// index.css) or literal map in status-badge.tsx lands:
+// status-dot-ok status-dot-warn status-dot-error status-dot-muted
+
+// Identity hues for actor chips — fixed per-actor assignment via a stable
+// hash (Menlo identity-* tokens; full literals so Tailwind emits them).
+const IDENTITY_CHIP = [
+  "bg-identity-1/15 text-identity-1",
+  "bg-identity-2/15 text-identity-2",
+  "bg-identity-3/15 text-identity-3",
+  "bg-identity-4/15 text-identity-4",
+  "bg-identity-5/15 text-identity-5",
+  "bg-identity-6/15 text-identity-6",
+  "bg-identity-7/15 text-identity-7",
+  "bg-identity-8/15 text-identity-8",
+  "bg-identity-9/15 text-identity-9",
+]
+export function identityChip(seed: string) {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
+  return IDENTITY_CHIP[Math.abs(h) % IDENTITY_CHIP.length]
+}
+
+/** Initial-avatar chip + display name; the initial's hue is decorative
+ * (per-actor identity color), the adjacent name carries the information. */
+export function ActorChip({ id, name }: { id?: string; name?: string }) {
+  const label = name ?? id
+  if (!label) return <span className="text-sm text-muted-foreground">—</span>
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-5 shrink-0 items-center justify-center rounded-full font-display text-[10px] font-semibold",
+          identityChip(id ?? label),
+        )}
+      >
+        {label.charAt(0).toUpperCase()}
+      </span>
+      <span className="text-sm">{label}</span>
+    </span>
+  )
+}
 
 export default function AuditPage() {
   const pid = useProjectId()
@@ -71,6 +126,7 @@ export default function AuditPage() {
     <>
       <PageHeader
         title="Audit log"
+        eyebrow="Organization"
         description={org?.name ? `Activity in the ${org.name} organization.` : "Organization activity."}
         actions={
           <Button size="sm" variant="outline" onClick={() => void exportCsv()} disabled={!org || exporting}>
@@ -80,7 +136,13 @@ export default function AuditPage() {
       />
 
       {orgLoading || isLoading ? (
-        <Skeleton className="h-64" />
+        <Card className="gap-0 overflow-hidden py-0">
+          <div className="space-y-3 p-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-8" />
+            ))}
+          </div>
+        </Card>
       ) : error ? (
         <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
           {(error as Error).message}
@@ -92,7 +154,7 @@ export default function AuditPage() {
           <Card className="overflow-hidden py-0">
             <Table>
               <TableHeader>
-                <TableRow>
+                <TableRow className="hover:bg-transparent">
                   <TableHead>Time</TableHead>
                   <TableHead>Actor</TableHead>
                   <TableHead>Action</TableHead>
@@ -103,12 +165,14 @@ export default function AuditPage() {
               <TableBody>
                 {events.map((e, i) => (
                   <TableRow key={e.id ?? i}>
-                    <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                    <TableCell className="whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground">
                       {fmtDateTime(e.timestamp)}
                     </TableCell>
-                    <TableCell className="text-sm">{e.actor?.displayName ?? e.actor?.id ?? "—"}</TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{e.action ?? "—"}</Badge>
+                      <ActorChip id={e.actor?.id} name={e.actor?.displayName} />
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-mono text-xs">{e.action ?? "—"}</span>
                     </TableCell>
                     <TableCell className="text-sm">
                       {e.resourceType ?? "—"}
@@ -118,19 +182,24 @@ export default function AuditPage() {
                         </span>
                       ) : null}
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{e.outcome ?? "—"}</TableCell>
+                    <TableCell>
+                      <StatusBadge status={e.outcome} />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </Card>
-          {hasNextPage ? (
-            <div className="mt-4 text-center">
+          <div className="mt-4 flex flex-col items-center gap-2">
+            {hasNextPage ? (
               <Button variant="outline" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
                 {isFetchingNextPage ? "Loading…" : "Load more"}
               </Button>
-            </div>
-          ) : null}
+            ) : null}
+            <p className="font-mono text-xs text-muted-foreground">
+              {events.length} event{events.length === 1 ? "" : "s"} loaded{hasNextPage ? "" : " · end of log"}
+            </p>
+          </div>
         </>
       )}
     </>

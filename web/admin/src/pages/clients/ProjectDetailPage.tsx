@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Building2, CreditCard, Pause, Play, Plus, RefreshCw, Server, Trash2, Users } from "lucide-react"
+import { Building2, CreditCard, Pause, Play, Plus, RefreshCw, Server, Trash2, Users } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -41,7 +49,8 @@ type ProjectDoc = {
   organizationId?: string
   billingProfileId?: string
   memberships?: Array<{ sub?: string; role?: string }>
-  services?: Array<{ serviceId?: string; externalProjectId?: string }>
+  // ceph-s3 bindings carry provider/region/rgwUid instead of an (OpenStack) externalProjectId.
+  services?: Array<{ serviceId?: string; externalProjectId?: string; provider?: string; region?: string; rgwUid?: string }>
   // absent/null = all external networks allowed; array = allow-list of Neutron network ids.
   publicNetworkIds?: string[] | null
   // false/absent = the client can't choose an external network (server auto-picks); true = client picks.
@@ -111,8 +120,8 @@ function dataField(cr: CloudResource, key: "name" | "status"): string | undefine
 function Field({ label, value, mono }: { label: string; value?: React.ReactNode; mono?: boolean }) {
   return (
     <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`mt-0.5 text-sm ${mono ? "font-mono" : ""}`}>{value || "—"}</p>
+      <p className="text-eyebrow mb-1">{label}</p>
+      <p className={mono ? "font-mono text-xs" : "text-sm"}>{value || "—"}</p>
     </div>
   )
 }
@@ -147,10 +156,16 @@ export default function ProjectDetailPage() {
   const [memberChoice, setMemberChoice] = useState("")
   const [memberRole, setMemberRole] = useState("MEMBER")
   const [memberToRemove, setMemberToRemove] = useState<MemberUser | null>(null)
+  const [attachOpen, setAttachOpen] = useState(false)
+  const [attachChoice, setAttachChoice] = useState("")
 
   const bps = useAdminList<BillingProfile>("/admin/billing-profile", bpOpen)
   const orgsList = useAdminList<{ id: string; name?: string }>("/admin/organizations", orgOpen)
   const users = useAdminList<AdminUser>("/admin/user", addMemberOpen)
+  const providers = useAdminList<{ id: string; name?: string; status?: string; config?: { provider?: string } }>(
+    "/admin/service",
+    attachOpen,
+  )
 
   const externalServiceId = project?.services?.find((s) => s.serviceId)?.serviceId ?? ""
   const publicNets = useAdminList<PublicNetwork>(
@@ -194,6 +209,20 @@ export default function ProjectDetailPage() {
     onSuccess: (_d, status) => {
       toast.success(status === "ENABLED" ? "Project enabled" : "Project disabled")
       setStatusConfirm(null)
+      invalidateProject()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  // GET /admin/project/{id}/external-service/{esid} (projectmut.go projectAddExternalService):
+  // bootstraps the project onto that provider — a Keystone tenant for openstack, an RGW user +
+  // stored S3 credential for ceph-s3. Idempotent, so a re-attach is safe.
+  const attachService = useMutation({
+    mutationFn: (esID: string) => apiFetch(`${projectPath}/external-service/${esID}`),
+    onSuccess: () => {
+      toast.success("Cloud provider attached")
+      setAttachOpen(false)
+      setAttachChoice("")
       invalidateProject()
     },
     onError: (e: Error) => toast.error(e.message),
@@ -363,16 +392,27 @@ export default function ProjectDetailPage() {
     <>
       <PageHeader
         title={project?.name ?? (isLoading ? "Loading…" : "Project")}
+        eyebrow="Clients"
         description="Client project detail."
+        breadcrumb={
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink asChild>
+                  <Link to="/clients/projects">Projects</Link>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{project?.name ?? id}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        }
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => navigate("/clients/projects")}>
-              <ArrowLeft />
-              Back to projects
-            </Button>
             <Button variant="outline" size="sm" onClick={() => syncProject.mutate()} disabled={syncProject.isPending}>
-              <RefreshCw className={syncProject.isPending ? "animate-spin" : ""} />
-              Sync
+              <RefreshCw className={syncProject.isPending ? "size-4 animate-spin" : "size-4"} /> Sync
             </Button>
             <Button
               variant="outline"
@@ -380,12 +420,11 @@ export default function ProjectDetailPage() {
               disabled={!project}
               onClick={() => setStatusConfirm(enabled ? "DISABLED" : "ENABLED")}
             >
-              {enabled ? <Pause /> : <Play />}
+              {enabled ? <Pause className="size-4" /> : <Play className="size-4" />}
               {enabled ? "Disable" : "Enable"}
             </Button>
             <Button variant="destructive" size="sm" disabled={!project} onClick={() => setDeleteOpen(true)}>
-              <Trash2 />
-              Delete project
+              <Trash2 className="size-4" /> Delete project
             </Button>
           </>
         }
@@ -412,15 +451,13 @@ export default function ProjectDetailPage() {
               <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <Field label="Name" value={project?.name} />
                 <div>
-                  <p className="text-xs text-muted-foreground">Status</p>
-                  <div className="mt-1">
-                    <StatusBadge status={project?.status} />
-                  </div>
+                  <p className="text-eyebrow mb-1">Status</p>
+                  <StatusBadge status={project?.status} />
                 </div>
                 <Field label="ID" value={project?.id} mono />
                 <div>
-                  <p className="text-xs text-muted-foreground">Organization</p>
-                  <div className="mt-0.5 flex items-center gap-2 text-sm">
+                  <p className="text-eyebrow mb-1">Organization</p>
+                  <div className="flex items-center gap-2 text-sm">
                     {project?.organizationId ? (
                       <Link
                         to={`/clients/organizations/${project.organizationId}`}
@@ -432,14 +469,13 @@ export default function ProjectDetailPage() {
                       <span className="text-muted-foreground">None (imported / unassigned)</span>
                     )}
                     <Button variant="outline" size="sm" onClick={() => setOrgOpen(true)}>
-                      <Building2 />
-                      {project?.organizationId ? "Change" : "Assign"}
+                      <Building2 className="size-4" /> {project?.organizationId ? "Change" : "Assign"}
                     </Button>
                   </div>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Billing profile</p>
-                  <div className="mt-0.5 flex items-center gap-2 text-sm">
+                  <p className="text-eyebrow mb-1">Billing profile</p>
+                  <div className="flex items-center gap-2 text-sm">
                     {project?.billingProfileId ? (
                       <Link
                         to={`/clients/billing-profiles/${project.billingProfileId}`}
@@ -451,8 +487,7 @@ export default function ProjectDetailPage() {
                       <span className="text-muted-foreground">Inherited from organization</span>
                     )}
                     <Button variant="outline" size="sm" onClick={() => setBpOpen(true)}>
-                      <CreditCard />
-                      Change
+                      <CreditCard className="size-4" /> Change
                     </Button>
                   </div>
                 </div>
@@ -461,8 +496,11 @@ export default function ProjectDetailPage() {
             </Card>
 
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-base">Cloud services</CardTitle>
+                <Button variant="outline" size="sm" onClick={() => setAttachOpen(true)}>
+                  <Plus className="size-4" /> Attach provider
+                </Button>
               </CardHeader>
               <CardContent>
                 {(project?.services ?? []).length === 0 ? (
@@ -475,10 +513,17 @@ export default function ProjectDetailPage() {
                           <span className="text-xs text-muted-foreground">Service: </span>
                           <span className="font-mono text-xs">{s.serviceId ?? "—"}</span>
                         </span>
-                        <span>
-                          <span className="text-xs text-muted-foreground">External project: </span>
-                          <span className="font-mono text-xs">{s.externalProjectId ?? "—"}</span>
-                        </span>
+                        {s.rgwUid ? (
+                          <span>
+                            <span className="text-xs text-muted-foreground">RGW user: </span>
+                            <span className="font-mono text-xs">{s.rgwUid}</span>
+                          </span>
+                        ) : (
+                          <span>
+                            <span className="text-xs text-muted-foreground">External project: </span>
+                            <span className="font-mono text-xs">{s.externalProjectId ?? "—"}</span>
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -581,8 +626,7 @@ export default function ProjectDetailPage() {
           <TabsContent value="members" className="mt-4">
             <div className="mb-3 flex justify-end">
               <Button size="sm" onClick={() => setAddMemberOpen(true)}>
-                <Plus />
-                Add member
+                <Plus className="size-4" /> Add member
               </Button>
             </div>
             {members.isLoading ? (
@@ -620,12 +664,12 @@ export default function ProjectDetailPage() {
                           <TableCell>
                             <Button
                               variant="ghost"
-                              size="icon"
-                              aria-label="Remove member"
+                              size="icon-sm"
+                              aria-label={`Remove ${m.email ?? m.sub ?? "member"}`}
                               disabled={role === "OWNER"}
                               onClick={() => setMemberToRemove(m)}
                             >
-                              <Trash2 className="text-muted-foreground" />
+                              <Trash2 className="size-4 text-muted-foreground" />
                             </Button>
                           </TableCell>
                         </TableRow>
@@ -660,7 +704,18 @@ export default function ProjectDetailPage() {
                     {(resources.data?.data ?? []).map((cr) => (
                       <TableRow key={cr.id ?? cr.externalId}>
                         <TableCell className="font-mono text-xs">{cr.type ?? "—"}</TableCell>
-                        <TableCell className="font-medium">{dataField(cr, "name") ?? "—"}</TableCell>
+                        <TableCell>
+                          {cr.id ? (
+                            <Link
+                              to={`/clients/cloud-resources/${cr.id}`}
+                              className="inline-block py-1 font-medium hover:underline"
+                            >
+                              {dataField(cr, "name") ?? cr.externalId ?? "—"}
+                            </Link>
+                          ) : (
+                            <span className="font-medium">{dataField(cr, "name") ?? "—"}</span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <StatusBadge status={dataField(cr, "status")} />
                         </TableCell>
@@ -707,6 +762,7 @@ export default function ProjectDetailPage() {
                               type="number"
                               min={0}
                               className="w-24"
+                              aria-label={`Limit for ${row.model}`}
                               value={row.limit}
                               onChange={(e) =>
                                 setQuotaRows((rows) => rows.map((r, idx) => (idx === i ? { ...r, limit: e.target.value } : r)))
@@ -717,6 +773,7 @@ export default function ProjectDetailPage() {
                             <Button
                               variant="ghost"
                               size="sm"
+                              aria-label={`Remove limit for ${row.model}`}
                               onClick={() => setQuotaRows((rows) => rows.filter((_, idx) => idx !== i))}
                             >
                               Remove
@@ -729,9 +786,9 @@ export default function ProjectDetailPage() {
                 )}
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="space-y-1.5">
-                    <p className="text-xs text-muted-foreground">GPU model</p>
+                    <p className="text-eyebrow">GPU model</p>
                     <Select value={quotaModel} onValueChange={setQuotaModel}>
-                      <SelectTrigger className="w-56">
+                      <SelectTrigger className="w-56" aria-label="GPU model">
                         <SelectValue placeholder="Select model" />
                       </SelectTrigger>
                       <SelectContent>
@@ -744,11 +801,12 @@ export default function ProjectDetailPage() {
                     </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <p className="text-xs text-muted-foreground">Limit</p>
+                    <p className="text-eyebrow">Limit</p>
                     <Input
                       type="number"
                       min={0}
                       className="w-24"
+                      aria-label="Limit"
                       value={quotaLimit}
                       onChange={(e) => setQuotaLimit(e.target.value)}
                     />
@@ -833,7 +891,7 @@ export default function ProjectDetailPage() {
           </DialogHeader>
           <div className="space-y-2">
             <Select value={bpChoice} onValueChange={setBpChoice}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="Billing profile">
                 <SelectValue placeholder={bps.isLoading ? "Loading billing profiles…" : "Pick a billing profile"} />
               </SelectTrigger>
               <SelectContent>
@@ -858,6 +916,49 @@ export default function ProjectDetailPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={attachOpen}
+        onOpenChange={(o) => {
+          setAttachOpen(o)
+          if (!o) setAttachChoice("")
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Attach cloud provider</DialogTitle>
+            <DialogDescription>
+              Provisions this project on the provider: a Keystone tenant for OpenStack, a dedicated RGW user for
+              Ceph S3. Projects created after a provider was added pick it up on their own — this is for the ones
+              that already existed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Select value={attachChoice} onValueChange={setAttachChoice}>
+              <SelectTrigger className="w-full" aria-label="Cloud provider">
+                <SelectValue placeholder={providers.isLoading ? "Loading providers…" : "Pick a provider"} />
+              </SelectTrigger>
+              <SelectContent>
+                {(providers.data?.data ?? [])
+                  .filter((p) => p.id && !(project?.services ?? []).some((s) => s.serviceId === p.id))
+                  .map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {`${p.name ?? p.id} · ${p.config?.provider ?? "openstack"}`}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAttachOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={!attachChoice || attachService.isPending} onClick={() => attachService.mutate(attachChoice)}>
+              {attachService.isPending ? "Attaching…" : "Attach provider"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={orgOpen} onOpenChange={setOrgOpen}>
         <DialogContent>
           <DialogHeader>
@@ -868,7 +969,7 @@ export default function ProjectDetailPage() {
           </DialogHeader>
           <div className="space-y-2">
             <Select value={orgChoice} onValueChange={setOrgChoice}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="Organization">
                 <SelectValue placeholder={orgsList.isLoading ? "Loading organizations…" : "Pick an organization"} />
               </SelectTrigger>
               <SelectContent>
@@ -902,7 +1003,7 @@ export default function ProjectDetailPage() {
           </DialogHeader>
           <div className="space-y-3">
             <Select value={memberChoice} onValueChange={setMemberChoice}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="User">
                 <SelectValue placeholder={users.isLoading ? "Loading users…" : "Pick a user"} />
               </SelectTrigger>
               <SelectContent>
@@ -916,7 +1017,7 @@ export default function ProjectDetailPage() {
               </SelectContent>
             </Select>
             <Select value={memberRole} onValueChange={setMemberRole}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="Role">
                 <SelectValue placeholder="Role" />
               </SelectTrigger>
               <SelectContent>

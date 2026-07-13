@@ -3,7 +3,7 @@
 // data reads name / imageId / flavorId / networkInterfaces:[{uuid, fixedIp?}] / availabilityZoneName /
 // keyName / adminPass / userData / securityGroupNames / assignFloatingIp / floatingNetworkId.
 // (No boot-volume keys in the Go create — not offered.)
-import { Fragment, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
@@ -20,7 +20,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusBadge } from "@/components/status-badge"
 import { Switch } from "@/components/ui/switch"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch, type CloudScope } from "@/lib/api"
 import {
@@ -28,6 +27,7 @@ import {
 } from "@/lib/hooks"
 import type { FlavorCategory, ImageGrouping } from "@/lib/hooks"
 import type { CloudResource, Location } from "@/lib/types"
+import { cn } from "@/lib/utils"
 import { isPrivateNetwork } from "../network/NetworksPage"
 
 type Section<T> = { label: string; items: T[] }
@@ -73,14 +73,13 @@ function buildImageSections(live: GlanceImage[], grouping?: ImageGrouping): Sect
   return curated > 0 ? sections : [{ label: "", items: live }]
 }
 
-// CategoryRow is the muted section header inside a picker table.
-function CategoryRow({ label, cols }: { label: string; cols: number }) {
-  return (
-    <TableRow className="bg-muted/50 hover:bg-muted/50">
-      <TableCell colSpan={cols} className="py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </TableCell>
-    </TableRow>
+// Selectable option card: hairline border at rest, border-primary + ring when picked
+// (no heavy fills — Menlo keeps selection quiet).
+function optionCardClass(selected: boolean): string {
+  return cn(
+    "rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/50",
+    "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring",
+    selected && "border-primary ring-1 ring-primary",
   )
 }
 
@@ -243,8 +242,12 @@ export default function CreateServerPage() {
   if (locations.isLoading) {
     return (
       <>
-        <PageHeader title="Create server" />
-        <Skeleton className="h-72" />
+        <PageHeader title="Create server" eyebrow="Compute" />
+        <div className="grid gap-4">
+          <Skeleton className="h-32" />
+          <Skeleton className="h-32" />
+          <Skeleton className="h-64" />
+        </div>
       </>
     )
   }
@@ -253,15 +256,16 @@ export default function CreateServerPage() {
     <>
       <PageHeader
         title="Create server"
+        eyebrow="Compute"
         description="Pick a location, image, flavor and network, then name your server."
       />
 
       {locations.error ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">
+        <p className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
           {(locations.error as Error).message}
         </p>
       ) : !locs.length ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">
+        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
           No locations are available in this project — attach a cloud service first.
         </p>
       ) : (
@@ -274,11 +278,15 @@ export default function CreateServerPage() {
                   <Button
                     key={locOf(l)}
                     type="button"
-                    variant={active ? "default" : "outline"}
+                    variant="outline"
                     size="sm"
+                    aria-pressed={active}
+                    className={cn(
+                      active && "border-primary bg-transparent ring-1 ring-primary hover:bg-transparent",
+                    )}
                     onClick={() => setLocKey(locOf(l))}
                   >
-                    {active ? <Check className="size-4" /> : null}
+                    {active ? <Check className="size-4 text-primary" /> : null}
                     {l.displayName || l.region} <span className="font-mono text-xs opacity-70">{l.region}</span>
                   </Button>
                 )
@@ -297,12 +305,16 @@ export default function CreateServerPage() {
                   <Button
                     key={z.name}
                     type="button"
-                    variant={az === z.name ? "default" : "outline"}
+                    variant="outline"
                     size="sm"
+                    aria-pressed={az === z.name}
+                    className={cn(
+                      az === z.name && "border-primary bg-transparent ring-1 ring-primary hover:bg-transparent",
+                    )}
                     disabled={z.available === false}
                     onClick={() => setAzName(z.name)}
                   >
-                    {az === z.name ? <Check className="size-4" /> : null}
+                    {az === z.name ? <Check className="size-4 text-primary" /> : null}
                     {z.displayName || z.name}
                   </Button>
                 ))}
@@ -316,43 +328,38 @@ export default function CreateServerPage() {
             ) : !images.data?.length ? (
               <p className="text-sm text-muted-foreground">No public images available.</p>
             ) : (
-              <div className="max-h-80 overflow-y-auto rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-8" />
-                      <TableHead>Name</TableHead>
-                      <TableHead>OS</TableHead>
-                      <TableHead>Size</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {imageSections.map((sec) => (
-                      <Fragment key={sec.label || "__all__"}>
-                        {sec.label ? <CategoryRow label={sec.label} cols={5} /> : null}
-                        {sec.items.map((im) => (
-                          <TableRow
+              <div className="grid max-h-96 gap-4 overflow-y-auto pr-1">
+                {imageSections.map((sec) => (
+                  <div key={sec.label || "__all__"} className="grid gap-2">
+                    {sec.label ? <div className="text-eyebrow">{sec.label}</div> : null}
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                      {sec.items.map((im) => {
+                        const selected = imageId === String(im.id)
+                        return (
+                          <button
                             key={String(im.id)}
-                            className="cursor-pointer"
-                            data-state={imageId === im.id ? "selected" : undefined}
+                            type="button"
+                            aria-pressed={selected}
+                            className={optionCardClass(selected)}
                             onClick={() => setImageId(String(im.id))}
                           >
-                            <TableCell>{imageId === im.id ? <Check className="size-4 text-primary" /> : null}</TableCell>
-                            <TableCell className="font-medium">{String(im.name ?? im.id)}</TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {[im.os_distro, im.os_version].filter(Boolean).join(" ") || "—"}
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">{gb(im.size as number)} GB</TableCell>
-                            <TableCell>
-                              <StatusBadge status={im.status as string} />
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </Fragment>
-                    ))}
-                  </TableBody>
-                </Table>
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-sm font-medium">{String(im.name ?? im.id)}</span>
+                              {selected ? <Check className="size-4 shrink-0 text-primary" /> : null}
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {[im.os_distro, im.os_version].filter(Boolean).join(" ") || "—"} ·{" "}
+                              {gb(im.size as number)} GB
+                            </div>
+                            <div className="mt-2">
+                              <StatusBadge status={im.status as string} className="text-xs" />
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </Step>
@@ -363,41 +370,35 @@ export default function CreateServerPage() {
             ) : !flavors.data?.length ? (
               <p className="text-sm text-muted-foreground">No flavors available.</p>
             ) : (
-              <div className="max-h-80 overflow-y-auto rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-8" />
-                      <TableHead>Name</TableHead>
-                      <TableHead>vCPUs</TableHead>
-                      <TableHead>RAM</TableHead>
-                      <TableHead>Disk</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {flavorSections.map((sec) => (
-                      <Fragment key={sec.label || "__all__"}>
-                        {sec.label ? <CategoryRow label={sec.label} cols={5} /> : null}
-                        {sec.items.map((f) => (
-                          <TableRow
+              <div className="grid max-h-96 gap-4 overflow-y-auto pr-1">
+                {flavorSections.map((sec) => (
+                  <div key={sec.label || "__all__"} className="grid gap-2">
+                    {sec.label ? <div className="text-eyebrow">{sec.label}</div> : null}
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                      {sec.items.map((f) => {
+                        const selected = flavorId === f.externalId
+                        return (
+                          <button
                             key={f.externalId}
-                            className="cursor-pointer"
-                            data-state={flavorId === f.externalId ? "selected" : undefined}
+                            type="button"
+                            aria-pressed={selected}
+                            className={optionCardClass(selected)}
                             onClick={() => setFlavorId(f.externalId)}
                           >
-                            <TableCell>
-                              {flavorId === f.externalId ? <Check className="size-4 text-primary" /> : null}
-                            </TableCell>
-                            <TableCell className="font-medium">{f.data?.name ?? f.externalId}</TableCell>
-                            <TableCell>{f.data?.vcpus ?? "—"}</TableCell>
-                            <TableCell>{f.data?.ram ? `${Math.round(f.data.ram / 1024)} GB` : "—"}</TableCell>
-                            <TableCell>{f.data?.disk != null ? `${f.data.disk} GB` : "—"}</TableCell>
-                          </TableRow>
-                        ))}
-                      </Fragment>
-                    ))}
-                  </TableBody>
-                </Table>
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-sm font-medium">{f.data?.name ?? f.externalId}</span>
+                              {selected ? <Check className="size-4 shrink-0 text-primary" /> : null}
+                            </div>
+                            <div className="mt-1 font-mono text-xs text-muted-foreground">
+                              {f.data?.vcpus ?? "—"} vCPU · {f.data?.ram ? `${Math.round(f.data.ram / 1024)} GB` : "—"} RAM ·{" "}
+                              {f.data?.disk != null ? `${f.data.disk} GB` : "—"} disk
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </Step>
@@ -415,8 +416,14 @@ export default function CreateServerPage() {
                   const ext = n.externalId ?? ""
                   const checked = netIds.includes(ext)
                   return (
-                    <div key={n.id} className="flex flex-wrap items-center gap-3 text-sm">
-                      <label className="flex cursor-pointer items-center gap-3">
+                    <div
+                      key={n.id}
+                      className={cn(
+                        "flex flex-wrap items-center gap-3 rounded-lg border p-3 text-sm transition-colors",
+                        checked && "border-primary ring-1 ring-primary",
+                      )}
+                    >
+                      <label className="flex min-w-0 cursor-pointer items-center gap-3">
                         <Checkbox
                           checked={checked}
                           disabled={!ext}
@@ -425,7 +432,7 @@ export default function CreateServerPage() {
                           }
                         />
                         <span className="font-medium">{(n.data?.network?.name as string) ?? n.name ?? n.id}</span>
-                        <span className="font-mono text-xs text-muted-foreground">{ext}</span>
+                        <span className="truncate font-mono text-xs text-muted-foreground">{ext}</span>
                       </label>
                       {checked ? (
                         <Input
@@ -469,7 +476,7 @@ export default function CreateServerPage() {
                 ) : wantFip ? (
                   <>
                     <Select value={fipNet} onValueChange={setFipNetId}>
-                      <SelectTrigger className="w-full">
+                      <SelectTrigger className="w-full" aria-label="Public network">
                         <SelectValue placeholder="Select a public network" />
                       </SelectTrigger>
                       <SelectContent>
@@ -525,7 +532,7 @@ export default function CreateServerPage() {
                       value={keyName || "__none__"}
                       onValueChange={(v) => setKeyName(v === "__none__" ? "" : v)}
                     >
-                      <SelectTrigger className="w-full">
+                      <SelectTrigger className="w-full" aria-label="Key pair">
                         <SelectValue placeholder="No key pair" />
                       </SelectTrigger>
                       <SelectContent>
@@ -596,7 +603,13 @@ export default function CreateServerPage() {
                         const n = sgName(sg)
                         const checked = sgNames.includes(n)
                         return (
-                          <label key={sg.id} className="flex cursor-pointer items-center gap-3 text-sm">
+                          <label
+                            key={sg.id}
+                            className={cn(
+                              "flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm transition-colors hover:border-primary/50",
+                              checked && "border-primary ring-1 ring-primary",
+                            )}
+                          >
                             <Checkbox
                               checked={checked}
                               onCheckedChange={(v) =>
@@ -645,14 +658,10 @@ export default function CreateServerPage() {
 
 function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-            {n}
-          </span>
-          {title}
-        </CardTitle>
+    <Card className="gap-4">
+      <CardHeader className="gap-1">
+        <div className="text-eyebrow">Step {n}</div>
+        <CardTitle className="text-base">{title}</CardTitle>
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>

@@ -1,10 +1,18 @@
 import { useState } from "react"
-import { useNavigate, useParams } from "react-router-dom"
+import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, Copy, PlugZap, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatusBadge } from "@/components/status-badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -104,8 +112,14 @@ function CopyField({ label, value }: { label?: string; value: string }) {
     <div className="grid gap-1">
       {label ? <Label className="text-xs text-muted-foreground">{label}</Label> : null}
       <div className="flex items-center gap-2">
-        <Input readOnly value={value} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
-        <Button type="button" variant="outline" size="icon" onClick={copy} aria-label="Copy">
+        <Input
+          readOnly
+          value={value}
+          className="font-mono text-xs"
+          onFocus={(e) => e.currentTarget.select()}
+          aria-label={label ? `Notifier URI for ${label}` : "Notifier URI"}
+        />
+        <Button type="button" variant="outline" size="icon" onClick={copy} aria-label={label ? `Copy notifier URI for ${label}` : "Copy notifier URI"}>
           {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
         </Button>
       </div>
@@ -124,7 +138,7 @@ function NotifierUriSection({ id, provider }: TabProps) {
   return (
     <div className="mt-6 space-y-3 border-t pt-4">
       <div>
-        <div className="text-sm font-medium">OpenStack Notifier URI</div>
+        <div className="text-eyebrow">OpenStack notifier URI</div>
         <p className="text-xs text-muted-foreground">
           Point the cloud's ceilometer event publisher at these URLs to push resource lifecycle events for live
           dashboard updates. Optional — the periodic sync reconciles the cache without it. When a notification secret
@@ -140,9 +154,10 @@ function NotifierUriSection({ id, provider }: TabProps) {
         />
       ))}
       <div className="grid gap-1 pt-1">
-        <Label className="text-xs text-muted-foreground">Notification secret (leave blank to keep current)</Label>
+        <Label htmlFor="notif-secret" className="text-xs text-muted-foreground">Notification secret (leave blank to keep current)</Label>
         <div className="flex items-center gap-2">
           <Input
+            id="notif-secret"
             type="password"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
@@ -208,7 +223,7 @@ function ConnectionTab({ id, provider }: TabProps) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Ceph RGW (S3) connection</CardTitle>
+          <CardTitle className="text-eyebrow">Ceph RGW (S3) connection</CardTitle>
         </CardHeader>
         <CardContent>
           <Row label="S3 endpoint" value={str(c.s3Endpoint)} />
@@ -228,7 +243,7 @@ function ConnectionTab({ id, provider }: TabProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Keystone connection</CardTitle>
+        <CardTitle className="text-eyebrow">Keystone connection</CardTitle>
       </CardHeader>
       <CardContent>
         <Row label="Identity URL" value={provider.config?.identityUrl} />
@@ -236,7 +251,7 @@ function ConnectionTab({ id, provider }: TabProps) {
         <Row label="Admin username" value={str(auth.adminUsername)} />
         <Row label="Admin project" value={str(auth.adminProjectName) || str(auth.adminProjectId)} />
         <Row label="Admin domain" value={str(auth.adminDomainName) || str(auth.adminDomainId)} />
-        <div className="mt-4 flex items-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <Button onClick={() => test.mutate()} disabled={test.isPending}>
             <PlugZap className="size-4" />
             {test.isPending ? "Testing…" : "Test connection"}
@@ -298,7 +313,11 @@ function ServicesTab({ id, provider }: TabProps) {
                     <TableCell className="font-mono text-xs">{svc}</TableCell>
                     {regions.map((r) => (
                       <TableCell key={r}>
-                        <Switch checked={services[svc]?.[r] === true} onCheckedChange={(on) => toggle(svc, r, on)} />
+                        <Switch
+                          checked={services[svc]?.[r] === true}
+                          onCheckedChange={(on) => toggle(svc, r, on)}
+                          aria-label={`${svc} in ${r}`}
+                        />
                       </TableCell>
                     ))}
                   </TableRow>
@@ -329,7 +348,7 @@ function ConfigurationTab({ id, provider }: TabProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">General configuration</CardTitle>
+        <CardTitle className="text-eyebrow">General configuration</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid max-w-md gap-2">
@@ -337,17 +356,15 @@ function ConfigurationTab({ id, provider }: TabProps) {
           <Input id="es-name" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="grid max-w-md gap-2">
-          <Label>Status</Label>
+          <Label htmlFor="es-status">Status</Label>
           <Select value={status} onValueChange={setStatus}>
-            <SelectTrigger className="w-56">
+            <SelectTrigger id="es-status" className="w-full sm:w-56">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {["PUBLIC", "PRIVATE", "DISABLED"].map((s) => (
-                <SelectItem key={s} value={s}>
-                  {s}
-                </SelectItem>
-              ))}
+              <SelectItem value="PUBLIC">Public</SelectItem>
+              <SelectItem value="PRIVATE">Private</SelectItem>
+              <SelectItem value="DISABLED">Disabled</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -376,11 +393,12 @@ function ProvisioningTab({ id, provider }: TabProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Provisioning roles</CardTitle>
+        <CardTitle className="text-eyebrow">Provisioning roles</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <Note>Roles granted to a project on provisioning. One role name per line.</Note>
         <Textarea
+          aria-label="Provisioning roles, one per line"
           rows={6}
           value={roles}
           onChange={(e) => setRoles(e.target.value)}
@@ -429,21 +447,21 @@ function FeaturesTab({ id, provider }: TabProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Feature components</CardTitle>
+        <CardTitle className="text-eyebrow">Feature components</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="divide-y">
           {FEATURE_COMPONENTS.map((n) => (
             <div key={n} className="flex items-center justify-between py-2">
               <span className="font-mono text-xs">{n}</span>
-              <Switch checked={comps[n]} onCheckedChange={(on) => setComps((c) => ({ ...c, [n]: on }))} />
+              <Switch checked={comps[n]} onCheckedChange={(on) => setComps((c) => ({ ...c, [n]: on }))} aria-label={n} />
             </div>
           ))}
         </div>
         <div className="grid max-w-md gap-2">
-          <Label>Console type</Label>
+          <Label htmlFor="es-console">Console type</Label>
           <Select value={consoleType} onValueChange={setConsoleType}>
-            <SelectTrigger className="w-56">
+            <SelectTrigger id="es-console" className="w-full sm:w-56">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -492,7 +510,7 @@ function QuotaTab({ id, provider }: TabProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Default quota</CardTitle>
+        <CardTitle className="text-eyebrow">Default quota</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
@@ -529,7 +547,7 @@ function GpuTab({ id }: { id: string }) {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">GPU capacity</CardTitle>
+          <CardTitle className="text-eyebrow">GPU capacity</CardTitle>
         </CardHeader>
         <CardContent>
           {capQ.isLoading ? (
@@ -543,7 +561,7 @@ function GpuTab({ id }: { id: string }) {
             <div className="space-y-6">
               {(capQ.data ?? []).map((r) => (
                 <div key={r.region} className="space-y-2">
-                  <p className="text-sm font-medium">{r.region}</p>
+                  <p className="text-eyebrow">{r.region}</p>
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -581,7 +599,7 @@ function GpuTab({ id }: { id: string }) {
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Unpriced flavors</CardTitle>
+          <CardTitle className="text-eyebrow">Unpriced flavors</CardTitle>
         </CardHeader>
         <CardContent>
           {unpricedQ.isLoading ? (
@@ -646,21 +664,21 @@ function VhiOstorTab({ id, provider }: TabProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">VHI object storage (Ostor)</CardTitle>
+        <CardTitle className="text-eyebrow">VHI object storage (Ostor)</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-2">
-          <Label>Ostor config (JSON)</Label>
-          <Textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} className="font-mono text-xs" />
+          <Label htmlFor="ostor-json">Ostor config (JSON)</Label>
+          <Textarea id="ostor-json" rows={8} value={text} onChange={(e) => setText(e.target.value)} className="font-mono text-xs" />
         </div>
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <div className="grid gap-1">
-            <Label className="text-xs">Access key (leave blank to keep)</Label>
-            <Input value={accessKey} onChange={(e) => setAccessKey(e.target.value)} autoComplete="off" />
+            <Label htmlFor="ostor-ak" className="text-xs">Access key (leave blank to keep)</Label>
+            <Input id="ostor-ak" className="font-mono" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} autoComplete="off" />
           </div>
           <div className="grid gap-1">
-            <Label className="text-xs">Secret key (leave blank to keep)</Label>
-            <Input type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} autoComplete="off" />
+            <Label htmlFor="ostor-sk" className="text-xs">Secret key (leave blank to keep)</Label>
+            <Input id="ostor-sk" type="password" className="font-mono" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} autoComplete="off" />
           </div>
         </div>
         <Button onClick={submit} disabled={save.isPending}>
@@ -689,7 +707,7 @@ function AdvancedTab({ id, provider }: TabProps) {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Advanced settings</CardTitle>
+          <CardTitle className="text-eyebrow">Advanced settings</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid max-w-xs gap-2">
@@ -713,7 +731,7 @@ function AdvancedTab({ id, provider }: TabProps) {
       </Card>
       <Card className="border-destructive/40">
         <CardHeader>
-          <CardTitle className="text-base text-destructive">Danger zone</CardTitle>
+          <CardTitle className="text-eyebrow text-destructive">Danger zone</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
@@ -734,6 +752,230 @@ function AdvancedTab({ id, provider }: TabProps) {
               <Trash2 className="size-4" />
               Delete cloud provider
             </Button>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+// ── 8b. Metrics (usage source for traffic billing: gnocchi | prometheus | none) ──
+type MetricsTestResp = { ok: boolean; error?: string; trafficSeries?: number; monthStartSeries?: number; warnings?: string[] }
+function MetricsTab({ id, provider }: TabProps) {
+  const stored = asObj(asObj((provider.config as Obj)?.metrics))
+  const prom = asObj(stored.prometheus)
+  const [source, setSource] = useState(String(stored.source ?? "gnocchi"))
+  const [url, setUrl] = useState(String(prom.url ?? ""))
+  const [schema, setSchema] = useState(String(prom.schema ?? "libvirt-exporter"))
+  const [headersText, setHeadersText] = useState(JSON.stringify(asObj(prom.headers), null, 2))
+  const [basicUser, setBasicUser] = useState(String(prom.basicUser ?? ""))
+  const [basicPassword, setBasicPassword] = useState("")
+  const [bearerToken, setBearerToken] = useState("")
+  const [insecureTls, setInsecureTls] = useState(prom.insecureTls === true)
+  const [caCert, setCaCert] = useState(String(prom.caCert ?? ""))
+  const [timeoutSeconds, setTimeoutSeconds] = useState(String(prom.timeoutSeconds ?? ""))
+  const save = useEsSave(id, () => {
+    setBasicPassword("")
+    setBearerToken("")
+  })
+  const test = useMutation({
+    mutationFn: () => apiFetch<MetricsTestResp>(`/admin/service/${id}/metrics-test`, { method: "POST" }),
+    onError: (e) => toast.error(errMsg(e)),
+  })
+  const submit = () => {
+    const body: Obj = { source }
+    // Only send the prometheus block when prometheus is the selected source: the backend
+    // merges config, so a source-only toggle must not re-validate (or clobber) the stored
+    // connection config — a stale URL would otherwise block switching away.
+    if (source === "prometheus") {
+      let headers: Obj = {}
+      if (headersText.trim() !== "" && headersText.trim() !== "{}") {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(headersText)
+        } catch {
+          toast.error("Headers must be a JSON object, e.g. {\"X-Scope-OrgID\": \"tenant\"}")
+          return
+        }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          toast.error("Headers must be a JSON object, e.g. {\"X-Scope-OrgID\": \"tenant\"}")
+          return
+        }
+        for (const v of Object.values(parsed)) {
+          if (typeof v !== "string") {
+            toast.error("Header values must all be strings")
+            return
+          }
+        }
+        headers = parsed as Obj
+      }
+      const timeout = timeoutSeconds.trim() === "" ? 0 : Number(timeoutSeconds)
+      if (!Number.isInteger(timeout) || timeout < 0) {
+        toast.error("Timeout must be a whole number of seconds (0 = default)")
+        return
+      }
+      body.prometheus = {
+        url,
+        schema,
+        headers,
+        basicUser,
+        insecureTls,
+        caCert,
+        timeoutSeconds: timeout,
+      }
+    }
+    // Credential fields are only visible for the prometheus source — never apply leftover
+    // typed-but-hidden values on a gnocchi/none save (invisible side effects on secrets).
+    if (source === "prometheus" && (basicPassword || bearerToken)) {
+      body.prometheusAuth = { basicPassword, bearerToken }
+    }
+    save.mutate({ path: `/admin/service/${id}/metrics-config`, body })
+  }
+  const r = test.data
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-eyebrow">Usage metrics source</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Where the hourly traffic-billing job reads per-instance network usage from. Gnocchi (Ceilometer) is the
+            default; a Prometheus-compatible endpoint (Prometheus, Mimir, VictoriaMetrics, Thanos) can be used instead;
+            &quot;None&quot; disables usage ingestion for this provider. Gnocchi granularity stays under Advanced.
+          </p>
+          <div className="grid max-w-xs gap-2">
+            <Label htmlFor="mx-source">Source</Label>
+            <Select value={source} onValueChange={setSource}>
+              <SelectTrigger id="mx-source">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="gnocchi">Gnocchi (Ceilometer, default)</SelectItem>
+                <SelectItem value="prometheus">Prometheus-compatible</SelectItem>
+                <SelectItem value="none">None (disable usage metrics)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {source === "prometheus" && (
+            <>
+              <div className="grid gap-2">
+                <Label htmlFor="mx-url">Endpoint URL (base up to /api/v1)</Label>
+                <Input
+                  id="mx-url"
+                  className="font-mono"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://mimir.example/prometheus"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Mimir: append <code>/prometheus</code>. VictoriaMetrics cluster:{" "}
+                  <code>/select/&lt;tenant&gt;/prometheus</code>. Vanilla Prometheus/Thanos: plain host:port.
+                </p>
+              </div>
+              <div className="grid max-w-md gap-2">
+                <Label htmlFor="mx-schema">Metric schema</Label>
+                <Select value={schema} onValueChange={setSchema}>
+                  <SelectTrigger id="mx-schema">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="libvirt-exporter">libvirt-exporter (kolla prometheus-libvirt-exporter)</SelectItem>
+                    <SelectItem value="ceilometer-pushgateway">ceilometer-pushgateway (bare names, resource_id)</SelectItem>
+                    <SelectItem value="ceilometer-exporter">ceilometer-exporter / sg-core (ceilometer_ prefix)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="mx-headers">Extra headers (JSON object; e.g. Mimir tenant)</Label>
+                <Textarea
+                  id="mx-headers"
+                  rows={3}
+                  value={headersText}
+                  onChange={(e) => setHeadersText(e.target.value)}
+                  className="font-mono text-xs"
+                  placeholder='{"X-Scope-OrgID": "openstack"}'
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div className="grid gap-1">
+                  <Label htmlFor="mx-user" className="text-xs">Basic auth user</Label>
+                  <Input id="mx-user" value={basicUser} onChange={(e) => setBasicUser(e.target.value)} autoComplete="off" />
+                </div>
+                <div className="grid gap-1">
+                  <Label htmlFor="mx-pass" className="text-xs">Basic auth password (blank keeps, &quot;-&quot; clears)</Label>
+                  <Input
+                    id="mx-pass"
+                    type="password"
+                    value={basicPassword}
+                    onChange={(e) => setBasicPassword(e.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <Label htmlFor="mx-token" className="text-xs">Bearer token (blank keeps, &quot;-&quot; clears)</Label>
+                  <Input
+                    id="mx-token"
+                    type="password"
+                    value={bearerToken}
+                    onChange={(e) => setBearerToken(e.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <Switch id="mx-insecure" checked={insecureTls} onCheckedChange={setInsecureTls} />
+                <Label htmlFor="mx-insecure">Skip TLS verification (insecure)</Label>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="mx-ca">Custom CA bundle (PEM, optional)</Label>
+                <Textarea
+                  id="mx-ca"
+                  rows={3}
+                  value={caCert}
+                  onChange={(e) => setCaCert(e.target.value)}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <div className="grid max-w-xs gap-2">
+                <Label htmlFor="mx-timeout">Query timeout (seconds, 0 = default 30)</Label>
+                <Input id="mx-timeout" type="number" value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} />
+              </div>
+            </>
+          )}
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onClick={submit} disabled={save.isPending}>
+              {save.isPending ? "Saving…" : "Save metrics config"}
+            </Button>
+            {source === "prometheus" && (
+              <Button
+                variant="outline"
+                onClick={() => test.mutate()}
+                disabled={test.isPending || stored.source !== "prometheus"}
+              >
+                {test.isPending ? "Testing…" : "Test connection"}
+              </Button>
+            )}
+            {source === "prometheus" && stored.source !== "prometheus" && (
+              <span className="text-xs text-muted-foreground">Save the config first — the probe tests the stored settings.</span>
+            )}
+          </div>
+          {r && (
+            <div className="space-y-1 text-sm">
+              {r.ok ? (
+                <p>
+                  Connected — {r.trafficSeries ?? 0} traffic series (last hour), {r.monthStartSeries ?? 0} at month
+                  start.
+                </p>
+              ) : (
+                <p className="text-destructive">Probe failed: {r.error}</p>
+              )}
+              {(r.warnings ?? []).map((w) => (
+                <p key={w} className="text-destructive">
+                  ⚠ {w}
+                </p>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>
@@ -795,10 +1037,18 @@ function VolumeTypesTab({ id, provider }: TabProps) {
                   <TableRow key={name}>
                     <TableCell className="font-mono text-xs">{name}</TableCell>
                     <TableCell>
-                      <Input value={c.displayName} onChange={(e) => set(region, name, { displayName: e.target.value })} />
+                      <Input
+                        value={c.displayName}
+                        onChange={(e) => set(region, name, { displayName: e.target.value })}
+                        aria-label={`Display name for ${name}`}
+                      />
                     </TableCell>
                     <TableCell>
-                      <Switch checked={c.enabled} onCheckedChange={(on) => set(region, name, { enabled: on })} />
+                      <Switch
+                        checked={c.enabled}
+                        onCheckedChange={(on) => set(region, name, { enabled: on })}
+                        aria-label={`Enable ${name}`}
+                      />
                     </TableCell>
                   </TableRow>
                 )
@@ -832,12 +1082,18 @@ function PlacementTab({ id, provider }: TabProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">VHI placement quotas</CardTitle>
+        <CardTitle className="text-eyebrow">VHI placement quotas</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* ponytail: the live GET is an empty stub (VHI-only) → edit the stored value as raw JSON. */}
         <Note>VHI-specific placement quotas. Edit the stored value as JSON.</Note>
-        <Textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} className="font-mono text-xs" />
+        <Textarea
+          aria-label="Placement quotas JSON"
+          rows={8}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          className="font-mono text-xs"
+        />
         <Button onClick={submit} disabled={save.isPending}>
           {save.isPending ? "Saving…" : "Save placement quotas"}
         </Button>
@@ -856,20 +1112,20 @@ function ResellerTab({ id, provider }: TabProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Reseller</CardTitle>
+        <CardTitle className="text-eyebrow">Reseller</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex items-center justify-between border-b py-2">
-          <span className="text-sm">Enabled</span>
-          <Switch checked={enabled} onCheckedChange={setEnabled} />
+          <Label htmlFor="rs-enabled" className="text-sm font-normal">Enabled</Label>
+          <Switch id="rs-enabled" checked={enabled} onCheckedChange={setEnabled} />
         </div>
         <div className="grid max-w-md gap-2">
-          <Label>Organization ID</Label>
-          <Input value={org} onChange={(e) => setOrg(e.target.value)} />
+          <Label htmlFor="rs-org">Organization ID</Label>
+          <Input id="rs-org" className="font-mono" value={org} onChange={(e) => setOrg(e.target.value)} />
         </div>
         <div className="grid max-w-md gap-2">
-          <Label>Domain</Label>
-          <Input value={domain} onChange={(e) => setDomain(e.target.value)} />
+          <Label htmlFor="rs-domain">Domain</Label>
+          <Input id="rs-domain" value={domain} onChange={(e) => setDomain(e.target.value)} />
         </div>
         <Button
           onClick={() => save.mutate({ path: `/admin/service/${id}/reseller`, body: { ...r, enabled, organizationId: org, domain } })}
@@ -932,10 +1188,18 @@ function AvailabilityZonesTab({ id, provider }: TabProps) {
                 <TableRow key={name}>
                   <TableCell className="font-mono text-xs">{name}</TableCell>
                   <TableCell>
-                    <Input value={c.displayName} onChange={(e) => set(name, { displayName: e.target.value })} />
+                    <Input
+                      value={c.displayName}
+                      onChange={(e) => set(name, { displayName: e.target.value })}
+                      aria-label={`Display name for ${name}`}
+                    />
                   </TableCell>
                   <TableCell>
-                    <Switch checked={c.enabled} onCheckedChange={(on) => set(name, { enabled: on })} />
+                    <Switch
+                      checked={c.enabled}
+                      onCheckedChange={(on) => set(name, { enabled: on })}
+                      aria-label={`Enable ${name}`}
+                    />
                   </TableCell>
                 </TableRow>
               )
@@ -983,7 +1247,7 @@ function ProjectImportsTab({ id }: { id: string }) {
   return (
     <Card className="overflow-hidden">
       <CardHeader>
-        <CardTitle className="text-base">Project imports</CardTitle>
+        <CardTitle className="text-eyebrow">Project imports</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {q.isLoading ? (
@@ -1087,7 +1351,11 @@ function ShareProtocolsTab({ id }: { id: string }) {
                   <span className="font-mono text-xs text-muted-foreground">({p.name})</span>
                 </TableCell>
                 <TableCell>
-                  <Switch checked={enabledOf(p)} onCheckedChange={(on) => setState((s) => ({ ...s, [p.name]: on }))} />
+                  <Switch
+                    checked={enabledOf(p)}
+                    onCheckedChange={(on) => setState((s) => ({ ...s, [p.name]: on }))}
+                    aria-label={`Enable ${p.displayName}`}
+                  />
                 </TableCell>
               </TableRow>
             ))}
@@ -1111,6 +1379,7 @@ const TAB_DEFS = [
   { v: "quota", label: "Quota" },
   { v: "gpu", label: "GPU" },
   { v: "vhi-ostor", label: "VHI-ostor" },
+  { v: "metrics", label: "Metrics" },
   { v: "advanced", label: "Advanced" },
   { v: "volume-types", label: "Volume types" },
   { v: "placement", label: "Placement" },
@@ -1124,6 +1393,22 @@ const TAB_DEFS = [
 // machinery (quota, features, volume types, AZs, …) with nothing to configure on RGW.
 const CEPH_TAB_KEYS = new Set(["connection", "services", "configuration"])
 
+const crumbs = (label: string) => (
+  <Breadcrumb>
+    <BreadcrumbList>
+      <BreadcrumbItem>
+        <BreadcrumbLink asChild>
+          <Link to="/system/cloud-providers">Cloud providers</Link>
+        </BreadcrumbLink>
+      </BreadcrumbItem>
+      <BreadcrumbSeparator />
+      <BreadcrumbItem>
+        <BreadcrumbPage>{label}</BreadcrumbPage>
+      </BreadcrumbItem>
+    </BreadcrumbList>
+  </Breadcrumb>
+)
+
 export default function CloudProviderDetailPage() {
   const { id = "" } = useParams()
   const { data, isLoading, error } = useAdminGet<CloudProvider>(`/admin/service/${id}`)
@@ -1131,7 +1416,7 @@ export default function CloudProviderDetailPage() {
   if (isLoading) {
     return (
       <>
-        <PageHeader title="Cloud provider" />
+        <PageHeader title="Cloud provider" eyebrow="System" breadcrumb={crumbs(id)} />
         <Skeleton className="h-64" />
       </>
     )
@@ -1139,7 +1424,7 @@ export default function CloudProviderDetailPage() {
   if (error || !data) {
     return (
       <>
-        <PageHeader title="Cloud provider" />
+        <PageHeader title="Cloud provider" eyebrow="System" breadcrumb={crumbs(id)} />
         <Note>{(error as Error | undefined)?.message ?? "Failed to load cloud provider."}</Note>
       </>
     )
@@ -1151,12 +1436,14 @@ export default function CloudProviderDetailPage() {
     <>
       <PageHeader
         title={p.name ?? id}
+        eyebrow="System"
+        breadcrumb={crumbs(p.name ?? id)}
         description={`${p.type ?? "CLOUD"} provider ${id}`}
         actions={<StatusBadge status={p.status} />}
       />
       <Tabs defaultValue="connection">
-        <div className="overflow-x-auto">
-          <TabsList>
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <TabsList className="w-max">
             {tabs.map((t) => (
               <TabsTrigger key={t.v} value={t.v}>
                 {t.label}
@@ -1188,6 +1475,9 @@ export default function CloudProviderDetailPage() {
         </TabsContent>
         <TabsContent value="vhi-ostor" className="mt-4">
           <VhiOstorTab id={id} provider={p} />
+        </TabsContent>
+        <TabsContent value="metrics" className="mt-4">
+          <MetricsTab id={id} provider={p} />
         </TabsContent>
         <TabsContent value="advanced" className="mt-4">
           <AdvancedTab id={id} provider={p} />

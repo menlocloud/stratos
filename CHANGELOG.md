@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Ceph S3 (RGW) object-storage provider** — a second object-store backend alongside OpenStack Swift, driven purely by the RGW S3 + Admin Ops APIs (no Keystone). Per-project RGW users with encrypted credentials, S3 access-key management, bucket grants and per-bucket settings, optional static-website endpoint, per-project storage quota. Admin **Add provider** dialog gains an OpenStack | Ceph S3 switch, and ceph providers get a tailored detail page (RGW card, trimmed tabs). (#19, #20)
+- Onboarding existing projects onto a Ceph S3 provider: the admin attach-external-service leg now routes ceph providers through the RGW bootstrap (`BootstrapCephOnto`) instead of the Keystone tenant bootstrap. (#20)
+- **Attach provider** action on the project detail Cloud-services card — lists providers the project is not on yet and provisions the binding (shows the RGW user id for ceph-s3 bindings). Previously the backend leg existed but no UI called it. (#22)
+- Per-provider usage-metrics source for traffic billing (`config.metrics.source`: `gnocchi` default, `prometheus`, or `none`): a Prometheus-compatible endpoint (Prometheus, Mimir `X-Scope-OrgID`, VictoriaMetrics, Thanos) can now feed the hourly `instance_traffic` ingestion. Three metric schemas (`libvirt-exporter`, `ceilometer-pushgateway`, `ceilometer-exporter`), basic/bearer/custom-header auth, custom CA / insecure TLS. New admin endpoints `PUT /api/v1/admin/service/{id}/metrics-config` and `POST .../metrics-test` (live probe: liveness, schema series count, month-start retention) + admin MCP tools `set_metrics_config` / `test_metrics_config`. Billing math is gnocchi-parity (per-series max−min over the month window, decimal64 — no PromQL `increase()` extrapolation).
+
+### Changed
+
+- The create-bucket store picker now defaults to **S3 (Ceph)** ahead of Swift for projects that have a Ceph S3 provider, so buckets are less often created on the wrong backend by mistake. Swift stays available, second. (#25)
+
+### Fixed
+
+- Confirming a server resize twice returned `500 internal server error`: the first click finalizes the resize (nova → `ACTIVE`), but the confirm panel stayed visible while the cached status lagged, so a second click sent `confirmResize` to an already-confirmed server and nova's `409` surfaced as a raw 500. The client now treats a `409` on confirm/revert-resize as idempotent success, and the UI hides the confirm/revert buttons as soon as one is clicked. (#29)
+- OpenStack notification ingestion (`POST /api/v1/notifications/{provider}/{region}`) rejected every real ceilometer notification with `400 Invalid request body`: oslo.messaging emits a space-separated, timezone-less timestamp (`2026-07-11 10:08:51.622578`) that the `timestamp` field, a plain `*time.Time`, could not decode. The field now parses oslo's format as well as RFC3339 and no longer fails the message on an unrecognized/absent timestamp (falls back to receipt time). Real-time cloud-cache sync via notifications works again; the periodic sync had been the only thing keeping the cache fresh. (#27)
+- Client cloud-resource audit events (`CLOUD_RESOURCE_CREATE`/`DELETE`/`ACTION`) now record the affected resource's own kind, id, and name — so a bucket (or server, volume, …) create is findable in the audit log by its name. Previously every cloud event was stamped with the project's identity only, so it was logged but appeared as an anonymous project row. (#25)
+- Admin billing-profile **Projects** tab was always empty for greenfield projects: the query matched only a project's own `billingProfileId`, but billing resolves the EFFECTIVE profile (own id, else the owning organization's) and greenfield projects leave the own id blank. The org-fallback leg is now pushed into the query, with an integration test. (#20)
+
 ## [0.3.26] - 2026-07-09
 
 The first public release of **Stratos** — a multi-tenant self-service and billing
