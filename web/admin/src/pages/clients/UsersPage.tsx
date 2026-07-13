@@ -228,6 +228,7 @@ export default function UsersPage() {
               <Input
                 id="user-email"
                 type="email"
+                autoComplete="off"
                 required
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
@@ -238,6 +239,7 @@ export default function UsersPage() {
                 <Label htmlFor="user-first">First name</Label>
                 <Input
                   id="user-first"
+                  autoComplete="off"
                   value={form.firstName}
                   onChange={(e) => setForm({ ...form, firstName: e.target.value })}
                 />
@@ -246,6 +248,7 @@ export default function UsersPage() {
                 <Label htmlFor="user-last">Last name</Label>
                 <Input
                   id="user-last"
+                  autoComplete="off"
                   value={form.lastName}
                   onChange={(e) => setForm({ ...form, lastName: e.target.value })}
                 />

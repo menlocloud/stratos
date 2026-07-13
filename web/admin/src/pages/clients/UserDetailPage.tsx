@@ -390,14 +390,32 @@ export default function UserDetailPage() {
                     <TableRow>
                       <TableHead>Type</TableHead>
                       <TableHead>Name</TableHead>
+                      <TableHead>Region</TableHead>
                       <TableHead>Status</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {(resources.data?.data ?? []).map((cr) => (
-                      <TableRow key={cr.id ?? cr.externalId}>
+                      <TableRow
+                        key={cr.id ?? cr.externalId}
+                        className={cr.id ? "cursor-pointer" : undefined}
+                        onClick={() => cr.id && navigate(`/clients/cloud-resources/${cr.id}`)}
+                      >
                         <TableCell className="font-mono text-xs">{cr.type ?? "—"}</TableCell>
-                        <TableCell className="font-medium">{dataField(cr, "name") ?? cr.externalId ?? "—"}</TableCell>
+                        <TableCell>
+                          {cr.id ? (
+                            <Link
+                              to={`/clients/cloud-resources/${cr.id}`}
+                              className="inline-block py-1 font-medium hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {dataField(cr, "name") ?? cr.externalId ?? "—"}
+                            </Link>
+                          ) : (
+                            <span className="font-medium">{dataField(cr, "name") ?? cr.externalId ?? "—"}</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{cr.region ?? "—"}</TableCell>
                         <TableCell>
                           <StatusBadge status={dataField(cr, "status")} />
                         </TableCell>
@@ -491,6 +509,7 @@ export default function UserDetailPage() {
               <Input
                 id="new-password"
                 type="password"
+                autoComplete="new-password"
                 required
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
