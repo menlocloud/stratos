@@ -39,7 +39,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, apiFetch } from "@/lib/api"
 import { fmtDate, fmtDateTime } from "@/lib/format"
-import { useAdminGet, useAdminList } from "@/lib/hooks"
+import { useAdminGet, useAdminList, useTabParam } from "@/lib/hooks"
 
 // GET /admin/project/{id} (handler.go rawByID "project") — the project doc shaped (_id→id).
 type ProjectDoc = {
@@ -140,6 +140,7 @@ export default function ProjectDetailPage() {
   const qc = useQueryClient()
 
   const projectPath = `/admin/project/${id}`
+  const [tab, setTab] = useTabParam("overview")
   const { data: project, isLoading, error } = useAdminGet<ProjectDoc>(projectPath, !!id)
   // GET /admin/project/{id}/resources/counts (projectmut.go projectResourceCounts) — {TYPE: n, TOTAL: n}.
   const counts = useAdminGet<Record<string, number>>(`${projectPath}/resources/counts`, !!id)
@@ -435,11 +436,15 @@ export default function ProjectDetailPage() {
       ) : error ? (
         <ErrorPanel error={error} />
       ) : (
-        <Tabs defaultValue="overview">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="members">Members</TabsTrigger>
-            <TabsTrigger value="resources">Cloud resources</TabsTrigger>
+            <TabsTrigger value="members">
+              Members{members.data?.data ? ` (${members.data.data.length})` : ""}
+            </TabsTrigger>
+            <TabsTrigger value="resources">
+              Cloud resources{counts.data?.TOTAL != null ? ` (${counts.data.TOTAL})` : ""}
+            </TabsTrigger>
             <TabsTrigger value="quota">Quota</TabsTrigger>
           </TabsList>
 
@@ -695,6 +700,7 @@ export default function ProjectDetailPage() {
                     <TableRow>
                       <TableHead>Type</TableHead>
                       <TableHead>Name</TableHead>
+                      <TableHead>Region</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>External ID</TableHead>
                       <TableHead>Created</TableHead>
@@ -702,13 +708,18 @@ export default function ProjectDetailPage() {
                   </TableHeader>
                   <TableBody>
                     {(resources.data?.data ?? []).map((cr) => (
-                      <TableRow key={cr.id ?? cr.externalId}>
+                      <TableRow
+                        key={cr.id ?? cr.externalId}
+                        className={cr.id ? "cursor-pointer" : undefined}
+                        onClick={() => cr.id && navigate(`/clients/cloud-resources/${cr.id}`)}
+                      >
                         <TableCell className="font-mono text-xs">{cr.type ?? "—"}</TableCell>
                         <TableCell>
                           {cr.id ? (
                             <Link
                               to={`/clients/cloud-resources/${cr.id}`}
                               className="inline-block py-1 font-medium hover:underline"
+                              onClick={(e) => e.stopPropagation()}
                             >
                               {dataField(cr, "name") ?? cr.externalId ?? "—"}
                             </Link>
@@ -716,6 +727,7 @@ export default function ProjectDetailPage() {
                             <span className="font-medium">{dataField(cr, "name") ?? "—"}</span>
                           )}
                         </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{cr.region ?? "—"}</TableCell>
                         <TableCell>
                           <StatusBadge status={dataField(cr, "status")} />
                         </TableCell>

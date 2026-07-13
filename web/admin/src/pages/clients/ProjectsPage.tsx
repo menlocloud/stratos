@@ -35,6 +35,7 @@ type Project = {
   status?: string
   organizationId?: string
   organization?: { name?: string }
+  billingProfileId?: string
   createdAt?: string
 }
 
@@ -115,12 +116,42 @@ export default function ProjectsPage() {
         id: "organization",
         accessorFn: (p) => p.organization?.name ?? p.organizationId ?? "",
         header: sortableHeader("Organization"),
-        cell: ({ row }) =>
-          row.original.organization?.name ? (
-            <span className="text-sm">{row.original.organization.name}</span>
+        cell: ({ row }) => {
+          const p = row.original
+          if (!p.organizationId) return <span className="text-sm text-muted-foreground">—</span>
+          return (
+            <Link
+              to={`/clients/organizations/${p.organizationId}`}
+              className={
+                p.organization?.name
+                  ? "inline-block py-1 text-sm hover:underline"
+                  : "inline-block py-1 font-mono text-xs text-muted-foreground hover:underline"
+              }
+              onClick={(e) => e.stopPropagation()}
+            >
+              {p.organization?.name ?? p.organizationId}
+            </Link>
+          )
+        },
+      },
+      {
+        id: "billingProfile",
+        accessorFn: (p) => p.billingProfileId ?? "",
+        header: "Billing profile",
+        cell: ({ row }) => {
+          const bp = row.original.billingProfileId
+          return bp ? (
+            <Link
+              to={`/clients/billing-profiles/${bp}`}
+              className="inline-block py-1 font-mono text-xs text-muted-foreground hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {bp}
+            </Link>
           ) : (
-            <span className="font-mono text-xs text-muted-foreground">{row.original.organizationId ?? "—"}</span>
-          ),
+            <span className="font-mono text-xs text-muted-foreground">—</span>
+          )
+        },
       },
       {
         id: "id",
