@@ -5,7 +5,7 @@ import type { ColumnDef } from "@tanstack/react-table"
 import { Building2, Plus, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
-import { DataTable, sortableHeader } from "@/components/data-table"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
 import {
@@ -27,6 +27,7 @@ import { useAdminList } from "@/lib/hooks"
 type Org = {
   id?: string
   name?: string
+  description?: string
   billingProfileId?: string
   memberCount?: number
   projectCount?: number
@@ -68,16 +69,25 @@ export default function OrganizationsPage() {
         header: sortableHeader("Name"),
         cell: ({ row }) => {
           const o = row.original
-          return o.id ? (
-            <Link
-              to={`/clients/organizations/${o.id}`}
-              className="inline-block py-1 font-medium hover:underline"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {o.name ?? "—"}
-            </Link>
-          ) : (
-            <span className="font-medium">{o.name ?? "—"}</span>
+          return (
+            <div className="min-w-0">
+              {o.id ? (
+                <Link
+                  to={`/clients/organizations/${o.id}`}
+                  className="inline-block py-0.5 font-medium hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {o.name ?? "—"}
+                </Link>
+              ) : (
+                <span className="font-medium">{o.name ?? "—"}</span>
+              )}
+              {o.description ? (
+                <p className="max-w-72 truncate text-xs text-muted-foreground" title={o.description}>
+                  {o.description}
+                </p>
+              ) : null}
+            </div>
           )
         },
       },
@@ -92,14 +102,22 @@ export default function OrganizationsPage() {
       {
         id: "members",
         accessorFn: (o) => o.memberCount ?? 0,
-        header: sortableHeader("Members"),
-        cell: ({ getValue }) => <span className="text-sm tabular-nums">{getValue()}</span>,
+        header: sortableRightHeader("Members"),
+        cell: ({ getValue }) => (
+          <div className={`text-right text-sm tabular-nums${getValue() ? "" : " text-muted-foreground"}`}>
+            {getValue()}
+          </div>
+        ),
       },
       {
         id: "projects",
         accessorFn: (o) => o.projectCount ?? 0,
-        header: sortableHeader("Projects"),
-        cell: ({ getValue }) => <span className="text-sm tabular-nums">{getValue()}</span>,
+        header: sortableRightHeader("Projects"),
+        cell: ({ getValue }) => (
+          <div className={`text-right text-sm tabular-nums${getValue() ? "" : " text-muted-foreground"}`}>
+            {getValue()}
+          </div>
+        ),
       },
       {
         id: "billingProfile",
@@ -192,6 +210,7 @@ export default function OrganizationsPage() {
               <Label htmlFor="org-name">Name</Label>
               <Input
                 id="org-name"
+                autoComplete="off"
                 required
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -201,6 +220,7 @@ export default function OrganizationsPage() {
               <Label htmlFor="org-desc">Description</Label>
               <Input
                 id="org-desc"
+                autoComplete="off"
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
               />

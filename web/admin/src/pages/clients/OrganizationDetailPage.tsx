@@ -38,7 +38,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
 import { fmtDate, fmtDateTime } from "@/lib/format"
-import { useAdminGet, useAdminList } from "@/lib/hooks"
+import { useAdminGet, useAdminList, useTabParam } from "@/lib/hooks"
 
 // GET /admin/organizations/{id} (organization.go orgToDto) — shaped org doc + memberCount /
 // projectCount + populated billingProfile.
@@ -115,6 +115,7 @@ export default function OrganizationDetailPage() {
   const qc = useQueryClient()
 
   const orgPath = `/admin/organizations/${id}`
+  const [tab, setTab] = useTabParam("overview")
   const { data: org, isLoading, error } = useAdminGet<OrgDetail>(orgPath, !!id)
   const membersPath = `${orgPath}/members`
   const members = useAdminList<OrgMember>(membersPath, !!id)
@@ -253,11 +254,15 @@ export default function OrganizationDetailPage() {
       ) : error ? (
         <ErrorPanel error={error} />
       ) : (
-        <Tabs defaultValue="overview">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="members">Members</TabsTrigger>
-            <TabsTrigger value="projects">Projects</TabsTrigger>
+            <TabsTrigger value="members">
+              Members{org?.memberCount != null ? ` (${org.memberCount})` : ""}
+            </TabsTrigger>
+            <TabsTrigger value="projects">
+              Projects{org?.projectCount != null ? ` (${org.projectCount})` : ""}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-4 space-y-6">
@@ -455,6 +460,7 @@ export default function OrganizationDetailPage() {
               <Label htmlFor="edit-org-name">Name</Label>
               <Input
                 id="edit-org-name"
+                autoComplete="off"
                 required
                 value={editForm.name}
                 onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
@@ -464,6 +470,7 @@ export default function OrganizationDetailPage() {
               <Label htmlFor="edit-org-desc">Description</Label>
               <Input
                 id="edit-org-desc"
+                autoComplete="off"
                 value={editForm.description}
                 onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
               />
