@@ -4,10 +4,17 @@ import { CreditCard, Cpu, FolderKanban, Server, Users } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatCard } from "@/components/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAdminList, useAdminStats } from "@/lib/hooks"
-import { fmtMoney } from "@/lib/format"
+import { fmtMoney, fmtMoneyTight } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 // Stable slot assignment: categories are sorted before colors are handed out,
@@ -43,16 +50,24 @@ function ServiceGpuRows({ svc }: { svc: { id: string; name?: string } }) {
         const pct = g.total ? Math.round((g.inUse / g.total) * 100) : 0
         return (
           <div key={`${g.region}-${g.name}`} className="flex items-center gap-3 text-sm">
-            <span className="w-40 truncate font-mono text-xs">{g.name}</span>
+            <span className="w-56 truncate font-mono text-xs">
+              {g.name} <span className="text-muted-foreground">· {g.region}</span>
+            </span>
             <div
               className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
               role="meter"
-              aria-label={`${g.name} GPUs in use`}
+              aria-label={`${g.name} GPUs in use in ${g.region}`}
               aria-valuenow={pct}
               aria-valuemin={0}
               aria-valuemax={100}
             >
-              <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+              <div
+                className={cn(
+                  "h-full rounded-full",
+                  pct >= 100 ? "bg-destructive" : pct >= 85 ? "bg-warning" : "bg-primary",
+                )}
+                style={{ width: `${Math.min(pct, 100)}%` }}
+              />
             </div>
             <span className="w-24 text-right font-mono text-xs tabular-nums text-muted-foreground">
               {g.inUse}/{g.total} used
@@ -264,9 +279,30 @@ export function DashboardPage() {
                     axisLine={false}
                     tick={{ fontSize: 11 }}
                     width={48}
-                    tickFormatter={(v) => fmtMoney(Number(v))}
+                    tickFormatter={(v) => fmtMoneyTight(Number(v))}
                   />
-                  <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
+                  <ChartTooltip
+                    content={
+                      <ChartTooltipContent
+                        indicator="line"
+                        formatter={(value, name, item) => (
+                          <div className="flex w-full items-center justify-between gap-4">
+                            <span className="flex items-center gap-1.5">
+                              <span
+                                className="h-2.5 w-1 shrink-0 rounded-[2px]"
+                                style={{ backgroundColor: item.color }}
+                              />
+                              <span className="text-muted-foreground">
+                                {moneyConfig[name as keyof typeof moneyConfig]?.label ?? name}
+                              </span>
+                            </span>
+                            <span className="font-mono font-medium tabular-nums">{fmtMoney(Number(value))}</span>
+                          </div>
+                        )}
+                      />
+                    }
+                  />
+                  <ChartLegend content={<ChartLegendContent />} />
                   <Area
                     dataKey="billed"
                     type="monotone"
@@ -389,6 +425,7 @@ export function DashboardPage() {
                   <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickMargin={8} minTickGap={28} />
                   <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} width={32} allowDecimals={false} />
                   <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
+                  <ChartLegend content={<ChartLegendContent />} />
                   <Area
                     dataKey="billingProfiles"
                     type="monotone"
