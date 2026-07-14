@@ -46,19 +46,24 @@
 - [skip: needs a live invite token; sending an invite is a write] `/docs-img/join-project-accept.png` — The /join-project screen showing the pending invitation with Accept invite and Decline buttons — page: `client-manual/user-invitation.md`
 - [x] `/docs-img/admin-console-first-login.png` — Stratos admin console right after first sign-in on a fresh install — page: `operators-manual/kubernetes-install.md`
 
-## client-first-server
+## client-compute
 
-Captured 2026-07-10 on the live `menlo.ai` project (light theme). Dialog/step-card shots are element-scoped (no top-bar/email chrome); the server detail/actions shots are viewport shots of the real `my-first-server` VM that was created and then deleted. Page: `getting-started/first-server.md`.
+VM lifecycle shots for the "Launch Your First Server" walkthrough, captured 2026-07-13 against a throwaway demo server that was deleted right after.
 
-- [x] `/docs-img/first-server-keypair-create.png` — Compute → Key pairs, Create keypair dialog with a name filled and the "private key shown only once" hint
-- [x] `/docs-img/first-server-keypair-private.png` — "Save your private key" one-time dialog with Copy / Download .pem (throwaway generated key, keypair since removed)
-- [x] `/docs-img/first-server-servers-header.png` — Servers page header cropped to the title + Create server button
-- [x] `/docs-img/first-server-create-image.png` — Create-server step 3 Image table with Ubuntu Server 24.04 LTS selected
-- [x] `/docs-img/first-server-create-flavor.png` — Create-server step 4 Flavor table with t3.small selected (general/burstable families visible)
-- [x] `/docs-img/first-server-create-network.png` — Create-server step 5 Network with the project network checked and Fixed IP field revealed
-- [x] `/docs-img/first-server-create-access.png` — Create-server step 7 Access: Password login (username + password) and the allow-all security group checked (allow-all is used for demo simplicity only — not a recommended default; real servers should use an SSH-only group scoped to the user's IP)
-- [x] `/docs-img/first-server-create-name.png` — Create-server step 8 Name with `my-first-server` entered
-- [x] `/docs-img/first-server-building.png` — Server detail page for `my-first-server` in the Build state (no addresses yet)
-- [x] `/docs-img/first-server-detail.png` — Server detail page for `my-first-server` now Active, showing IP addresses, power buttons and tabs
-- [x] `/docs-img/first-server-actions.png` — Server detail with the More actions menu open (Rename, Resize, Rebuild, Rescue, Set password, Console (VNC), Delete)
-- [skip: element shot kept catching the sticky top bar; step described in prose] `/docs-img/first-server-create-publicip.png` — Create-server step 6 Public IP with the Assign floating IP toggle on
+- [x] `/docs-img/create-server-form.png` — The Create server form (single 8-section page) filled in: image, flavor, network, Assign floating IP on, a security group and a name — page: `getting-started/first-server.md`
+- [x] `/docs-img/server-building.png` — Servers list filtered to the demo server showing the amber **Build** status right after launch — page: `getting-started/first-server.md`
+- [x] `/docs-img/server-active.png` — Servers list filtered to the demo server showing the green **Active** status with its IP addresses assigned (VM IPs blurred) — page: `getting-started/first-server.md`
+- [x] `/docs-img/server-detail-actions.png` — Server detail page with the Start/Stop/Reboot header buttons and the More actions menu open (Delete highlighted); VM IPs and the account email (top-right) blurred — page: `getting-started/first-server.md`
+- [x] `/docs-img/server-delete-confirm.png` — The "Delete server" confirmation dialog ("This cannot be undone.") — page: `getting-started/first-server.md`
+
+## client-storage
+
+Storage-guide shots, captured 2026-07-13 against throwaway demo resources (a volume, its snapshot, and a bucket) that were deleted right after.
+
+- [x] `/docs-img/create-volume.png` — The Create volume dialog (name, size in GB, optional type/AZ) — page: `guides/volumes.md`
+- [x] `/docs-img/volume-attach.png` — Volume `docs-demo-vol` (ceph-ssd1) attached to the `docs-demo` server, shown on the server detail Volumes tab (VM IP blurred) — page: `guides/volumes.md`
+- [x] `/docs-img/volume-snapshot.png` — The Snapshots list showing `docs-demo-snap` (a snapshot of `docs-demo-vol`) — page: `guides/volumes.md`
+- [x] `/docs-img/create-bucket.png` — Create bucket dialog showing the Swift/S3-(Ceph) backend picker, globally-unique-name note and object-lock option — page: `guides/object-storage.md`
+- [x] `/docs-img/bucket-objects.png` — Bucket object explorer with a folder and two uploaded files, and the Private toggle — page: `guides/object-storage.md`
+- [x] `/docs-img/s3-access-keys.png` — S3 access keys page: project credentials + additional scoped keys. **Access key IDs replaced with AWS example values, the secret left masked, and the S3 endpoint hostname blurred (both the Endpoint field and the CLI example) — never publish real keys/endpoints** — page: `guides/object-storage.md`
+- [x] `/docs-img/bucket-settings.png` — Bucket settings dialog (General tab: versioning/object-lock/quota) with the General/Website/Access/Lifecycle/Policy tab bar — page: `guides/object-storage.md`

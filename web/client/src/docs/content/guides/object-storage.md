@@ -10,9 +10,13 @@ Depending on how your platform is set up, buckets may live on one of two storage
 
 > **S3 bucket names are globally unique.** On the S3 backend a name is shared across the whole platform (just like Amazon S3), so if a name is already taken you'll need to choose another.
 
+![Creating a bucket — pick the Swift or S3 (Ceph) backend](/docs-img/create-bucket.png)
+
 ## Working with objects
 
 Within a bucket you upload, download, and delete objects, and organise them into folders. S3 (Ceph) buckets present an S3-compatible surface, so existing S3 tooling and SDKs work against them without change; Swift buckets are managed through Stratos.
+
+![Browsing objects and folders inside a bucket](/docs-img/bucket-objects.png)
 
 ## S3 access keys
 
@@ -29,6 +33,8 @@ The project credentials have full access to every bucket in the project. Treat t
 
 You can also create **additional access keys** scoped to specific buckets — hand one to a backup job, a CDN, or a teammate without sharing the project credentials. A new key has **no access until you grant it a bucket**: open a bucket's **Settings → Access** and grant the key **Read**, **Read & write**, or **Full control**. Revoke it there too. Additional keys can be rotated and deleted independently, and deleting one removes its access from every bucket.
 
+![Project S3 credentials and additional scoped keys](/docs-img/s3-access-keys.png)
+
 ## Bucket settings
 
 Open a bucket's menu and choose **Settings** (S3 buckets only):
@@ -38,6 +44,8 @@ Open a bucket's menu and choose **Settings** (S3 buckets only):
 - **Quota** — cap a bucket's size and/or object count.
 - **Lifecycle** — automatically delete objects after a number of days, optionally by key prefix. Useful for logs and temporary files — expired objects stop being billed.
 - **Policy** — advanced: paste a raw S3 bucket policy for fine-grained rules.
+
+![The bucket settings dialog](/docs-img/bucket-settings.png)
 
 ## Public buckets and static websites
 
