@@ -44,7 +44,7 @@ func TestNotificationHandle(t *testing.T) {
 	svc := notification.NewService(repo, notifFetcher{obj: map[string]any{"id": "net-1", "name": "vpc-a"}, found: true}, resolver, nil)
 	msg := notification.OsloMessage{
 		EventType: "network.create.end",
-		Timestamp: &ts,
+		Timestamp: notification.OsloTimeAt(ts),
 		Payload:   map[string]any{"network_id": "net-1", "tenant_id": "os-proj-1"},
 	}
 	if err := svc.Handle(ctx, "svc1", "RegionOne", msg); err != nil {
@@ -64,7 +64,7 @@ func TestNotificationHandle(t *testing.T) {
 	// 2. DELETE event: the same resource is removed from the cache (and archived).
 	delMsg := notification.OsloMessage{
 		EventType: "network.delete.end",
-		Timestamp: &ts,
+		Timestamp: notification.OsloTimeAt(ts),
 		Payload:   map[string]any{"network_id": "net-1", "tenant_id": "os-proj-1"},
 	}
 	if err := svc.Handle(ctx, "svc1", "RegionOne", delMsg); err != nil {

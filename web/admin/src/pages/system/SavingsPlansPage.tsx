@@ -1,8 +1,10 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Eye, PiggyBank, Plus, RefreshCw, ScrollText, Trash2 } from "lucide-react"
+import type { Column, ColumnDef } from "@tanstack/react-table"
+import { MoreHorizontal, PiggyBank, Plus, RefreshCw, ScrollText, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
@@ -17,6 +19,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -161,15 +169,15 @@ function CreatePlanDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="sp-name">Name</Label>
               <Input id="sp-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Compute savings" />
             </div>
             <div className="grid gap-2">
-              <Label>Access mode</Label>
+              <Label htmlFor="sp-access">Access mode</Label>
               <Select value={accessMode} onValueChange={setAccessMode}>
-                <SelectTrigger>
+                <SelectTrigger id="sp-access">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -208,8 +216,8 @@ function CreatePlanDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
           </div>
 
           <Separator />
-          <p className="text-sm font-medium">Saving schedule</p>
-          <div className="grid grid-cols-2 gap-4">
+          <p className="text-eyebrow">Saving schedule</p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="sp-duration">Duration (months)</Label>
               <Input
@@ -252,6 +260,7 @@ function CreatePlanDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
                   className="w-36"
                   placeholder="From amount (0.01+)"
                   title="Start amount — must be non-zero"
+                  aria-label={`Tier ${i + 1} start amount`}
                   value={t.startAmount}
                   onChange={(e) => setTier(i, { startAmount: e.target.value })}
                 />
@@ -262,13 +271,14 @@ function CreatePlanDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
                   className="w-28"
                   placeholder="Discount %"
                   title="Discount percent"
+                  aria-label={`Tier ${i + 1} discount percent`}
                   value={t.discount}
                   onChange={(e) => setTier(i, { discount: e.target.value })}
                 />
                 <Button
                   variant="ghost"
-                  size="icon"
-                  title="Remove tier"
+                  size="icon-sm"
+                  aria-label={`Remove tier ${i + 1}`}
                   disabled={tiers.length === 1}
                   onClick={() => setTiers((ts) => ts.filter((_, j) => j !== i))}
                 >
@@ -337,12 +347,12 @@ function PlanDetailSheet({ plan, onClose }: { plan: SavingsPlan; onClose: () => 
           </div>
 
           <div>
-            <p className="text-sm font-medium">Targets</p>
-            <p className="text-sm text-muted-foreground">{targetsSummary(plan)}</p>
+            <p className="text-eyebrow">Targets</p>
+            <p className="mt-1 text-sm text-muted-foreground">{targetsSummary(plan)}</p>
           </div>
 
           <div className="space-y-3">
-            <p className="text-sm font-medium">Saving schedule</p>
+            <p className="text-eyebrow">Saving schedule</p>
             {(plan.savingSchedule ?? []).map((s, i) => (
               <Card key={i} className="gap-2 p-3">
                 <p className="text-sm">
@@ -361,7 +371,7 @@ function PlanDetailSheet({ plan, onClose }: { plan: SavingsPlan; onClose: () => 
           </div>
 
           <div className="space-y-2">
-            <p className="text-sm font-medium">Contracts on this plan</p>
+            <p className="text-eyebrow">Contracts on this plan</p>
             {contractsQ.isLoading ? (
               <Skeleton className="h-24" />
             ) : contractsQ.error ? (
@@ -374,7 +384,7 @@ function PlanDetailSheet({ plan, onClose }: { plan: SavingsPlan; onClose: () => 
                   <TableHeader>
                     <TableRow>
                       <TableHead>Billing profile</TableHead>
-                      <TableHead>Committed</TableHead>
+                      <TableHead className="text-right">Committed</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>End</TableHead>
                     </TableRow>
@@ -387,7 +397,7 @@ function PlanDetailSheet({ plan, onClose }: { plan: SavingsPlan; onClose: () => 
                             <span className="font-mono">{c.billingProfileId ?? "—"}</span>
                           )}
                         </TableCell>
-                        <TableCell className="font-mono text-sm tabular-nums">{fmtMoney(c.monthlyCommittedAmount)}</TableCell>
+                        <TableCell className="text-right font-mono text-sm tabular-nums">{fmtMoney(c.monthlyCommittedAmount)}</TableCell>
                         <TableCell>
                           <StatusBadge status={c.status} />
                         </TableCell>
@@ -459,9 +469,9 @@ function CreateContractDialog({ plans, onClose, onSaved }: { plans: SavingsPlan[
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-2">
-            <Label>Billing profile</Label>
+            <Label htmlFor="sc-profile">Billing profile</Label>
             <Select value={bpId} onValueChange={setBpId}>
-              <SelectTrigger>
+              <SelectTrigger id="sc-profile">
                 <SelectValue placeholder={profilesQ.isLoading ? "Loading billing profiles…" : "Select a billing profile"} />
               </SelectTrigger>
               <SelectContent>
@@ -474,7 +484,7 @@ function CreateContractDialog({ plans, onClose, onSaved }: { plans: SavingsPlan[
             </Select>
           </div>
           <div className="grid gap-2">
-            <Label>Savings plan</Label>
+            <Label htmlFor="sc-plan">Savings plan</Label>
             <Select
               value={planId}
               onValueChange={(v) => {
@@ -482,7 +492,7 @@ function CreateContractDialog({ plans, onClose, onSaved }: { plans: SavingsPlan[
                 setDuration("")
               }}
             >
-              <SelectTrigger>
+              <SelectTrigger id="sc-plan">
                 <SelectValue placeholder="Select a plan" />
               </SelectTrigger>
               <SelectContent>
@@ -496,11 +506,11 @@ function CreateContractDialog({ plans, onClose, onSaved }: { plans: SavingsPlan[
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
-              <Label>Duration</Label>
+              <Label htmlFor="sc-duration">Duration</Label>
               <Select value={duration} onValueChange={setDuration} disabled={!selectedPlan}>
-                <SelectTrigger>
+                <SelectTrigger id="sc-duration">
                   <SelectValue placeholder={selectedPlan ? "Select duration" : "Pick a plan first"} />
                 </SelectTrigger>
                 <SelectContent>
@@ -525,11 +535,11 @@ function CreateContractDialog({ plans, onClose, onSaved }: { plans: SavingsPlan[
               />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
-              <Label>Starts</Label>
+              <Label htmlFor="sc-start">Starts</Label>
               <Select value={startDate} onValueChange={setStartDate}>
-                <SelectTrigger>
+                <SelectTrigger id="sc-start">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -584,10 +594,121 @@ export default function SavingsPlansPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const planColumns = useMemo<ColumnDef<SavingsPlan, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (p) => p.name ?? p.id,
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "tiers",
+        accessorFn: (p) => tiersSummary(p),
+        header: "Discount tiers",
+        enableSorting: false,
+        cell: ({ getValue }) => <span className="text-sm tabular-nums">{getValue()}</span>,
+      },
+      {
+        id: "targets",
+        accessorFn: (p) => targetsSummary(p),
+        header: "Target resource types",
+        enableSorting: false,
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue()}</span>,
+      },
+      {
+        id: "access",
+        accessorFn: (p) => p.accessMode ?? "PUBLIC",
+        header: sortableHeader("Access"),
+        cell: ({ getValue }) => (
+          <Badge variant={getValue() === "SCOPED" ? "secondary" : "outline"}>{getValue()}</Badge>
+        ),
+      },
+      {
+        id: "available",
+        accessorFn: (p) => !!p.available,
+        header: sortableHeader("Available"),
+        cell: ({ row }) => <StatusBadge status={row.original.available ? "AVAILABLE" : "DISABLED"} />,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const p = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${p.name ?? p.id}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setViewPlan(p)}>View details</DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive" onClick={() => setToDelete(p)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; summary helpers are module-scope.
+    []
+  )
+
+  const contractColumns = useMemo<ColumnDef<SavingsContract, any>[]>(
+    () => [
+      {
+        id: "billingProfile",
+        accessorFn: (c) => c.billingProfileId ?? "",
+        header: sortableHeader("Billing profile"),
+        cell: ({ getValue }) => <span className="font-mono text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "plan",
+        accessorFn: (c) => c.savingsPlanName ?? c.savingsPlanId ?? "",
+        header: sortableHeader("Plan"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue() || "—"}</span>,
+      },
+      {
+        id: "committed",
+        accessorFn: (c) => Number(c.monthlyCommittedAmount ?? 0),
+        header: sortableRightHeader("Committed / month"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono text-sm tabular-nums">{fmtMoney(row.original.monthlyCommittedAmount)}</div>
+        ),
+      },
+      {
+        id: "status",
+        accessorFn: (c) => c.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "start",
+        accessorFn: (c) => c.startDate ?? "",
+        header: sortableHeader("Start"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDate(getValue())}</span>,
+      },
+      {
+        id: "end",
+        accessorFn: (c) => c.endDate ?? "",
+        header: sortableHeader("End"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDate(getValue())}</span>,
+      },
+    ],
+    []
+  )
+
   return (
     <>
       <PageHeader
         title="Savings plans"
+        eyebrow="System"
         description="Commitment discounts and the contracts sold against them."
         actions={
           <>
@@ -599,6 +720,7 @@ export default function SavingsPlansPage() {
                 void contractsQ.refetch()
               }}
               disabled={plansQ.isFetching || contractsQ.isFetching}
+              aria-label="Refresh"
             >
               <RefreshCw className={plansQ.isFetching || contractsQ.isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
@@ -616,13 +738,7 @@ export default function SavingsPlansPage() {
         </TabsList>
 
         <TabsContent value="plans" className="mt-4">
-          {plansQ.isLoading ? (
-            <Skeleton className="h-64" />
-          ) : plansQ.error ? (
-            <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-              {(plansQ.error as Error).message}
-            </div>
-          ) : !plans.length ? (
+          {!plansQ.isLoading && !plansQ.error && !plans.length ? (
             <EmptyState
               icon={PiggyBank}
               title="No savings plans"
@@ -634,51 +750,15 @@ export default function SavingsPlansPage() {
               }
             />
           ) : (
-            <Card className="overflow-hidden py-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Discount tiers</TableHead>
-                    <TableHead>Target resource types</TableHead>
-                    <TableHead>Access</TableHead>
-                    <TableHead>Available</TableHead>
-                    <TableHead className="w-24" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {plans.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell className="font-medium">
-                        <button className="hover:underline" onClick={() => setViewPlan(p)}>
-                          {p.name ?? p.id}
-                        </button>
-                      </TableCell>
-                      <TableCell className="text-sm">{tiersSummary(p)}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{targetsSummary(p)}</TableCell>
-                      <TableCell>
-                        <Badge variant={p.accessMode === "SCOPED" ? "secondary" : "outline"}>
-                          {p.accessMode ?? "PUBLIC"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={p.available ? "AVAILABLE" : "DISABLED"} />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" title="View plan" onClick={() => setViewPlan(p)}>
-                            <Eye className="size-4 text-muted-foreground" />
-                          </Button>
-                          <Button variant="ghost" size="icon" title="Delete plan" onClick={() => setToDelete(p)}>
-                            <Trash2 className="size-4 text-muted-foreground" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Card>
+            <DataTable
+              columns={planColumns}
+              data={plans}
+              isLoading={plansQ.isLoading}
+              error={plansQ.error ? (plansQ.error as Error) : null}
+              searchPlaceholder="Search savings plans…"
+              getRowId={(p) => p.id}
+              onRowClick={(p) => setViewPlan(p)}
+            />
           )}
         </TabsContent>
 
@@ -688,13 +768,7 @@ export default function SavingsPlansPage() {
               <Plus className="size-4" /> Create contract
             </Button>
           </div>
-          {contractsQ.isLoading ? (
-            <Skeleton className="h-64" />
-          ) : contractsQ.error ? (
-            <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-              {(contractsQ.error as Error).message}
-            </div>
-          ) : !contracts.length ? (
+          {!contractsQ.isLoading && !contractsQ.error && !contracts.length ? (
             <EmptyState
               icon={ScrollText}
               title="No savings contracts"
@@ -708,34 +782,14 @@ export default function SavingsPlansPage() {
               }
             />
           ) : (
-            <Card className="overflow-hidden py-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Billing profile</TableHead>
-                    <TableHead>Plan</TableHead>
-                    <TableHead>Committed / month</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Start</TableHead>
-                    <TableHead>End</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {contracts.map((c) => (
-                    <TableRow key={c.id}>
-                      <TableCell className="font-mono text-sm">{c.billingProfileId ?? "—"}</TableCell>
-                      <TableCell className="font-medium">{c.savingsPlanName ?? c.savingsPlanId ?? "—"}</TableCell>
-                      <TableCell className="font-mono text-sm tabular-nums">{fmtMoney(c.monthlyCommittedAmount)}</TableCell>
-                      <TableCell>
-                        <StatusBadge status={c.status} />
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{fmtDate(c.startDate)}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{fmtDate(c.endDate)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Card>
+            <DataTable
+              columns={contractColumns}
+              data={contracts}
+              isLoading={contractsQ.isLoading}
+              error={contractsQ.error ? (contractsQ.error as Error) : null}
+              searchPlaceholder="Search contracts…"
+              getRowId={(c) => c.id}
+            />
           )}
         </TabsContent>
       </Tabs>
@@ -772,4 +826,17 @@ export default function SavingsPlansPage() {
       </Dialog>
     </>
   )
+}
+
+// Right-aligned sortable header for money columns (same local helper as the
+// client billing pages — keeps the ghost-button sort affordance flush right).
+function sortableRightHeader<TData>(label: string) {
+  const Inner = sortableHeader<TData>(label)
+  return function SortableRightHeader({ column }: { column: Column<TData, unknown> }) {
+    return (
+      <div className="text-right">
+        <Inner column={column} />
+      </div>
+    )
+  }
 }

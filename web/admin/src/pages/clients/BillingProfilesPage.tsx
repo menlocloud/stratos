@@ -1,14 +1,15 @@
-import { Link } from "react-router-dom"
+import { useMemo } from "react"
+import { Link, useNavigate } from "react-router-dom"
+import type { ColumnDef } from "@tanstack/react-table"
 import { RefreshCw, Wallet } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useAdminList } from "@/lib/hooks"
 import { fmtMoney, timeAgo } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 // GET /admin/billing-profile — shaped profile doc + computed financials
 // (balance/accountCredit/promotionalCredit/currentMonth/lastMonth/forecastedMonthEnd as JSON numbers).
@@ -19,66 +20,119 @@ export function profileName(p: BpRow): string {
   return (p.fullName as string) || full || (p.companyName as string) || (p.email as string) || (p.id as string)
 }
 
+/** Money cell: mono right-aligned, muted when zero, destructive when negative
+ * (a negative balance is client debt — the row an operator scans for). */
+function moneyCell(value: unknown, currency?: string) {
+  const n = Number(value ?? 0)
+  return (
+    <div
+      className={cn(
+        "text-right font-mono text-sm tabular-nums",
+        n === 0 && "text-muted-foreground",
+        n < 0 && "text-destructive-text",
+      )}
+    >
+      {fmtMoney(n, currency)}
+    </div>
+  )
+}
+
 export default function BillingProfilesPage() {
+  const navigate = useNavigate()
   const { data, isLoading, isError, error, refetch, isFetching } = useAdminList<BpRow>("/admin/billing-profile")
   const rows = data?.data ?? []
+
+  const columns = useMemo<ColumnDef<BpRow, any>[]>(
+    () => [
+      {
+        id: "client",
+        accessorFn: (p) => `${profileName(p)} ${p.email ?? ""} ${p.companyName ?? ""}`,
+        header: sortableHeader("Client"),
+        cell: ({ row }) => {
+          const p = row.original
+          const company = p.companyName && p.companyName !== profileName(p) ? p.companyName : null
+          return (
+            <div>
+              <Link
+                to={`/clients/billing-profiles/${p.id}`}
+                className="inline-block py-0.5 font-medium hover:underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {profileName(p)}
+              </Link>
+              <p className="text-xs text-muted-foreground">
+                {[p.email, company].filter(Boolean).join(" · ") || "—"}
+              </p>
+            </div>
+          )
+        },
+      },
+      {
+        id: "status",
+        accessorFn: (p) => p.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "currency",
+        accessorFn: (p) => p.currency ?? "",
+        header: "Currency",
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "balance",
+        accessorFn: (p) => Number(p.balance ?? 0),
+        header: sortableRightHeader("Balance"),
+        cell: ({ row }) => moneyCell(row.original.balance, row.original.currency),
+      },
+      {
+        id: "currentMonth",
+        accessorFn: (p) => Number(p.currentMonth ?? 0),
+        header: sortableRightHeader("This month"),
+        cell: ({ row }) => moneyCell(row.original.currentMonth, row.original.currency),
+      },
+      {
+        id: "created",
+        accessorFn: (p) => p.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>,
+      },
+    ],
+    [],
+  )
 
   return (
     <>
       <PageHeader
         title="Billing profiles"
+        eyebrow="Clients"
         description="Customer billing profiles with live balances."
         actions={
-          <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            aria-label="Refresh billing profiles"
+          >
             <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
           </Button>
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : isError ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : !rows.length ? (
+      {!isLoading && !isError && !rows.length ? (
         <EmptyState icon={Wallet} title="No billing profiles" hint="Profiles appear here once clients sign up." />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Client</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Currency</TableHead>
-                <TableHead className="text-right">Balance</TableHead>
-                <TableHead className="text-right">This month</TableHead>
-                <TableHead>Created</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell>
-                    <Link className="font-medium hover:underline" to={`/clients/billing-profiles/${p.id}`}>
-                      {profileName(p)}
-                    </Link>
-                    <p className="text-xs text-muted-foreground">{p.email ?? "—"}</p>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={p.status} />
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{p.currency ?? "—"}</TableCell>
-                  <TableCell className="text-right font-mono text-sm tabular-nums">
-                    {fmtMoney(p.balance, p.currency)}
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-sm tabular-nums">
-                    {fmtMoney(p.currentMonth, p.currency)}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{timeAgo(p.createdAt)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={rows}
+          isLoading={isLoading}
+          error={isError ? (error as Error) : null}
+          searchPlaceholder="Search billing profiles…"
+          onRowClick={(p) => navigate(`/clients/billing-profiles/${p.id}`)}
+          getRowId={(p) => p.id}
+          pageSize={25}
+        />
       )}
     </>
   )

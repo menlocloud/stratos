@@ -5,8 +5,9 @@ import { toast } from "sonner"
 import { loadStripe, type Stripe, type StripeCardElement } from "@stripe/stripe-js"
 import { BadgePercent, CreditCard as CreditCardIcon, Gift, Wallet } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { StatCard } from "@/components/stat-card"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -18,7 +19,7 @@ import {
 import { Combobox } from "@/components/ui/combobox"
 import { Skeleton } from "@/components/ui/skeleton"
 import { apiFetch } from "@/lib/api"
-import { fmtMoney } from "@/lib/format"
+import { fmtMoney, fmtMoneyTight } from "@/lib/format"
 import { useBillingSummary, useProjectId } from "@/lib/hooks"
 import type { CreditCard } from "@/lib/types"
 
@@ -33,20 +34,6 @@ type Gateway = {
 
 type Country = { name: string; cca2: string }
 
-function Stat({ label, value, icon: Icon }: { label: string; value: string; icon: React.ComponentType<{ className?: string }> }) {
-  return (
-    <Card>
-      <CardContent className="flex items-start justify-between p-5">
-        <div>
-          <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="mt-1 font-display text-2xl font-semibold tabular-nums">{value}</p>
-        </div>
-        <Icon className="size-5 text-muted-foreground/50" />
-      </CardContent>
-    </Card>
-  )
-}
-
 const TIERS = [10, 50, 100]
 
 export default function FundsPage() {
@@ -60,23 +47,45 @@ export default function FundsPage() {
 
   return (
     <>
-      <PageHeader title="Funds" description="Balance, deposits and promo codes for this project's billing profile." />
+      <PageHeader
+        title="Funds"
+        eyebrow="Billing"
+        description="Balance, deposits and promo codes for this project's billing profile."
+      />
 
       {isLoading || !bp ? (
         <Skeleton className="h-64" />
       ) : (
         <>
           <div className="grid gap-4 md:grid-cols-3">
-            <Stat label="Balance" value={fmtMoney(summary?.balance, currency)} icon={Wallet} />
-            <Stat label="Account credit" value={fmtMoney(summary?.accountCredit, currency)} icon={CreditCardIcon} />
-            <Stat label="Promotional credit" value={fmtMoney(summary?.promotionalCredit, currency)} icon={Gift} />
+            <StatCard
+              label="Balance"
+              icon={Wallet}
+              numericValue={Number(summary?.balance ?? 0)}
+              format={{ style: "currency", currency }}
+              hint="Available on this billing profile"
+            />
+            <StatCard
+              label="Account credit"
+              icon={CreditCardIcon}
+              numericValue={Number(summary?.accountCredit ?? 0)}
+              format={{ style: "currency", currency }}
+              hint="From deposits and refunds"
+            />
+            <StatCard
+              label="Promotional credit"
+              icon={Gift}
+              numericValue={Number(summary?.promotionalCredit ?? 0)}
+              format={{ style: "currency", currency }}
+              hint="Applied to bills first"
+            />
           </div>
 
           <div className="mt-6 grid items-start gap-4 lg:grid-cols-2">
             {needsDetails ? (
               <BillingDetailsCard bp={bp} onSaved={() => void qc.invalidateQueries({ queryKey: ["billing-summary", pid] })} />
             ) : (
-              <DepositCard pid={pid} bp={bp} currency={currency} />
+              <DepositCard pid={pid} bp={bp} currency={currency} defaultCardId={summary?.defaultCardId} />
             )}
             <PromoCard pid={pid} bp={bp} />
           </div>
@@ -88,7 +97,9 @@ export default function FundsPage() {
 
 // Deposit via a saved card (POST /payment/deposit/{bp}/card, CollectRequest {cardId, amount})
 // or via a new card (POST /payment/deposit/{bp} → PaymentIntent → Stripe Elements confirm).
-function DepositCard({ pid, bp, currency }: { pid: string; bp: string; currency: string }) {
+function DepositCard({
+  pid, bp, currency, defaultCardId,
+}: { pid: string; bp: string; currency: string; defaultCardId?: string }) {
   const qc = useQueryClient()
   const [amount, setAmount] = useState("50")
   const [cardId, setCardId] = useState("")
@@ -102,6 +113,14 @@ function DepositCard({ pid, bp, currency }: { pid: string; bp: string; currency:
     queryKey: ["cards", bp],
     queryFn: () => apiFetch<CreditCard[]>(`/card/${bp}`),
   })
+
+  // Preselect the profile's default card so the primary flow is one click —
+  // never auto-pick a non-default card for a charge.
+  useEffect(() => {
+    if (!cardId && defaultCardId && cards?.some((c) => c.id === defaultCardId)) {
+      setCardId(defaultCardId)
+    }
+  }, [cards, defaultCardId, cardId])
 
   const gw = gateways?.find((g) => g.addFunds)
   // New-card deposits confirm client-side with Stripe Elements — need the Stripe public key.
@@ -129,36 +148,47 @@ function DepositCard({ pid, bp, currency }: { pid: string; bp: string; currency:
   const amountInvalid = !Number.isFinite(amountNum) || amountNum <= 0 || (minDeposit > 0 && amountNum < minDeposit)
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4">
+      <CardHeader className="border-b [.border-b]:pb-4">
         <CardTitle className="text-base">Add funds</CardTitle>
+        <CardDescription>Deposits become account credit and settle future bills.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-5">
         <div>
-          <Label className="mb-2 block">Amount ({currency})</Label>
-          <div className="flex flex-wrap items-center gap-2">
-            {TIERS.map((t) => (
-              <Button
-                key={t}
-                type="button"
-                variant={amount === String(t) ? "default" : "outline"}
-                size="sm"
-                onClick={() => setAmount(String(t))}
-              >
-                {t}
-              </Button>
-            ))}
+          <Label className="mb-2 block" htmlFor="deposit-amount">Amount</Label>
+          <div className="relative">
             <Input
-              className="w-28 font-mono tabular-nums"
+              id="deposit-amount"
+              className="h-12 pr-16 font-mono text-2xl font-medium tabular-nums md:text-2xl"
               type="number"
+              inputMode="decimal"
               min={minDeposit || 1}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
             />
+            <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 font-mono text-xs text-muted-foreground">
+              {currency}
+            </span>
           </div>
-          {minDeposit > 0 ? (
-            <p className="mt-1 text-xs text-muted-foreground">Minimum deposit {fmtMoney(minDeposit, currency)}.</p>
-          ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {TIERS.map((t) => (
+              <Button
+                key={t}
+                type="button"
+                variant={amount === String(t) ? "secondary" : "outline"}
+                size="sm"
+                className="font-mono tabular-nums"
+                onClick={() => setAmount(String(t))}
+              >
+                {fmtMoneyTight(t, currency)}
+              </Button>
+            ))}
+            {minDeposit > 0 ? (
+              <span className="text-xs text-muted-foreground">
+                Minimum {fmtMoneyTight(minDeposit, currency)}
+              </span>
+            ) : null}
+          </div>
         </div>
 
         <div>
@@ -167,12 +197,12 @@ function DepositCard({ pid, bp, currency }: { pid: string; bp: string; currency:
             <Skeleton className="h-9" />
           ) : cards?.length ? (
             <Select value={cardId} onValueChange={setCardId}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full font-mono" aria-label="Pay with card">
                 <SelectValue placeholder="Select a saved card" />
               </SelectTrigger>
               <SelectContent>
                 {cards.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
+                  <SelectItem key={c.id} value={c.id} className="font-mono">
                     {c.panMasked ?? c.id}
                   </SelectItem>
                 ))}
@@ -310,10 +340,12 @@ function NewCardDepositDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Deposit {fmtMoney(amount, currency)} with a new card</DialogTitle>
+          <DialogTitle>
+            Deposit <span className="font-mono tabular-nums">{fmtMoney(amount, currency)}</span> with a new card
+          </DialogTitle>
           <DialogDescription>Card details go directly to Stripe — they never touch Stratos.</DialogDescription>
         </DialogHeader>
-        <div className="rounded-md border p-3">
+        <div className="rounded-md border bg-muted/30 p-3">
           <div ref={mountRef} />
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -345,14 +377,25 @@ function PromoCard({ pid, bp }: { pid: string; bp: string }) {
     onError: (e: Error) => toast.error(e.message),
   })
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4">
+      <CardHeader className="border-b [.border-b]:pb-4">
         <CardTitle className="flex items-center gap-2 text-base">
-          <BadgePercent className="size-4" /> Redeem a promo code
+          <BadgePercent className="size-4 text-primary" /> Redeem a promo code
         </CardTitle>
+        <CardDescription>Promo codes mint promotional credit onto this profile.</CardDescription>
       </CardHeader>
       <CardContent className="flex gap-2">
-        <Input placeholder="Promo code" value={code} onChange={(e) => setCode(e.target.value)} />
+        <Input
+          placeholder="Promo code"
+          aria-label="Promo code"
+          autoComplete="off"
+          className="font-mono"
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && code.trim() && !redeem.isPending) redeem.mutate()
+          }}
+        />
         <Button onClick={() => redeem.mutate()} disabled={!code.trim() || redeem.isPending}>
           {redeem.isPending ? "Redeeming…" : "Redeem"}
         </Button>
@@ -384,18 +427,30 @@ function BillingDetailsCard({ bp, onSaved }: { bp: string; onSaved: () => void }
   const incomplete = Object.values(form).some((v) => !v.trim())
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4">
+      <CardHeader className="border-b [.border-b]:pb-4">
         <CardTitle className="text-base">Billing details</CardTitle>
-        <p className="text-sm text-muted-foreground">
+        <CardDescription>
           Fill in your billing address to activate this billing profile and unlock deposits.
-        </p>
+        </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="First name"><Input value={form.firstName} onChange={set("firstName")} /></Field>
-          <Field label="Last name"><Input value={form.lastName} onChange={set("lastName")} /></Field>
-          <Field label="Phone"><Input placeholder="+1 555 0100" value={form.phone} onChange={set("phone")} /></Field>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="First name" htmlFor="bd-first-name">
+            <Input id="bd-first-name" name="given-name" autoComplete="given-name" value={form.firstName} onChange={set("firstName")} />
+          </Field>
+          <Field label="Last name" htmlFor="bd-last-name">
+            <Input id="bd-last-name" name="family-name" autoComplete="family-name" value={form.lastName} onChange={set("lastName")} />
+          </Field>
+          <Field label="Street address" htmlFor="bd-address" className="sm:col-span-2">
+            <Input id="bd-address" name="street-address" autoComplete="street-address" value={form.address} onChange={set("address")} />
+          </Field>
+          <Field label="City" htmlFor="bd-city">
+            <Input id="bd-city" name="city" autoComplete="address-level2" value={form.city} onChange={set("city")} />
+          </Field>
+          <Field label="ZIP code" htmlFor="bd-zip">
+            <Input id="bd-zip" name="postal-code" autoComplete="postal-code" value={form.zipCode} onChange={set("zipCode")} />
+          </Field>
           <Field label="Country">
             <Combobox
               options={(countries ?? []).map((c) => ({ value: c.cca2, label: c.name }))}
@@ -405,9 +460,9 @@ function BillingDetailsCard({ bp, onSaved }: { bp: string; onSaved: () => void }
               searchPlaceholder="Search country…"
             />
           </Field>
-          <Field label="Street address"><Input value={form.address} onChange={set("address")} /></Field>
-          <Field label="City"><Input value={form.city} onChange={set("city")} /></Field>
-          <Field label="ZIP code"><Input value={form.zipCode} onChange={set("zipCode")} /></Field>
+          <Field label="Phone" htmlFor="bd-phone">
+            <Input id="bd-phone" name="tel" type="tel" autoComplete="tel" placeholder="+1 555 0100" value={form.phone} onChange={set("phone")} />
+          </Field>
         </div>
         <Button onClick={() => save.mutate()} disabled={incomplete || save.isPending}>
           {save.isPending ? "Saving…" : "Save billing details"}
@@ -417,10 +472,12 @@ function BillingDetailsCard({ bp, onSaved }: { bp: string; onSaved: () => void }
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label, htmlFor, className, children,
+}: { label: string; htmlFor?: string; className?: string; children: React.ReactNode }) {
   return (
-    <div>
-      <Label className="mb-1.5 block">{label}</Label>
+    <div className={className}>
+      <Label className="mb-1.5 block" htmlFor={htmlFor}>{label}</Label>
       {children}
     </div>
   )

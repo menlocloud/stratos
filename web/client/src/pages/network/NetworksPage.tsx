@@ -1,22 +1,24 @@
-import { useState } from "react"
-import { Link } from "react-router-dom"
+import { useMemo, useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Network, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { MoreHorizontal, Network, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useCloudScope, useProject, useProjectId } from "@/lib/hooks"
@@ -39,11 +41,15 @@ export function isPrivateNetwork(r: CloudResource): boolean {
 export default function NetworksPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const { data, isLoading, refetch, isFetching, error } = useCloudList(pid, "NETWORK")
   // Hidden external picker → show only the project's own private networks (drop shared/external infra).
   const netsVisible = useProject(pid).project?.publicNetworksVisible === true
-  const rows = netsVisible ? (data ?? []) : (data ?? []).filter(isPrivateNetwork)
+  const rows = useMemo(
+    () => (netsVisible ? (data ?? []) : (data ?? []).filter(isPrivateNetwork)),
+    [data, netsVisible],
+  )
   const [createOpen, setCreateOpen] = useState(false)
   const [toDelete, setToDelete] = useState<CloudResource | null>(null)
 
@@ -101,14 +107,106 @@ export default function NetworksPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => networkName(r),
+        header: sortableHeader("Name"),
+        cell: ({ row, getValue }) => (
+          <Link
+            className="inline-block py-1 font-medium hover:underline"
+            to={`/p/${pid}/networks/${row.original.id}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {getValue()}
+          </Link>
+        ),
+      },
+      {
+        id: "status",
+        accessorFn: (r) => networkStatus(r) ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "subnets",
+        accessorFn: (r) => ((r.data?.network?.subnets as string[] | undefined) ?? []).length,
+        header: sortableHeader("Subnets"),
+        cell: ({ getValue }) => (
+          <span className="text-sm tabular-nums text-muted-foreground">{getValue()}</span>
+        ),
+      },
+      {
+        id: "flags",
+        accessorFn: (r) => {
+          const net = (r.data?.network ?? {}) as Record<string, unknown>
+          return [net.shared ? "shared" : "", net["router:external"] ? "external" : ""].filter(Boolean).join(" ")
+        },
+        header: "Flags",
+        enableSorting: false,
+        cell: ({ row }) => {
+          const net = (row.original.data?.network ?? {}) as Record<string, unknown>
+          return (
+            <div className="flex gap-1">
+              {net.shared ? <Badge variant="secondary">Shared</Badge> : null}
+              {net["router:external"] ? <Badge variant="secondary">External</Badge> : null}
+              {!net.shared && !net["router:external"] ? (
+                <span className="text-sm text-muted-foreground">—</span>
+              ) : null}
+            </div>
+          )
+        },
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${networkName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => navigate(`/p/${pid}/networks/${r.id}`)}>
+                    View details
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // pid is stable per mount; setters/navigate are stable.
+    [pid, navigate],
+  )
+
   return (
     <>
       <PageHeader
         title="Networks"
+        eyebrow="Network"
         description="Private networks in this project."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -118,11 +216,7 @@ export default function NetworksPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : !rows.length ? (
+      {!isLoading && !error && !rows.length ? (
         <EmptyState
           icon={Network}
           title="No networks yet"
@@ -134,53 +228,14 @@ export default function NetworksPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Subnets</TableHead>
-                <TableHead>Flags</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-10" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r) => {
-                const net = (r.data?.network ?? {}) as Record<string, unknown>
-                const subnets = (net.subnets as string[] | undefined) ?? []
-                return (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium">
-                      <Link className="hover:underline" to={`/p/${pid}/networks/${r.id}`}>
-                        {networkName(r)}
-                      </Link>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={networkStatus(r)} />
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{subnets.length}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        {net.shared ? <Badge variant="secondary">shared</Badge> : null}
-                        {net["router:external"] ? <Badge variant="secondary">external</Badge> : null}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                    </TableCell>
-                    <TableCell>
-                      <Button variant="ghost" size="icon" onClick={() => setToDelete(r)} aria-label="Delete network">
-                        <Trash2 className="size-4 text-muted-foreground" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={rows}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search networks…"
+          onRowClick={(r) => navigate(`/p/${pid}/networks/${r.id}`)}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -247,7 +302,8 @@ export default function NetworksPage() {
           <DialogHeader>
             <DialogTitle>Delete network</DialogTitle>
             <DialogDescription>
-              Delete network "{toDelete ? networkName(toDelete) : ""}"? This cannot be undone.
+              Delete network "{toDelete ? networkName(toDelete) : ""}"? Its subnets are deleted with it. This
+              cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

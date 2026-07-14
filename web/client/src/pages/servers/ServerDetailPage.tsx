@@ -8,15 +8,18 @@
 //   ADD/REMOVE_SECURITY_GROUP{name} · ATTACH_PORT/DETACH_PORT{portId} ·
 //   volume ATTACH/DETACH act on the VOLUME resource with data{serverId: <server externalId>} ·
 //   metadata = PUT /project/{pid}/cloud/{id}/metadata with the FULL map[string]string.
-import { useState } from "react"
-import { useNavigate, useParams } from "react-router-dom"
+import { useEffect, useState } from "react"
+import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
-  Camera, HardDrive, MoreVertical, Play, Plus, Power, RotateCw, Square, Trash2, X,
+  Camera, HardDrive, MoreVertical, Play, Plus, RotateCw, Square, Trash2, X,
 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatusBadge } from "@/components/status-badge"
+import {
+  Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -39,7 +42,7 @@ import { useCloudList, useCloudResource, useCloudScope, useProjectId } from "@/l
 import type { CloudResource } from "@/lib/types"
 import { serverFlavor, serverIPs, serverName, serverStatus } from "./ServersPage"
 
-type PendingAction = { action: string; label: string; destructive?: boolean } | null
+type PendingAction = { action: string; title: string; label: string; destructive?: boolean } | null
 type FormDialog = "rename" | "resize" | "rebuild" | "password" | "delete" | null
 
 type Flavor = {
@@ -76,6 +79,16 @@ export function ServerDetailPage() {
   const [resizeFlavor, setResizeFlavor] = useState("")
   const [rebuildImage, setRebuildImage] = useState("")
   const [passwordVal, setPasswordVal] = useState("")
+  // Hide the confirm/revert-resize panel as soon as one is clicked, so a second click can't
+  // fire a confirm at an already-confirmed server (which nova 409s). The cached status can lag
+  // the real state for a while (notification/sync delay), so relying on it alone leaves the
+  // buttons live too long. Reset when the status finally moves off VERIFY_RESIZE, or on error.
+  const [resizeActed, setResizeActed] = useState(false)
+  // Re-arm the panel once the server leaves VERIFY_RESIZE (a later resize shows it again).
+  // Kept above any early return so the hook order is stable.
+  useEffect(() => {
+    if (!server || serverStatus(server) !== "VERIFY_RESIZE") setResizeActed(false)
+  }, [server])
 
   const invalidate = () => {
     setTimeout(() => {
@@ -147,8 +160,15 @@ export function ServerDetailPage() {
   if (isLoading || !server) {
     return (
       <>
-        <PageHeader title="Server" />
-        <Skeleton className="h-72" />
+        <PageHeader title="Server" eyebrow="Compute" />
+        <div className="grid gap-4">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-4 w-64" />
+          </div>
+          <Skeleton className="h-9 w-full max-w-xl" />
+          <Skeleton className="h-64" />
+        </div>
       </>
     )
   }
@@ -164,13 +184,29 @@ export function ServerDetailPage() {
     <>
       <PageHeader
         title={name}
+        eyebrow="Compute"
+        breadcrumb={
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink asChild>
+                  <Link to={`/p/${pid}/servers`}>Servers</Link>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{name}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        }
         description={`${serverFlavor(server)} — ${serverIPs(server).join(", ") || "no addresses"}`}
         actions={
           <>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPending({ action: "START", label: "start this server" })}
+              onClick={() => setPending({ action: "START", title: "Start server", label: "start this server" })}
               disabled={status === "ACTIVE"}
             >
               <Play className="size-4" /> Start
@@ -178,7 +214,7 @@ export function ServerDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPending({ action: "STOP", label: "stop this server" })}
+              onClick={() => setPending({ action: "STOP", title: "Stop server", label: "stop this server" })}
               disabled={status === "SHUTOFF"}
             >
               <Square className="size-4" /> Stop
@@ -186,7 +222,7 @@ export function ServerDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPending({ action: "SOFTREBOOT", label: "reboot this server" })}
+              onClick={() => setPending({ action: "SOFTREBOOT", title: "Reboot server", label: "reboot this server" })}
             >
               <RotateCw className="size-4" /> Reboot
             </Button>
@@ -223,13 +259,13 @@ export function ServerDetailPage() {
                 </DropdownMenuItem>
                 {status === "RESCUE" ? (
                   <DropdownMenuItem
-                    onClick={() => setPending({ action: "UNRESCUE", label: "take this server out of rescue mode" })}
+                    onClick={() => setPending({ action: "UNRESCUE", title: "Unrescue server", label: "take this server out of rescue mode" })}
                   >
                     Unrescue
                   </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem
-                    onClick={() => setPending({ action: "RESCUE", label: "put this server into rescue mode" })}
+                    onClick={() => setPending({ action: "RESCUE", title: "Rescue server", label: "put this server into rescue mode" })}
                   >
                     Rescue
                   </DropdownMenuItem>
@@ -258,16 +294,26 @@ export function ServerDetailPage() {
         <span className="font-mono text-xs text-muted-foreground">{server.externalId}</span>
       </div>
 
-      {status === "VERIFY_RESIZE" ? (
+      {status === "VERIFY_RESIZE" && !resizeActed ? (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border bg-muted p-3 text-sm">
           <span>The resize is waiting for verification.</span>
-          <Button size="sm" onClick={() => act.mutate({ action: "CONFIRMRESIZE" })} disabled={act.isPending}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setResizeActed(true)
+              act.mutate({ action: "CONFIRMRESIZE" }, { onError: () => setResizeActed(false) })
+            }}
+            disabled={act.isPending}
+          >
             Confirm resize
           </Button>
           <Button
             size="sm"
             variant="outline"
-            onClick={() => act.mutate({ action: "REVERTRESIZE" })}
+            onClick={() => {
+              setResizeActed(true)
+              act.mutate({ action: "REVERTRESIZE" }, { onError: () => setResizeActed(false) })
+            }}
             disabled={act.isPending}
           >
             Revert resize
@@ -276,16 +322,20 @@ export function ServerDetailPage() {
       ) : null}
 
       <Tabs defaultValue="overview">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="network">Network</TabsTrigger>
-          <TabsTrigger value="security">Security</TabsTrigger>
-          <TabsTrigger value="volumes">Volumes</TabsTrigger>
-          <TabsTrigger value="events">Events</TabsTrigger>
-          <TabsTrigger value="snapshots">Snapshots</TabsTrigger>
-          <TabsTrigger value="logs">Console log</TabsTrigger>
-          <TabsTrigger value="metadata">Metadata</TabsTrigger>
-        </TabsList>
+        {/* 8 triggers overflow narrow viewports — the wrapper scrolls horizontally
+            instead of wrapping/clipping (thin scrollbar as the affordance). */}
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <TabsList className="w-max">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="network">Network</TabsTrigger>
+            <TabsTrigger value="security">Security</TabsTrigger>
+            <TabsTrigger value="volumes">Volumes</TabsTrigger>
+            <TabsTrigger value="events">Events</TabsTrigger>
+            <TabsTrigger value="snapshots">Snapshots</TabsTrigger>
+            <TabsTrigger value="logs">Console log</TabsTrigger>
+            <TabsTrigger value="metadata">Metadata</TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value="overview" className="mt-4">
           <Card>
@@ -343,7 +393,7 @@ export function ServerDetailPage() {
       <Dialog open={!!pending} onOpenChange={(o) => !o && setPending(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm action</DialogTitle>
+            <DialogTitle>{pending?.title ?? "Confirm action"}</DialogTitle>
             <DialogDescription>Are you sure you want to {pending?.label}?</DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -356,7 +406,7 @@ export function ServerDetailPage() {
                 setPending(null)
               }}
             >
-              <Power className="size-4" /> Confirm
+              {pending?.title ?? "Confirm"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -613,7 +663,9 @@ function NetworkTab({
       {ports.isLoading ? (
         <Skeleton className="h-40" />
       ) : !ports.data?.length ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">No ports attached to this server.</p>
+        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+          No ports attached to this server.
+        </p>
       ) : (
         <Card className="overflow-hidden py-0">
           <Table>
@@ -729,7 +781,7 @@ function SecurityTab({
       {attached.isLoading ? (
         <Skeleton className="h-40" />
       ) : !attached.data?.length ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">
+        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
           No security groups attached to this server.
         </p>
       ) : (
@@ -834,7 +886,9 @@ function VolumesTab({ pid, ext, scope }: { pid: string; ext: string; scope?: Clo
       {volumes.isLoading ? (
         <Skeleton className="h-40" />
       ) : !attachedVols.length ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">No volumes attached to this server.</p>
+        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+          No volumes attached to this server.
+        </p>
       ) : (
         <Card className="overflow-hidden py-0">
           <Table>
@@ -889,7 +943,11 @@ function EventsTab({ pid, resourceId, scope }: { pid: string; resourceId: string
 
   if (events.isLoading) return <Skeleton className="h-40" />
   if (!events.data?.length) {
-    return <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">No events recorded for this server.</p>
+    return (
+      <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+        No events recorded for this server.
+      </p>
+    )
   }
   return (
     <Card className="overflow-hidden py-0">
@@ -898,14 +956,16 @@ function EventsTab({ pid, resourceId, scope }: { pid: string; resourceId: string
           <TableRow>
             <TableHead>Time</TableHead>
             <TableHead>Action</TableHead>
+            <TableHead>Message</TableHead>
             <TableHead>User</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {events.data.map((e, i) => (
             <TableRow key={`${e.requestId ?? i}`}>
-              <TableCell className="text-sm text-muted-foreground">{fmtDateTime(e.date)}</TableCell>
+              <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{fmtDateTime(e.date)}</TableCell>
               <TableCell className="font-medium">{e.action ?? "—"}</TableCell>
+              <TableCell className="text-sm text-muted-foreground">{e.message || "—"}</TableCell>
               <TableCell className="font-mono text-xs">{e.userId ?? "—"}</TableCell>
             </TableRow>
           ))}
@@ -960,7 +1020,9 @@ function SnapshotsTab({
       {snaps.isLoading ? (
         <Skeleton className="h-40" />
       ) : !rows.length ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">No snapshots of this server yet.</p>
+        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+          No snapshots of this server yet.
+        </p>
       ) : (
         <Card className="overflow-hidden py-0">
           <Table>
@@ -1109,7 +1171,9 @@ function ConsoleLog({ pid, resourceId }: { pid: string; resourceId: string }) {
           {logs.isPending ? "Fetching…" : "Fetch console log"}
         </Button>
         {logs.data?.result ? (
-          <pre className="mt-4 max-h-96 overflow-auto rounded-md bg-[#0b1220] p-4 font-mono text-xs text-white/90">
+          // Terminal look via tokens: inverted foreground/background reads as a
+          // dark console in light mode and a deep panel in dark mode.
+          <pre className="mt-4 max-h-96 overflow-auto rounded-lg bg-foreground/95 p-4 font-mono text-xs leading-relaxed text-background">
             {String(logs.data.result)}
           </pre>
         ) : null}

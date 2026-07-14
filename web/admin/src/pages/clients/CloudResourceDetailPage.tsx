@@ -1,11 +1,19 @@
 import { useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Cloud, RefreshCw, Trash2 } from "lucide-react"
+import { Cloud, Copy, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -52,10 +60,26 @@ export default function CloudResourceDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const crumbs = (
+    <Breadcrumb>
+      <BreadcrumbList>
+        <BreadcrumbItem>
+          <BreadcrumbLink asChild>
+            <Link to="/clients/cloud-resources">Cloud resources</Link>
+          </BreadcrumbLink>
+        </BreadcrumbItem>
+        <BreadcrumbSeparator />
+        <BreadcrumbItem>
+          <BreadcrumbPage className="font-mono text-xs">{id}</BreadcrumbPage>
+        </BreadcrumbItem>
+      </BreadcrumbList>
+    </Breadcrumb>
+  )
+
   if (isLoading) {
     return (
       <>
-        <PageHeader title="Cloud resource" description="Loading…" />
+        <PageHeader title="Cloud resource" eyebrow="Clients" breadcrumb={crumbs} description="Loading…" />
         <Skeleton className="h-64" />
       </>
     )
@@ -63,7 +87,7 @@ export default function CloudResourceDetailPage() {
   if (isError) {
     return (
       <>
-        <PageHeader title="Cloud resource" description="Failed to load." />
+        <PageHeader title="Cloud resource" eyebrow="Clients" breadcrumb={crumbs} description="Failed to load." />
         <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(error as Error).message}</div>
       </>
     )
@@ -72,7 +96,12 @@ export default function CloudResourceDetailPage() {
   if (!res?.id) {
     return (
       <>
-        <PageHeader title="Cloud resource" description="This resource does not exist." />
+        <PageHeader
+          title="Cloud resource"
+          eyebrow="Clients"
+          breadcrumb={crumbs}
+          description="This resource does not exist."
+        />
         <EmptyState
           icon={Cloud}
           title="Resource not found"
@@ -95,6 +124,8 @@ export default function CloudResourceDetailPage() {
     <>
       <PageHeader
         title={name}
+        eyebrow="Clients"
+        breadcrumb={crumbs}
         description={`Cloud ${type} — cached copy of the live OpenStack object.`}
         actions={
           <>
@@ -116,20 +147,20 @@ export default function CloudResourceDetailPage() {
           <CardContent>
             <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
               <div>
-                <dt className="text-muted-foreground">Status</dt>
-                <dd className="mt-0.5"><StatusBadge status={status} /></dd>
+                <dt className="text-eyebrow mb-1">Status</dt>
+                <dd><StatusBadge status={status} /></dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Type</dt>
-                <dd className="mt-0.5 capitalize">{type}</dd>
+                <dt className="text-eyebrow mb-1">Type</dt>
+                <dd className="capitalize">{type}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">External ID</dt>
-                <dd className="mt-0.5 break-all font-mono text-xs">{res.externalId ?? "—"}</dd>
+                <dt className="text-eyebrow mb-1">External ID</dt>
+                <dd className="break-all font-mono text-xs">{res.externalId ?? "—"}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Project</dt>
-                <dd className="mt-0.5">
+                <dt className="text-eyebrow mb-1">Project</dt>
+                <dd>
                   {res.projectId ? (
                     <Link className="break-all font-mono text-xs hover:underline" to={`/clients/projects/${res.projectId}`}>
                       {res.projectId}
@@ -140,28 +171,40 @@ export default function CloudResourceDetailPage() {
                 </dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Service</dt>
-                <dd className="mt-0.5 break-all font-mono text-xs">{res.serviceId ?? "—"}</dd>
+                <dt className="text-eyebrow mb-1">Service</dt>
+                <dd className="break-all font-mono text-xs">{res.serviceId ?? "—"}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Region</dt>
-                <dd className="mt-0.5">{res.region ?? "—"}</dd>
+                <dt className="text-eyebrow mb-1">Region</dt>
+                <dd>{res.region ?? "—"}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Created</dt>
-                <dd className="mt-0.5">{fmtDateTime(resourceCreatedAt(res))}</dd>
+                <dt className="text-eyebrow mb-1">Created</dt>
+                <dd>{fmtDateTime(resourceCreatedAt(res))}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Updated</dt>
-                <dd className="mt-0.5">{fmtDateTime(res.updatedAt)}</dd>
+                <dt className="text-eyebrow mb-1">Updated</dt>
+                <dd>{fmtDateTime(res.updatedAt)}</dd>
               </div>
             </dl>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">Raw data</CardTitle>
+            {res.data && Object.keys(res.data).length ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(JSON.stringify(res.data, null, 2))
+                  toast.success("Raw JSON copied")
+                }}
+              >
+                <Copy className="size-4" /> Copy JSON
+              </Button>
+            ) : null}
           </CardHeader>
           <CardContent>
             {res.data && Object.keys(res.data).length ? (
@@ -190,12 +233,13 @@ export default function CloudResourceDetailPage() {
             </Button>
             <Button
               variant="destructive"
+              disabled={del.isPending}
               onClick={() => {
                 del.mutate()
                 setConfirmDelete(false)
               }}
             >
-              <Trash2 className="size-4" /> Delete resource
+              <Trash2 className="size-4" /> {del.isPending ? "Deleting…" : "Delete resource"}
             </Button>
           </DialogFooter>
         </DialogContent>

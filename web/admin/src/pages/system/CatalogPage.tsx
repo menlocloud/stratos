@@ -1,16 +1,20 @@
-import { Fragment, useMemo, useState } from "react"
+import { Fragment, useCallback, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Boxes, ChevronDown, ChevronRight, Cpu, ImageIcon, Plus, Tags, Trash2 } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table"
+import { Boxes, ChevronDown, ChevronRight, Cpu, ImageIcon, MoreHorizontal, Plus, Tags, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -122,7 +126,7 @@ function FlavorCategoriesTab() {
     setSelected(new Set())
     setOpen(true)
   }
-  const openEdit = (c: FlavorCategory) => {
+  const openEdit = useCallback((c: FlavorCategory) => {
     setEditing(c)
     setForm({
       name: c.name ?? "",
@@ -132,7 +136,7 @@ function FlavorCategoriesTab() {
     })
     setSelected(new Set((c.flavors ?? []).map((f) => f.flavorName ?? "").filter(Boolean)))
     setOpen(true)
-  }
+  }, [])
 
   // union of live nova names + already-selected names (so an offline region's flavor still shows).
   const flavorChoices = dedupe([...liveNames, ...selected])
@@ -174,8 +178,61 @@ function FlavorCategoriesTab() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  if (isLoading) return <Skeleton className="h-64" />
-  if (error) return <ErrorPanel error={error} />
+  const columns = useMemo<ColumnDef<FlavorCategory, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (c) => c.name ?? "",
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue() || "—"}</span>,
+      },
+      {
+        id: "order",
+        accessorFn: (c) => c.orderNumber ?? 0,
+        header: sortableHeader("Order"),
+        cell: ({ getValue }) => <span className="tabular-nums">{getValue()}</span>,
+      },
+      {
+        id: "flavors",
+        accessorFn: (c) => (c.flavors ?? []).length,
+        header: sortableHeader("Flavors"),
+        cell: ({ getValue }) => <span className="tabular-nums">{getValue()}</span>,
+      },
+      {
+        id: "bareMetal",
+        accessorFn: (c) => (c.bareMetal ? "Yes" : "No"),
+        header: "Bare metal",
+        cell: ({ getValue }) => <span className="text-muted-foreground">{getValue()}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const c = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="Flavor category actions">
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => openEdit(c)}>Edit</DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive" onClick={() => setDeleting(c)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; openEdit is useCallback'd.
+    [openEdit],
+  )
 
   return (
     <div className="space-y-4">
@@ -184,7 +241,7 @@ function FlavorCategoriesTab() {
           <Plus className="size-4" /> Create flavor category
         </Button>
       </div>
-      {items.length === 0 ? (
+      {!isLoading && !error && items.length === 0 ? (
         <EmptyState
           icon={Cpu}
           title="No flavor categories"
@@ -192,35 +249,14 @@ function FlavorCategoriesTab() {
           action={<Button onClick={openCreate}>Create flavor category</Button>}
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Order</TableHead>
-                <TableHead>Flavors</TableHead>
-                <TableHead>Bare metal</TableHead>
-                <TableHead className="w-40" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((c) => (
-                <TableRow key={c.id}>
-                  <TableCell className="font-medium">{c.name ?? "—"}</TableCell>
-                  <TableCell className="tabular-nums">{c.orderNumber ?? 0}</TableCell>
-                  <TableCell className="tabular-nums">{(c.flavors ?? []).length}</TableCell>
-                  <TableCell>{c.bareMetal ? "Yes" : "No"}</TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => openEdit(c)}>Edit</Button>
-                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setDeleting(c)}>
-                      Delete
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data?.data}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search flavor categories…"
+          getRowId={(c) => c.id}
+        />
       )}
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -229,24 +265,24 @@ function FlavorCategoriesTab() {
             <DialogTitle>{editing ? "Edit flavor category" : "Create flavor category"}</DialogTitle>
             <DialogDescription>Pick the live Nova flavors this category exposes to clients.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="fc-name">Name</Label>
               <Input id="fc-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="fc-desc">Description</Label>
-              <Textarea id="fc-desc" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-            </div>
-            <div className="space-y-1.5">
               <Label htmlFor="fc-order">Order number</Label>
               <Input id="fc-order" type="number" value={form.orderNumber} onChange={(e) => setForm({ ...form, orderNumber: e.target.value })} />
             </div>
-            <label className="flex items-center gap-2 text-sm">
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="fc-desc">Description</Label>
+              <Textarea id="fc-desc" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            </div>
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
               <Switch checked={form.bareMetal} onCheckedChange={(v) => setForm({ ...form, bareMetal: v === true })} />
               Bare metal category
             </label>
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 sm:col-span-2">
               <Label>Flavors</Label>
               {liveQ.isLoading ? (
                 <Skeleton className="h-24" />
@@ -317,7 +353,7 @@ function CategoryGroups({ categoryId }: { categoryId: string }) {
   return (
     <div className="flex flex-wrap gap-2 px-2 py-1">
       {groups.map((g) => (
-        <Badge key={g.id} variant={g.enabled ? "default" : "outline"}>
+        <Badge key={g.id} variant={g.enabled ? "secondary" : "outline"} className={g.enabled ? undefined : "text-muted-foreground"}>
           {g.name ?? g.id} · {(g.images ?? []).length} images
         </Badge>
       ))}
@@ -384,7 +420,7 @@ function ImageCategoriesTab() {
     setExpanded(next)
   }
 
-  if (isLoading) return <Skeleton className="h-64" />
+  if (isLoading) return <Skeleton className="h-64 rounded-xl" />
   if (error) return <ErrorPanel error={error} />
 
   return (
@@ -402,15 +438,17 @@ function ImageCategoriesTab() {
           action={<Button onClick={openCreate}>Create image category</Button>}
         />
       ) : (
-        <Card className="overflow-hidden py-0">
+        /* Expand/collapse rows — DataTable can't express these, so the bare
+           Table stays, on the same card surface DataTable uses. */
+        <div className="overflow-hidden rounded-xl border bg-card">
           <Table>
             <TableHeader>
-              <TableRow>
+              <TableRow className="hover:bg-transparent">
                 <TableHead className="w-10" />
                 <TableHead>Name</TableHead>
                 <TableHead>Description</TableHead>
                 <TableHead>Bare metal</TableHead>
-                <TableHead className="w-40" />
+                <TableHead className="w-12" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -418,22 +456,37 @@ function ImageCategoriesTab() {
                 <Fragment key={c.id}>
                   <TableRow>
                     <TableCell>
-                      <Button variant="ghost" size="icon" className="size-7" onClick={() => toggleExpand(c.id)}>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={expanded.has(c.id) ? "Collapse image groups" : "Expand image groups"}
+                        aria-expanded={expanded.has(c.id)}
+                        onClick={() => toggleExpand(c.id)}
+                      >
                         {expanded.has(c.id) ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                       </Button>
                     </TableCell>
                     <TableCell className="font-medium">{c.name ?? "—"}</TableCell>
                     <TableCell className="text-muted-foreground">{c.description ?? "—"}</TableCell>
-                    <TableCell>{c.bareMetal ? "Yes" : "No"}</TableCell>
+                    <TableCell className="text-muted-foreground">{c.bareMetal ? "Yes" : "No"}</TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(c)}>Edit</Button>
-                      <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setDeleting(c)}>
-                        Delete
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon-sm" aria-label="Image category actions">
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => openEdit(c)}>Edit</DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleting(c)}>
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                   {expanded.has(c.id) ? (
-                    <TableRow>
+                    <TableRow className="hover:bg-transparent">
                       <TableCell />
                       <TableCell colSpan={4} className="bg-muted/30">
                         <CategoryGroups categoryId={c.id} />
@@ -444,7 +497,7 @@ function ImageCategoriesTab() {
               ))}
             </TableBody>
           </Table>
-        </Card>
+        </div>
       )}
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -453,7 +506,7 @@ function ImageCategoriesTab() {
             <DialogTitle>{editing ? "Edit image category" : "Create image category"}</DialogTitle>
             <DialogDescription>Deleting a category cascades to all its image groups.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="ic-name">Name</Label>
               <Input id="ic-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -604,7 +657,7 @@ function ImageGroupsTab() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  if (catsQ.isLoading || (cats.length > 0 && groupsQ.isLoading)) return <Skeleton className="h-64" />
+  if (catsQ.isLoading || (cats.length > 0 && groupsQ.isLoading)) return <Skeleton className="h-64 rounded-xl" />
   if (catsQ.error) return <ErrorPanel error={catsQ.error} />
   if (groupsQ.error) return <ErrorPanel error={groupsQ.error} />
 
@@ -622,21 +675,23 @@ function ImageGroupsTab() {
         <EmptyState icon={Boxes} title="No image groups" hint="Create an image category first — groups hang off categories." />
       ) : (
         <div className="space-y-6">
+          {/* Grouped per category — one table per section, so the bare Table
+              stays (a single DataTable would flatten the grouping). */}
           {(groupsQ.data ?? []).map(({ cat, groups }) => (
             <div key={cat.id}>
-              <h3 className="mb-2 text-sm font-medium text-muted-foreground">{cat.name ?? cat.id}</h3>
+              <h3 className="text-eyebrow mb-2">{cat.name ?? cat.id}</h3>
               {groups.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No groups in this category.</p>
               ) : (
-                <Card className="overflow-hidden py-0">
+                <div className="overflow-hidden rounded-xl border bg-card">
                   <Table>
                     <TableHeader>
-                      <TableRow>
+                      <TableRow className="hover:bg-transparent">
                         <TableHead>Name</TableHead>
                         <TableHead>Order</TableHead>
                         <TableHead>Images</TableHead>
                         <TableHead>Enabled</TableHead>
-                        <TableHead className="w-40" />
+                        <TableHead className="w-12" />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -646,19 +701,32 @@ function ImageGroupsTab() {
                           <TableCell className="tabular-nums">{g.orderNumber ?? 0}</TableCell>
                           <TableCell className="tabular-nums">{(g.images ?? []).length}</TableCell>
                           <TableCell>
-                            <Switch checked={g.enabled !== false} onCheckedChange={() => toggle.mutate(g)} />
+                            <Switch
+                              checked={g.enabled !== false}
+                              onCheckedChange={() => toggle.mutate(g)}
+                              aria-label={`Toggle ${g.name ?? g.id}`}
+                            />
                           </TableCell>
                           <TableCell className="text-right">
-                            <Button variant="ghost" size="sm" onClick={() => openEdit(g)}>Edit</Button>
-                            <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setDeleting(g)}>
-                              Delete
-                            </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon-sm" aria-label="Image group actions">
+                                  <MoreHorizontal className="size-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => openEdit(g)}>Edit</DropdownMenuItem>
+                                <DropdownMenuItem className="text-destructive" onClick={() => setDeleting(g)}>
+                                  Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
-                </Card>
+                </div>
               )}
             </div>
           ))}
@@ -671,15 +739,15 @@ function ImageGroupsTab() {
             <DialogTitle>{editing ? "Edit image group" : "Create image group"}</DialogTitle>
             <DialogDescription>Bind live Glance images clients can launch from this group.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="ig-name">Name</Label>
               <Input id="ig-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </div>
             <div className="space-y-1.5">
-              <Label>Category</Label>
+              <Label htmlFor="ig-cat">Category</Label>
               <Select value={form.categoryId} onValueChange={(v) => setForm({ ...form, categoryId: v })}>
-                <SelectTrigger>
+                <SelectTrigger id="ig-cat" className="w-full">
                   <SelectValue placeholder="Select a category" />
                 </SelectTrigger>
                 <SelectContent>
@@ -693,16 +761,16 @@ function ImageGroupsTab() {
               <Label htmlFor="ig-order">Order number</Label>
               <Input id="ig-order" type="number" value={form.orderNumber} onChange={(e) => setForm({ ...form, orderNumber: e.target.value })} />
             </div>
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-2 self-end pb-2 text-sm">
               <Switch checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v === true })} />
               Enabled
             </label>
-            <div className="space-y-2">
+            <div className="space-y-2 sm:col-span-2">
               <Label>Image bindings</Label>
               {rows.map((row, i) => (
                 <div key={i} className="flex gap-2">
                   <Select value={row.name ?? ""} onValueChange={(v) => setRows(rows.map((x, j) => (j === i ? { ...x, name: v } : x)))}>
-                    <SelectTrigger className="flex-1">
+                    <SelectTrigger className="flex-1" aria-label="Glance image">
                       <SelectValue placeholder="Glance image" />
                     </SelectTrigger>
                     <SelectContent>
@@ -714,6 +782,7 @@ function ImageGroupsTab() {
                   <Input
                     className="w-28"
                     placeholder="Version"
+                    aria-label="Version"
                     value={row.version ?? ""}
                     onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, version: e.target.value } : x)))}
                   />
@@ -721,10 +790,11 @@ function ImageGroupsTab() {
                     className="w-20"
                     type="number"
                     placeholder="Order"
+                    aria-label="Order"
                     value={String(row.orderNumber ?? 0)}
                     onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, orderNumber: Number(e.target.value) || 0 } : x)))}
                   />
-                  <Button variant="ghost" size="icon" onClick={() => setRows(rows.filter((_, j) => j !== i))}>
+                  <Button variant="ghost" size="icon" aria-label="Remove image binding" onClick={() => setRows(rows.filter((_, j) => j !== i))}>
                     <Trash2 className="size-4" />
                   </Button>
                 </div>
@@ -771,6 +841,13 @@ function ImageGroupsTab() {
 
 const META_TYPES = ["PREDEFINED_VALUES", "TEXT", "NUMERIC_RANGE"] as const
 
+// Sentence-case labels for the enum codes sent to the API.
+const META_TYPE_LABELS: Record<string, string> = {
+  PREDEFINED_VALUES: "Predefined values",
+  TEXT: "Text",
+  NUMERIC_RANGE: "Numeric range",
+}
+
 type MetaOptRow = { value: string; displayName: string; enabled: boolean }
 type MetaForm = {
   key: string
@@ -814,7 +891,7 @@ function MetadataOptionsTab() {
     setForm(emptyMetaForm())
     setOpen(true)
   }
-  const openEdit = (o: MetaOption) => {
+  const openEdit = useCallback((o: MetaOption) => {
     setEditing(o)
     setForm({
       key: o.key ?? "",
@@ -832,7 +909,7 @@ function MetadataOptionsTab() {
       showInline: o.showInline === true,
     })
     setOpen(true)
-  }
+  }, [])
 
   const save = useMutation({
     mutationFn: () => {
@@ -879,6 +956,7 @@ function MetadataOptionsTab() {
     },
     onError: (e) => toast.error((e as Error).message),
   })
+  const toggleOption = toggle.mutate
 
   // permanent delete (must be disabled first — the API 400s an active option).
   const remove = useMutation({
@@ -891,8 +969,72 @@ function MetadataOptionsTab() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  if (isLoading) return <Skeleton className="h-64" />
-  if (error) return <ErrorPanel error={error} />
+  const columns = useMemo<ColumnDef<MetaOption, any>[]>(
+    () => [
+      {
+        id: "key",
+        accessorFn: (o) => o.key ?? "",
+        header: sortableHeader("Key"),
+        cell: ({ getValue }) => <span className="font-mono text-xs">{getValue() || "—"}</span>,
+      },
+      {
+        id: "displayName",
+        accessorFn: (o) => o.displayName ?? "",
+        header: sortableHeader("Display name"),
+        cell: ({ getValue }) => <span>{getValue() || "—"}</span>,
+      },
+      {
+        id: "type",
+        accessorFn: (o) => o.type ?? "",
+        header: sortableHeader("Type"),
+        cell: ({ getValue }) => (
+          <span className="text-muted-foreground">{META_TYPE_LABELS[getValue() as string] ?? getValue() ?? "—"}</span>
+        ),
+      },
+      {
+        id: "enabled",
+        accessorFn: (o) => (o.enabled === true ? 1 : 0),
+        header: sortableHeader("Enabled"),
+        cell: ({ row }) => {
+          const o = row.original
+          return (
+            <Switch
+              checked={o.enabled === true}
+              onCheckedChange={(on) => toggleOption({ opt: o, on })}
+              aria-label={`Toggle ${o.key ?? o.id}`}
+            />
+          )
+        },
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const o = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="Metadata option actions">
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => openEdit(o)}>Edit</DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive" onClick={() => setDeleting(o)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; openEdit is useCallback'd, mutate is stable.
+    [openEdit, toggleOption],
+  )
 
   return (
     <div className="space-y-4">
@@ -901,7 +1043,7 @@ function MetadataOptionsTab() {
           <Plus className="size-4" /> Create metadata option
         </Button>
       </div>
-      {items.length === 0 ? (
+      {!isLoading && !error && items.length === 0 ? (
         <EmptyState
           icon={ImageIcon}
           title="No instance metadata options"
@@ -909,37 +1051,14 @@ function MetadataOptionsTab() {
           action={<Button onClick={openCreate}>Create metadata option</Button>}
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Key</TableHead>
-                <TableHead>Display name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Enabled</TableHead>
-                <TableHead className="w-40" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((o) => (
-                <TableRow key={o.id}>
-                  <TableCell className="font-mono text-xs">{o.key ?? "—"}</TableCell>
-                  <TableCell>{o.displayName ?? "—"}</TableCell>
-                  <TableCell>{o.type ?? "—"}</TableCell>
-                  <TableCell>
-                    <Switch checked={o.enabled === true} onCheckedChange={(on) => toggle.mutate({ opt: o, on })} />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => openEdit(o)}>Edit</Button>
-                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setDeleting(o)}>
-                      Delete
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data?.data}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search metadata options…"
+          getRowId={(o) => o.id}
+        />
       )}
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -948,44 +1067,47 @@ function MetadataOptionsTab() {
             <DialogTitle>{editing ? "Edit metadata option" : "Create metadata option"}</DialogTitle>
             <DialogDescription>Keys may not start with hw:, os_ or stratos_.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="mo-key">Key</Label>
-              <Input id="mo-key" placeholder="owner" value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} />
+              <Input id="mo-key" placeholder="owner" className="font-mono" value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="mo-display">Display name</Label>
               <Input id="mo-display" value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 sm:col-span-2">
               <Label htmlFor="mo-desc">Description</Label>
               <Textarea id="mo-desc" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
             </div>
-            <div className="space-y-1.5">
-              <Label>Type</Label>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="mo-type">Type</Label>
               <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                <SelectTrigger>
+                <SelectTrigger id="mo-type" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {META_TYPES.map((t) => (
-                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                    <SelectItem key={t} value={t}>{META_TYPE_LABELS[t] ?? t}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             {form.type === "PREDEFINED_VALUES" ? (
-              <div className="space-y-2">
+              <div className="space-y-2 sm:col-span-2">
                 <Label>Options</Label>
                 {form.options.map((o, i) => (
                   <div key={i} className="flex items-center gap-2">
                     <Input
-                      placeholder="value"
+                      placeholder="Value"
+                      aria-label="Option value"
+                      className="font-mono"
                       value={o.value}
                       onChange={(e) => setForm({ ...form, options: form.options.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })}
                     />
                     <Input
                       placeholder="Display name"
+                      aria-label="Option display name"
                       value={o.displayName}
                       onChange={(e) => setForm({ ...form, options: form.options.map((x, j) => (j === i ? { ...x, displayName: e.target.value } : x)) })}
                     />
@@ -999,6 +1121,7 @@ function MetadataOptionsTab() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label="Remove option"
                       onClick={() => setForm({ ...form, options: form.options.filter((_, j) => j !== i) })}
                       disabled={form.options.length === 1}
                     >
@@ -1016,7 +1139,7 @@ function MetadataOptionsTab() {
               </div>
             ) : null}
             {form.type === "NUMERIC_RANGE" ? (
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 gap-2 sm:col-span-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="mo-min">Min</Label>
                   <Input id="mo-min" type="number" value={form.min} onChange={(e) => setForm({ ...form, min: e.target.value })} />
@@ -1031,7 +1154,7 @@ function MetadataOptionsTab() {
                 </div>
               </div>
             ) : null}
-            <div className="flex gap-6">
+            <div className="flex gap-6 sm:col-span-2">
               <label className="flex items-center gap-2 text-sm">
                 <Switch checked={form.userEditable} onCheckedChange={(v) => setForm({ ...form, userEditable: v === true })} />
                 User editable
@@ -1074,14 +1197,22 @@ function MetadataOptionsTab() {
 export default function CatalogPage() {
   return (
     <>
-      <PageHeader title="Catalog" description="Flavor categories, image groups and instance metadata offered to clients." />
+      <PageHeader
+        title="Catalog"
+        eyebrow="System"
+        description="Flavor categories, image groups and instance metadata offered to clients."
+      />
       <Tabs defaultValue="flavors">
-        <TabsList>
-          <TabsTrigger value="flavors">Flavor categories</TabsTrigger>
-          <TabsTrigger value="categories">Image categories</TabsTrigger>
-          <TabsTrigger value="groups">Image groups</TabsTrigger>
-          <TabsTrigger value="metadata">Instance metadata</TabsTrigger>
-        </TabsList>
+        {/* 4 triggers overflow narrow viewports — the wrapper scrolls horizontally
+            instead of wrapping/clipping (thin scrollbar as the affordance). */}
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <TabsList className="w-max">
+            <TabsTrigger value="flavors">Flavor categories</TabsTrigger>
+            <TabsTrigger value="categories">Image categories</TabsTrigger>
+            <TabsTrigger value="groups">Image groups</TabsTrigger>
+            <TabsTrigger value="metadata">Instance metadata</TabsTrigger>
+          </TabsList>
+        </div>
         <TabsContent value="flavors" className="mt-4">
           <FlavorCategoriesTab />
         </TabsContent>

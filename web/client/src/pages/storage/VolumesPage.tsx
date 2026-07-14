@@ -1,12 +1,14 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { HardDrive, MoreHorizontal, Plus, RefreshCw } from "lucide-react"
+import { CircleAlert, HardDrive, MoreHorizontal, Plus, RefreshCw } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -18,11 +20,10 @@ import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudList, useCloudScope, useProjectId, useProjectQuota } from "@/lib/hooks"
+import { volumeCreateQuotaViolations } from "@/lib/quota"
 import type { CloudResource } from "@/lib/types"
 
 function vol(r: CloudResource): Record<string, any> {
@@ -47,6 +48,7 @@ export default function VolumesPage() {
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
   const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "VOLUME")
+  const projectQuota = useProjectQuota(pid, scope)
 
   const { data: servers } = useCloudList(pid, "SERVER")
 
@@ -61,6 +63,19 @@ export default function VolumesPage() {
   const [retypeTarget, setRetypeTarget] = useState<CloudResource | null>(null)
   const [newType, setNewType] = useState("")
   const [migrationPolicy, setMigrationPolicy] = useState<"never" | "on-demand">("never")
+
+  const requestedSize = Number(form.size)
+  // Cinder reports per-type quota rows for every type in the deployment (including
+  // __DEFAULT__), so a blank type stays valid — Cinder applies default_volume_type and
+  // the aggregate volumes/gigabytes pre-check still covers the request. The per-type
+  // pre-check only engages when the entered type matches a reported quota row.
+  const quotaVolumeTypes = Object.keys(projectQuota.data?.storage?.volumeTypes ?? {}).sort((a, b) =>
+    a.localeCompare(b),
+  )
+  const createQuotaViolations = volumeCreateQuotaViolations(projectQuota.data, requestedSize, form.type)
+  const quotaCheckPending = createOpen && projectQuota.isLoading
+  const storageQuotaUnavailable =
+    createOpen && !projectQuota.isLoading && (!!projectQuota.error || !projectQuota.data?.storage)
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["cloud", pid, "VOLUME"] })
 
@@ -132,8 +147,14 @@ export default function VolumesPage() {
   })
 
   const create = useMutation({
-    mutationFn: () =>
-      apiFetch(`/project/${pid}/cloud`, {
+    mutationFn: async () => {
+      const latestQuota = await projectQuota.refetch()
+      const selectedVolumeType = form.type.trim()
+      const latestViolations = volumeCreateQuotaViolations(latestQuota.data, requestedSize, form.type)
+      if (latestViolations.length > 0) {
+        throw new Error(latestViolations.map((violation) => violation.message).join(" "))
+      }
+      return apiFetch(`/project/${pid}/cloud`, {
         method: "POST",
         cloud: scope,
         body: {
@@ -141,16 +162,18 @@ export default function VolumesPage() {
           data: {
             name: form.name,
             size: Number(form.size),
-            ...(form.type ? { type: form.type } : {}),
+            ...(selectedVolumeType ? { type: selectedVolumeType } : {}),
             ...(form.availabilityZone ? { availabilityZone: form.availabilityZone } : {}),
           },
         },
-      }),
+      })
+    },
     onSuccess: () => {
       toast.success("Volume created")
       setCreateOpen(false)
       setForm({ name: "", size: "10", type: "", availabilityZone: "" })
       invalidate()
+      void qc.invalidateQueries({ queryKey: ["project-quota", pid] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -181,14 +204,127 @@ export default function VolumesPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => vol(r).name || r.name || r.id,
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (r) => (vol(r).status as string) ?? r.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "size",
+        accessorFn: (r) => (vol(r).size as number) ?? null,
+        header: sortableHeader("Size"),
+        cell: ({ getValue }) => (
+          <span className="text-sm tabular-nums">{getValue() != null ? `${getValue()} GB` : "—"}</span>
+        ),
+      },
+      {
+        id: "type",
+        accessorFn: (r) => (vol(r).volume_type as string) || "",
+        header: "Type",
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "attached",
+        accessorFn: (r) =>
+          attachments(r)
+            .map((a) => serverName(a.serverId))
+            .join(", "),
+        header: "Attached to",
+        cell: ({ getValue }) => (
+          <span className="block max-w-48 truncate text-sm text-muted-foreground" title={getValue() || undefined}>
+            {getValue() || "—"}
+          </span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="Volume actions">
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {attachedCount(r) === 0 && (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setAttachServer("")
+                        setAttachTarget(r)
+                      }}
+                    >
+                      Attach to server
+                    </DropdownMenuItem>
+                  )}
+                  {attachedCount(r) > 0 && (
+                    <DropdownMenuItem onClick={() => setDetachTarget(r)}>Detach</DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setExtendSize(String((vol(r).size as number) ?? ""))
+                      setExtendTarget(r)
+                    }}
+                  >
+                    Extend
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setNewType("")
+                      setMigrationPolicy("never")
+                      setRetypeTarget(r)
+                    }}
+                  >
+                    Change type
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(r)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module-scope. serverName reads
+    // the servers list, so the "Attached to" column re-derives when it loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [servers],
+  )
+
   return (
     <>
       <PageHeader
         title="Volumes"
+        eyebrow="Storage"
         description="Block-storage volumes in this project."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -198,11 +334,7 @@ export default function VolumesPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : isError ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
-      ) : !data?.length ? (
+      {!isLoading && !isError && !data?.length ? (
         <EmptyState
           icon={HardDrive}
           title="No volumes yet"
@@ -214,83 +346,13 @@ export default function VolumesPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Size</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Attached to</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-10" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">{vol(r).name || r.name || r.id}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={(vol(r).status as string) ?? r.status} />
-                  </TableCell>
-                  <TableCell className="text-sm">{vol(r).size != null ? `${vol(r).size} GB` : "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{vol(r).volume_type || "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {attachedCount(r) ? `${attachedCount(r)} server${attachedCount(r) > 1 ? "s" : ""}` : "—"}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm">
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {attachedCount(r) === 0 && (
-                          <DropdownMenuItem
-                            onClick={() => {
-                              setAttachServer("")
-                              setAttachTarget(r)
-                            }}
-                          >
-                            Attach to server
-                          </DropdownMenuItem>
-                        )}
-                        {attachedCount(r) > 0 && (
-                          <DropdownMenuItem onClick={() => setDetachTarget(r)}>Detach</DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setExtendSize(String((vol(r).size as number) ?? ""))
-                            setExtendTarget(r)
-                          }}
-                        >
-                          Extend
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setNewType("")
-                            setMigrationPolicy("never")
-                            setRetypeTarget(r)
-                          }}
-                        >
-                          Change type
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(r)}>
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={isError ? (error as Error) : null}
+          searchPlaceholder="Search volumes…"
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -317,6 +379,11 @@ export default function VolumesPage() {
             <div className="grid gap-2">
               <Label htmlFor="vol-type">Volume type (optional)</Label>
               <Input id="vol-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} />
+              {quotaVolumeTypes.length > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Known types: {quotaVolumeTypes.join(", ")}. Leave blank to use the default type.
+                </p>
+              ) : null}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="vol-az">Availability zone (optional)</Label>
@@ -326,6 +393,31 @@ export default function VolumesPage() {
                 onChange={(e) => setForm({ ...form, availabilityZone: e.target.value })}
               />
             </div>
+            {quotaCheckPending ? (
+              <p className="text-sm text-muted-foreground">Checking the current storage quota…</p>
+            ) : createQuotaViolations.length > 0 ? (
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>This volume exceeds the project quota</AlertTitle>
+                <AlertDescription>
+                  <ul className="list-disc space-y-1 pl-4">
+                    {createQuotaViolations.map((violation) => (
+                      <li key={`${violation.resource}-${violation.message}`}>{violation.message}</li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            ) : storageQuotaUnavailable ? (
+              <Alert>
+                <CircleAlert />
+                <AlertTitle>Live storage quota is unavailable</AlertTitle>
+                <AlertDescription>
+                  The API will still validate this request when you create the volume.
+                </AlertDescription>
+              </Alert>
+            ) : projectQuota.data && requestedSize > 0 ? (
+              <p className="text-sm text-muted-foreground">This volume fits the current quota snapshot.</p>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
@@ -333,7 +425,15 @@ export default function VolumesPage() {
             </Button>
             <Button
               onClick={() => create.mutate()}
-              disabled={!form.name || !Number(form.size) || create.isPending}
+              disabled={
+                !form.name ||
+                !scope ||
+                !Number.isFinite(requestedSize) ||
+                requestedSize <= 0 ||
+                quotaCheckPending ||
+                createQuotaViolations.length > 0 ||
+                create.isPending
+              }
             >
               {create.isPending ? "Creating…" : "Create volume"}
             </Button>

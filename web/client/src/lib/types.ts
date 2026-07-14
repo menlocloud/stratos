@@ -56,6 +56,45 @@ export type ProjectService = {
   [k: string]: unknown
 }
 
+// Live OpenStack quota values. `reserved` is capacity promised to in-flight
+// operations, so consumers must include it when calculating current usage.
+export type QuotaMetric = {
+  used: number
+  reserved: number
+  // OpenStack uses a negative limit for an unlimited resource.
+  limit: number
+}
+
+export type ProjectQuotaUsage = {
+  serviceId: string
+  region: string
+  compute?: {
+    instances?: QuotaMetric
+    cores?: QuotaMetric
+    ramMb?: QuotaMetric
+  }
+  storage?: {
+    volumes?: QuotaMetric
+    gigabytes?: QuotaMetric
+    snapshots?: QuotaMetric
+    perVolumeGigabytes?: QuotaMetric
+    volumeTypes?: Record<string, {
+      volumes?: QuotaMetric
+      gigabytes?: QuotaMetric
+      snapshots?: QuotaMetric
+    }>
+  }
+  gpu: {
+    limits: Record<string, number>
+    usage: Record<string, number>
+    // False means the cache could not provide a trustworthy usage snapshot.
+    // Limits remain useful for display, but the UI must not treat missing usage as zero.
+    usageAvailable: boolean
+  }
+  // A partial provider response still returns the metrics that were available.
+  warnings: string[]
+}
+
 export type Location = {
   serviceId?: string
   region?: string

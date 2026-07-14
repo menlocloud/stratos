@@ -1,12 +1,15 @@
 import { useState } from "react"
-import { useParams } from "react-router-dom"
+import { Link, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { Download, Wallet } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatusBadge } from "@/components/status-badge"
+import {
+  Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -19,6 +22,7 @@ import { apiFetch } from "@/lib/api"
 import { fmtDate, fmtDateTime, fmtMoney } from "@/lib/format"
 import { useBillingSummary, useProjectId, useProjects } from "@/lib/hooks"
 import type { Bill, Transaction } from "@/lib/types"
+import { cn } from "@/lib/utils"
 import { downloadPdf } from "./HistoryPage"
 
 export default function BillDetailPage() {
@@ -60,10 +64,26 @@ export default function BillDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const crumbs = (
+    <Breadcrumb>
+      <BreadcrumbList>
+        <BreadcrumbItem>
+          <BreadcrumbLink asChild>
+            <Link to={`/p/${pid}/billing/history`}>Billing history</Link>
+          </BreadcrumbLink>
+        </BreadcrumbItem>
+        <BreadcrumbSeparator />
+        <BreadcrumbItem>
+          <BreadcrumbPage className="font-mono text-xs">{billId}</BreadcrumbPage>
+        </BreadcrumbItem>
+      </BreadcrumbList>
+    </Breadcrumb>
+  )
+
   if (isLoading || !bp) {
     return (
       <>
-        <PageHeader title="Bill" />
+        <PageHeader title="Bill" eyebrow="Billing" breadcrumb={crumbs} />
         <Skeleton className="h-72" />
       </>
     )
@@ -71,7 +91,7 @@ export default function BillDetailPage() {
   if (error || !bill) {
     return (
       <>
-        <PageHeader title="Bill" />
+        <PageHeader title="Bill" eyebrow="Billing" breadcrumb={crumbs} />
         <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
           {(error as Error | null)?.message ?? "Bill not found."}
         </div>
@@ -84,16 +104,29 @@ export default function BillDetailPage() {
   const adjustments = (bill.adjustments as Array<Record<string, any>> | undefined) ?? []
   const promoCredits = (bill.appliedPromotionalCredits as Array<Record<string, any>> | undefined) ?? []
   const accountCredits = (bill.appliedAccountCredits as Array<Record<string, any>> | undefined) ?? []
-  const appliedCredits = [...promoCredits, ...accountCredits]
+  const appliedCredits: Array<Record<string, any> & { kind: string }> = [
+    ...promoCredits.map((c) => ({ ...c, kind: "Promotional credit" })),
+    ...accountCredits.map((c) => ({ ...c, kind: "Account credit" })),
+  ]
 
   const allItems = bill.items ?? []
   const projectIds = [...new Set(allItems.map((it) => it.projectId as string).filter(Boolean))]
   const items = projFilter === "__all__" ? allItems : allItems.filter((it) => (it.projectId as string) === projFilter)
+  const filtered = projFilter !== "__all__"
+  const itemsSubtotal = items.reduce((s, it) => s + Number(it.netAmount ?? 0), 0)
+
+  // Invoice math: net (subtotal) + tax = gross; credits reduce what was collected.
+  const net = Number(bill.netAmount ?? 0)
+  const gross = Number(bill.grossAmount ?? 0)
+  const tax = gross - net
+  const unpaid = Number(bill.unpaidGrossAmount ?? 0)
 
   return (
     <>
       <PageHeader
-        title={`Bill ${fmtDate(bill.createdAt)}`}
+        title={`Bill — ${fmtDate(bill.createdAt)}`}
+        eyebrow="Billing"
+        breadcrumb={crumbs}
         description={`Created ${fmtDateTime(bill.createdAt)}`}
         actions={
           <>
@@ -136,40 +169,54 @@ export default function BillDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
-        <StatusBadge status={bill.status} />
-        <Total label="Net" value={fmtMoney(bill.netAmount, ccy)} />
-        <Total label="Gross" value={fmtMoney(bill.grossAmount, ccy)} />
-        <Total label="Unpaid" value={fmtMoney(bill.unpaidGrossAmount, ccy)} />
-      </div>
+      {/* The invoice: meta strip, line items, then the totals block — one printable surface. */}
+      <Card className="gap-0 overflow-hidden py-0">
+        <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-b bg-muted/30 px-6 py-4 sm:grid-cols-4 lg:grid-cols-5">
+          <Meta label="Bill ID">
+            <span className="font-mono text-sm">{bill.id}</span>
+          </Meta>
+          <Meta label="Status">
+            <StatusBadge status={bill.status} />
+          </Meta>
+          <Meta label="Issued">
+            <span className="text-sm tabular-nums">{fmtDate(bill.createdAt)}</span>
+          </Meta>
+          <Meta label="Due">
+            <span className="text-sm tabular-nums">{fmtDate(bill.dueAt)}</span>
+          </Meta>
+          {summary?.fullName ? (
+            <Meta label="Billed to">
+              <span className="text-sm">{summary.fullName}</span>
+            </Meta>
+          ) : null}
+        </div>
 
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-medium text-muted-foreground">Line items</h2>
-        {projectIds.length > 1 ? (
-          <Select value={projFilter} onValueChange={setProjFilter}>
-            <SelectTrigger className="w-56">
-              <SelectValue placeholder="All projects" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">All projects</SelectItem>
-              {projectIds.map((id) => (
-                <SelectItem key={id} value={id}>
-                  {projName(id)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
-      </div>
+        <div className="flex items-center justify-between gap-2 border-b px-6 py-3">
+          <span className="text-eyebrow">Line items</span>
+          {projectIds.length > 1 ? (
+            <Select value={projFilter} onValueChange={setProjFilter}>
+              <SelectTrigger size="sm" className="w-52">
+                <SelectValue placeholder="All projects" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All projects</SelectItem>
+                {projectIds.map((id) => (
+                  <SelectItem key={id} value={id}>
+                    {projName(id)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+        </div>
 
-      <Card className="overflow-hidden py-0">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Item</TableHead>
               <TableHead>Project</TableHead>
               <TableHead>Resource type</TableHead>
-              <TableHead className="text-right">Net</TableHead>
+              <TableHead className="text-right">Net amount</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -193,41 +240,53 @@ export default function BillDetailPage() {
             )}
           </TableBody>
         </Table>
+
+        {/* Totals — right-aligned invoice block. Bill-level: not affected by the project filter. */}
+        <div className="flex justify-end border-t px-6 py-5">
+          <div className="w-full max-w-sm space-y-1.5">
+            {filtered ? (
+              <>
+                <TotalRow label={`Subtotal — ${projName(projFilter)}`} value={fmtMoney(itemsSubtotal, ccy)} muted />
+                <div className="my-2 border-t border-dashed" />
+              </>
+            ) : null}
+            <TotalRow label="Subtotal" value={fmtMoney(net, ccy)} />
+            <TotalRow label="Tax" value={fmtMoney(tax, ccy)} muted />
+            {adjustments.map((a, i) => (
+              <TotalRow
+                key={`adj-${i}`}
+                label={(a.description as string) ?? (a.type as string) ?? "Adjustment"}
+                value={fmtMoney(a.amount as number, ccy)}
+                muted
+              />
+            ))}
+            <div className="my-2 border-t" />
+            <TotalRow label="Total" value={fmtMoney(gross, ccy)} strong />
+            {appliedCredits.length > 0 ? (
+              <div className="pt-1.5">
+                <div className="text-eyebrow mb-1.5">Credits applied</div>
+                {appliedCredits.map((c, i) => (
+                  <TotalRow
+                    key={`credit-${i}`}
+                    label={`${c.kind}${c.code ? ` · ${c.code as string}` : ""}`}
+                    value={`−${fmtMoney(c.amount as number, ccy)}`}
+                    accent
+                  />
+                ))}
+              </div>
+            ) : null}
+            <div className="my-2 border-t" />
+            <div className="flex items-baseline justify-between gap-4">
+              <span className="text-sm font-medium">Amount due</span>
+              <span className="font-mono text-lg font-semibold tabular-nums">{fmtMoney(unpaid, ccy)}</span>
+            </div>
+          </div>
+        </div>
       </Card>
 
-      {adjustments.length > 0 ? (
-        <Card className="mt-4">
-          <CardHeader>
-            <CardTitle className="text-base">Adjustments</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {adjustments.map((a, i) => (
-              <div key={i} className="flex items-center justify-between border-b pb-2 text-sm last:border-0">
-                <span>{(a.description as string) ?? (a.type as string) ?? "Adjustment"}</span>
-                <span className="font-mono tabular-nums">{fmtMoney(a.amount as number, ccy)}</span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {appliedCredits.length > 0 ? (
-        <Card className="mt-4">
-          <CardHeader>
-            <CardTitle className="text-base">Applied credits</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {appliedCredits.map((c, i) => (
-              <div key={i} className="flex items-center justify-between border-b pb-2 text-sm last:border-0">
-                <span>{(c.code as string) ?? (c.accountCreditId as string) ?? "Credit"}</span>
-                <span className="font-mono tabular-nums">{fmtMoney(c.amount as number, ccy)}</span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <Card className="mt-4 overflow-hidden py-0">
+      {/* Payments recorded against this bill. */}
+      <Card className="mt-6 gap-0 overflow-hidden py-0">
+        <div className="text-eyebrow border-b px-6 py-3">Payments</div>
         <Table>
           <TableHeader>
             <TableRow>
@@ -245,7 +304,7 @@ export default function BillDetailPage() {
                   <TableCell>
                     <StatusBadge status={t.status} />
                   </TableCell>
-                  <TableCell>{fmtDateTime(t.createdAt)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{fmtDateTime(t.createdAt)}</TableCell>
                   <TableCell className="text-right font-mono tabular-nums">
                     {fmtMoney(t.grossAmount, t.currency)}
                   </TableCell>
@@ -265,11 +324,37 @@ export default function BillDetailPage() {
   )
 }
 
-function Total({ label, value }: { label: string; value: string }) {
+function Meta({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <span className="text-sm">
-      <span className="text-muted-foreground">{label} </span>
-      <span className="font-mono font-medium tabular-nums">{value}</span>
-    </span>
+    <div>
+      <div className="text-eyebrow mb-1">{label}</div>
+      {children}
+    </div>
+  )
+}
+
+function TotalRow({
+  label, value, muted, strong, accent,
+}: {
+  label: string
+  value: string
+  muted?: boolean
+  strong?: boolean
+  accent?: boolean
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 text-sm">
+      <span className={cn(muted || accent ? "text-muted-foreground" : "", strong && "font-medium")}>{label}</span>
+      <span
+        className={cn(
+          "font-mono tabular-nums",
+          muted && "text-muted-foreground",
+          strong && "font-semibold",
+          accent && "text-success-text",
+        )}
+      >
+        {value}
+      </span>
+    </div>
   )
 }

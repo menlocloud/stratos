@@ -1,20 +1,22 @@
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react"
+import { Lock, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { useProjectId } from "@/lib/hooks"
 import { useOrg } from "./MembersPage"
@@ -31,6 +33,41 @@ export type OrgRole = {
 
 // GET /organizations/{id}/roles/permissions → rbac.PermissionMeta.
 type PermissionMeta = { key: string; description?: string; resourceType?: string }
+
+const MAX_PERM_CHIPS = 3
+
+/** Permission set as compact mono badge chips, capped with a "+N more" tail. */
+function PermissionChips({ role }: { role: OrgRole }) {
+  if (role.permissions.includes("*")) {
+    return (
+      <Badge variant="outline" className="font-mono font-normal">
+        All permissions
+      </Badge>
+    )
+  }
+  if (!role.permissions.length) {
+    return <span className="text-sm text-muted-foreground">—</span>
+  }
+  const shown = role.permissions.slice(0, MAX_PERM_CHIPS)
+  const extra = role.permissions.length - shown.length
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {shown.map((p) => (
+        <Badge key={p} variant="outline" className="font-mono font-normal">
+          {p}
+        </Badge>
+      ))}
+      {extra > 0 ? (
+        <span className="text-xs text-muted-foreground" title={role.permissions.slice(MAX_PERM_CHIPS).join(", ")}>
+          +{extra} more
+        </span>
+      ) : null}
+      {role.expandedPermissions.length > role.permissions.length ? (
+        <span className="text-xs text-muted-foreground">· {role.expandedPermissions.length} expanded</span>
+      ) : null}
+    </div>
+  )
+}
 
 export default function RolesPage() {
   const pid = useProjectId()
@@ -75,13 +112,14 @@ export default function RolesPage() {
     setSelected(new Set())
     setDialogOpen(true)
   }
-  const openEdit = (role: OrgRole) => {
+  // Stable callback (setters only) so the column defs can memoize over it.
+  const openEdit = useCallback((role: OrgRole) => {
     setEditing(role)
     setName(role.name)
     setDescription(role.description ?? "")
     setSelected(new Set(role.permissions))
     setDialogOpen(true)
-  }
+  }, [])
   const togglePerm = (key: string, checked: boolean) => {
     setSelected((prev) => {
       const next = new Set(prev)
@@ -126,10 +164,84 @@ export default function RolesPage() {
 
   const err = (orgError ?? error) as Error | null
 
+  const columns = useMemo<ColumnDef<OrgRole, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => r.name,
+        header: sortableHeader("Name"),
+        cell: ({ row }) => {
+          const role = row.original
+          return (
+            <span className="inline-flex items-center gap-2 font-medium">
+              {role.name}
+              {role.builtIn ? (
+                <Badge variant="secondary" className="gap-1 text-muted-foreground">
+                  <Lock className="size-3" strokeWidth={1.5} /> Built-in
+                </Badge>
+              ) : null}
+            </span>
+          )
+        },
+      },
+      {
+        id: "description",
+        accessorFn: (r) => r.description ?? "",
+        header: "Description",
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "permissions",
+        accessorFn: (r) => r.permissions.join(" "),
+        header: "Permissions",
+        enableSorting: false,
+        cell: ({ row }) => <PermissionChips role={row.original} />,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const role = row.original
+          // Built-ins are immutable platform roles — locked, no action menu.
+          if (role.builtIn) {
+            return (
+              <div className="flex items-center justify-end gap-1.5 text-xs text-muted-foreground">
+                <Lock className="size-3.5" strokeWidth={1.5} /> Locked
+              </div>
+            )
+          }
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${role.name}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => openEdit(role)}>
+                    <Pencil className="size-4" /> Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleting(role)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // openEdit is a stable useCallback; setDeleting is a stable setter.
+    [openEdit],
+  )
+
   return (
     <>
       <PageHeader
         title="Roles"
+        eyebrow="Organization"
         description="Built-in and custom roles that control what members can do in this organization."
         actions={
           <Button size="sm" onClick={openCreate} disabled={!org}>
@@ -138,60 +250,17 @@ export default function RolesPage() {
         }
       />
 
-      {orgLoading || isLoading ? (
-        <Skeleton className="h-64" />
-      ) : err ? (
-        <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">{err.message}</div>
-      ) : !roles?.length ? (
+      {!orgLoading && !isLoading && !err && !roles?.length ? (
         <EmptyState icon={ShieldCheck} title="No roles" hint="Create a custom role to grant fine-grained access." />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Permissions</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {roles.map((role) => (
-                <TableRow key={role.id}>
-                  <TableCell className="font-medium">
-                    {role.name}
-                    {role.builtIn ? (
-                      <Badge variant="secondary" className="ml-2">
-                        Built-in
-                      </Badge>
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{role.description ?? "—"}</TableCell>
-                  <TableCell className="text-sm">
-                    {role.permissions.length}
-                    <span className="ml-1 text-xs text-muted-foreground">
-                      ({role.expandedPermissions.length} expanded)
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {role.builtIn ? (
-                      <span className="text-xs text-muted-foreground">Not editable</span>
-                    ) : (
-                      <>
-                        <Button variant="ghost" size="sm" onClick={() => openEdit(role)}>
-                          <Pencil className="size-4" /> Edit
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => setDeleting(role)}>
-                          <Trash2 className="size-4" /> Delete
-                        </Button>
-                      </>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={roles}
+          isLoading={orgLoading || isLoading}
+          error={err}
+          searchPlaceholder="Search roles…"
+          getRowId={(r) => r.id}
+        />
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -207,13 +276,21 @@ export default function RolesPage() {
           <div className="grid gap-4">
             {!editing ? (
               <div>
-                <Label className="mb-1.5 block">Name</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="billing-viewer" />
+                <Label className="mb-1.5 block" htmlFor="role-name">Name</Label>
+                <Input
+                  id="role-name"
+                  autoComplete="off"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="billing-viewer"
+                />
               </div>
             ) : null}
             <div>
-              <Label className="mb-1.5 block">Description</Label>
+              <Label className="mb-1.5 block" htmlFor="role-description">Description</Label>
               <Input
+                id="role-description"
+                autoComplete="off"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="What this role is for"
@@ -227,9 +304,7 @@ export default function RolesPage() {
                 <div className="max-h-64 space-y-3 overflow-y-auto rounded-md border p-3">
                   {permGroups.map(([group, perms]) => (
                     <div key={group}>
-                      <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        {group}
-                      </p>
+                      <p className="text-eyebrow mb-1.5">{group}</p>
                       <div className="space-y-1.5">
                         {perms.map((p) => (
                           <label key={p.key} className="flex items-start gap-2 text-sm">

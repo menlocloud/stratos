@@ -64,7 +64,12 @@ type Country = { name: string; cca2: string; cca3?: string; ccn3?: number }
 type Currency = { country?: string; currency_name?: string; currency_code: string; numeric_code?: string }
 type Integration = { id: string; name?: string; thirdParty?: string; [k: string]: unknown }
 
-const CONSTRAINTS = ["DISABLED", "REQUIRED", "ALTERNATIVE"]
+// Enum values are wire values; labels are sentence-cased for display.
+const CONSTRAINTS = [
+  { value: "DISABLED", label: "Disabled" },
+  { value: "REQUIRED", label: "Required" },
+  { value: "ALTERNATIVE", label: "Alternative" },
+]
 const NONE = "__none__"
 
 type LimitRow = { balance: string; days: string }
@@ -279,16 +284,16 @@ function Field({ label, children, id }: { label: string; children: React.ReactNo
   )
 }
 
-function ConstraintSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function ConstraintSelect({ id, value, onChange }: { id?: string; value: string; onChange: (v: string) => void }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger>
+      <SelectTrigger id={id}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
         {CONSTRAINTS.map((c) => (
-          <SelectItem key={c} value={c}>
-            {c}
+          <SelectItem key={c.value} value={c.value}>
+            {c.label}
           </SelectItem>
         ))}
       </SelectContent>
@@ -340,7 +345,11 @@ export default function BillingConfigurationPage() {
   if (cfgQ.isLoading) {
     return (
       <>
-        <PageHeader title="Billing configuration" description="Business details, activation flow and billing behavior." />
+        <PageHeader
+          title="Billing configuration"
+          eyebrow="System"
+          description="Business details, activation flow and billing behavior."
+        />
         <Skeleton className="h-96" />
       </>
     )
@@ -349,7 +358,11 @@ export default function BillingConfigurationPage() {
   if (cfgQ.error) {
     return (
       <>
-        <PageHeader title="Billing configuration" description="Business details, activation flow and billing behavior." />
+        <PageHeader
+          title="Billing configuration"
+          eyebrow="System"
+          description="Business details, activation flow and billing behavior."
+        />
         <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(cfgQ.error as Error).message}</div>
       </>
     )
@@ -358,15 +371,19 @@ export default function BillingConfigurationPage() {
   if (!cfg?.id || !form) {
     return (
       <>
-        <PageHeader title="Billing configuration" description="Business details, activation flow and billing behavior." />
+        <PageHeader
+          title="Billing configuration"
+          eyebrow="System"
+          description="Business details, activation flow and billing behavior."
+        />
         <p className="text-sm text-muted-foreground">No billing configuration found.</p>
       </>
     )
   }
 
-  const gatewaySelect = (value: string, onChange: (v: string) => void) => (
+  const gatewaySelect = (id: string, value: string, onChange: (v: string) => void) => (
     <Select value={value || NONE} onValueChange={(v) => onChange(v === NONE ? "" : v)}>
-      <SelectTrigger>
+      <SelectTrigger id={id}>
         <SelectValue placeholder="None" />
       </SelectTrigger>
       <SelectContent>
@@ -384,6 +401,7 @@ export default function BillingConfigurationPage() {
     <>
       <PageHeader
         title="Billing configuration"
+        eyebrow="System"
         description="Business details, activation flow and billing behavior."
         actions={
           <Button onClick={() => save.mutate()} disabled={save.isPending || !form.baseCurrency}>
@@ -403,11 +421,13 @@ export default function BillingConfigurationPage() {
         </Alert>
 
         <Tabs defaultValue="business">
-          <TabsList>
-            <TabsTrigger value="business">Business details</TabsTrigger>
-            <TabsTrigger value="activation">Activation</TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
-          </TabsList>
+          <div className="-mx-1 overflow-x-auto px-1 pb-1">
+            <TabsList className="w-max">
+              <TabsTrigger value="business">Business details</TabsTrigger>
+              <TabsTrigger value="activation">Activation</TabsTrigger>
+              <TabsTrigger value="settings">Settings</TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="business" className="mt-4">
             <Card>
@@ -416,9 +436,9 @@ export default function BillingConfigurationPage() {
                   <Field label="Configuration name" id="bc-name">
                     <Input id="bc-name" value={form.name} onChange={(e) => set({ name: e.target.value })} />
                   </Field>
-                  <Field label="Base currency">
+                  <Field label="Base currency" id="bc-currency">
                     <Select value={form.baseCurrency || NONE} onValueChange={(v) => set({ baseCurrency: v === NONE ? "" : v })}>
-                      <SelectTrigger>
+                      <SelectTrigger id="bc-currency">
                         <SelectValue placeholder="Select currency" />
                       </SelectTrigger>
                       <SelectContent>
@@ -437,9 +457,9 @@ export default function BillingConfigurationPage() {
                   <Field label="VAT id" id="bc-vat">
                     <Input id="bc-vat" value={form.vatId} onChange={(e) => set({ vatId: e.target.value })} />
                   </Field>
-                  <Field label="Country">
+                  <Field label="Country" id="bc-country">
                     <Select value={form.country || NONE} onValueChange={(v) => set({ country: v === NONE ? "" : v })}>
-                      <SelectTrigger>
+                      <SelectTrigger id="bc-country">
                         <SelectValue placeholder="None" />
                       </SelectTrigger>
                       <SelectContent>
@@ -461,13 +481,13 @@ export default function BillingConfigurationPage() {
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Invoice gateway">{gatewaySelect(form.invoiceGatewayId, (v) => set({ invoiceGatewayId: v }))}</Field>
-                  <Field label="Mail gateway">{gatewaySelect(form.mailGatewayId, (v) => set({ mailGatewayId: v }))}</Field>
+                  <Field label="Invoice gateway" id="bc-invoice-gw">{gatewaySelect("bc-invoice-gw", form.invoiceGatewayId, (v) => set({ invoiceGatewayId: v }))}</Field>
+                  <Field label="Mail gateway" id="bc-mail-gw">{gatewaySelect("bc-mail-gw", form.mailGatewayId, (v) => set({ mailGatewayId: v }))}</Field>
                 </div>
 
                 <div className="flex items-center gap-2 rounded-lg border p-4">
-                  <Switch checked={form.defaultConfiguration} onCheckedChange={(v) => set({ defaultConfiguration: v })} />
-                  <span className="text-sm">Default configuration</span>
+                  <Switch id="bc-default" checked={form.defaultConfiguration} onCheckedChange={(v) => set({ defaultConfiguration: v })} />
+                  <Label htmlFor="bc-default" className="text-sm font-normal">Default configuration</Label>
                 </div>
               </CardContent>
             </Card>
@@ -477,22 +497,22 @@ export default function BillingConfigurationPage() {
             <Card>
               <CardContent className="space-y-6 pt-6">
                 <div className="flex items-center gap-2 rounded-lg border p-4">
-                  <Switch checked={form.autoActivationEnabled} onCheckedChange={(v) => set({ autoActivationEnabled: v })} />
-                  <span className="text-sm">Auto-activation enabled</span>
+                  <Switch id="bc-autoact" checked={form.autoActivationEnabled} onCheckedChange={(v) => set({ autoActivationEnabled: v })} />
+                  <Label htmlFor="bc-autoact" className="text-sm font-normal">Auto-activation enabled</Label>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Payment method">
-                    <ConstraintSelect value={form.paymentMethod} onChange={(v) => set({ paymentMethod: v })} />
+                  <Field label="Payment method" id="bc-pm">
+                    <ConstraintSelect id="bc-pm" value={form.paymentMethod} onChange={(v) => set({ paymentMethod: v })} />
                   </Field>
-                  <Field label="Payment method — card">
-                    <ConstraintSelect value={form.paymentMethodCard} onChange={(v) => set({ paymentMethodCard: v })} />
+                  <Field label="Payment method — card" id="bc-pm-card">
+                    <ConstraintSelect id="bc-pm-card" value={form.paymentMethodCard} onChange={(v) => set({ paymentMethodCard: v })} />
                   </Field>
-                  <Field label="Payment method — deposit">
-                    <ConstraintSelect value={form.paymentMethodDeposit} onChange={(v) => set({ paymentMethodDeposit: v })} />
+                  <Field label="Payment method — deposit" id="bc-pm-dep">
+                    <ConstraintSelect id="bc-pm-dep" value={form.paymentMethodDeposit} onChange={(v) => set({ paymentMethodDeposit: v })} />
                   </Field>
-                  <Field label="Billing profile validation">
-                    <ConstraintSelect value={form.billingProfileValidation} onChange={(v) => set({ billingProfileValidation: v })} />
+                  <Field label="Billing profile validation" id="bc-bp-val">
+                    <ConstraintSelect id="bc-bp-val" value={form.billingProfileValidation} onChange={(v) => set({ billingProfileValidation: v })} />
                   </Field>
                   <Field label="Minimum deposit amount" id="bc-mindep">
                     <Input
@@ -506,8 +526,8 @@ export default function BillingConfigurationPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label>Provisioning promotional credits</Label>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-eyebrow">Provisioning promotional credits</div>
                     <Button
                       variant="outline"
                       size="sm"
@@ -520,7 +540,7 @@ export default function BillingConfigurationPage() {
                     <p className="text-sm text-muted-foreground">No promotional credits granted at provisioning.</p>
                   ) : (
                     form.promotionals.map((p, i) => (
-                      <div key={i} className="flex items-end gap-3">
+                      <div key={i} className="flex flex-wrap items-end gap-3">
                         <Field label="Amount">
                           <Input
                             type="number"
@@ -548,7 +568,7 @@ export default function BillingConfigurationPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Remove"
+                          aria-label="Remove promotional credit"
                           onClick={() => set({ promotionals: form.promotionals.filter((_, j) => j !== i) })}
                         >
                           <Trash2 className="size-4 text-muted-foreground" />
@@ -565,30 +585,30 @@ export default function BillingConfigurationPage() {
             <Card>
               <CardContent className="space-y-6 pt-6">
                 <div className="flex items-center gap-2 rounded-lg border p-4">
-                  <Switch checked={form.promotionCodesEnabled} onCheckedChange={(v) => set({ promotionCodesEnabled: v })} />
-                  <span className="text-sm">Promotion codes enabled</span>
+                  <Switch id="bc-promo" checked={form.promotionCodesEnabled} onCheckedChange={(v) => set({ promotionCodesEnabled: v })} />
+                  <Label htmlFor="bc-promo" className="text-sm font-normal">Promotion codes enabled</Label>
                 </div>
 
                 <div className="space-y-4 rounded-lg border p-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
-                      <Switch checked={form.suspEnabled} onCheckedChange={(v) => set({ suspEnabled: v })} />
-                      <span className="text-sm font-medium">Automatic suspension</span>
+                      <Switch id="bc-susp" checked={form.suspEnabled} onCheckedChange={(v) => set({ suspEnabled: v })} />
+                      <Label htmlFor="bc-susp" className="text-sm">Automatic suspension</Label>
                     </div>
                     <Select value={form.suspType} onValueChange={(v) => set({ suspType: v })}>
-                      <SelectTrigger className="w-36">
+                      <SelectTrigger className="w-36" aria-label="Suspension type">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="BALANCE">BALANCE</SelectItem>
-                        <SelectItem value="DUE_DATE">DUE_DATE</SelectItem>
+                        <SelectItem value="BALANCE">Balance</SelectItem>
+                        <SelectItem value="DUE_DATE">Due date</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <p className="text-xs text-muted-foreground">
                     BALANCE limits use the balance field; DUE_DATE limits use days overdue.
                   </p>
-                  <div className="flex items-end gap-3">
+                  <div className="flex flex-wrap items-end gap-3">
                     <Field label="Suspend at — balance">
                       <Input
                         type="number"
@@ -607,8 +627,8 @@ export default function BillingConfigurationPage() {
                     </Field>
                   </div>
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label>Notification limits</Label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-eyebrow">Notification limits</div>
                       <Button
                         variant="outline"
                         size="sm"
@@ -621,7 +641,7 @@ export default function BillingConfigurationPage() {
                       <p className="text-sm text-muted-foreground">No pre-suspension notifications configured.</p>
                     ) : (
                       form.notifications.map((n, i) => (
-                        <div key={i} className="flex items-end gap-3">
+                        <div key={i} className="flex flex-wrap items-end gap-3">
                           <Field label="Balance">
                             <Input
                               type="number"
@@ -645,7 +665,7 @@ export default function BillingConfigurationPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            title="Remove"
+                            aria-label="Remove notification limit"
                             onClick={() => set({ notifications: form.notifications.filter((_, j) => j !== i) })}
                           >
                             <Trash2 className="size-4 text-muted-foreground" />
@@ -657,9 +677,9 @@ export default function BillingConfigurationPage() {
                 </div>
 
                 <div className="space-y-3 rounded-lg border p-4">
-                  <Label className="font-medium">Time unit limits</Label>
+                  <div className="text-eyebrow">Time unit limits</div>
                   <p className="text-xs text-muted-foreground">Units per month used when rating (defaults: minute 43200, hour 720, month 1).</p>
-                  <div className="flex gap-3">
+                  <div className="flex flex-wrap gap-3">
                     <Field label="Minute">
                       <Input type="number" className="w-32" value={form.tuMinute} onChange={(e) => set({ tuMinute: e.target.value })} />
                     </Field>
@@ -674,8 +694,8 @@ export default function BillingConfigurationPage() {
 
                 <div className="space-y-3 rounded-lg border p-4">
                   <div className="flex items-center gap-2">
-                    <Switch checked={form.sendExpiryNotification} onCheckedChange={(v) => set({ sendExpiryNotification: v })} />
-                    <span className="text-sm font-medium">Savings contract expiry notifications</span>
+                    <Switch id="bc-expiry" checked={form.sendExpiryNotification} onCheckedChange={(v) => set({ sendExpiryNotification: v })} />
+                    <Label htmlFor="bc-expiry" className="text-sm">Savings contract expiry notifications</Label>
                   </div>
                   <Field label="Reminder days before expiry (comma separated)" id="bc-reminders">
                     <Input

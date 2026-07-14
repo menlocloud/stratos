@@ -1,15 +1,19 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Network, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
+import { MoreHorizontal, Network, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -30,7 +34,7 @@ function lbName(r: CloudResource): string {
   return (r.data?.loadBalancer?.name as string) ?? r.name ?? r.id
 }
 function lbVip(r: CloudResource): string {
-  return (r.data?.loadBalancer?.vip_address as string) ?? "—"
+  return (r.data?.loadBalancer?.vip_address as string) ?? ""
 }
 function networkName(r: CloudResource): string {
   return (r.data?.network?.name as string) ?? (r.data?.networkName as string) ?? r.name ?? r.id
@@ -87,14 +91,92 @@ export default function LoadBalancersPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => lbName(r),
+        header: sortableHeader("Name"),
+        cell: ({ row, getValue }) => (
+          <button
+            className="inline-block py-1 font-medium hover:underline"
+            onClick={(e) => {
+              e.stopPropagation()
+              setManageFor(row.original)
+            }}
+          >
+            {getValue()}
+          </button>
+        ),
+      },
+      {
+        id: "provisioning",
+        accessorFn: (r) => (r.data?.loadBalancer?.provisioning_status as string) ?? r.status ?? "",
+        header: sortableHeader("Provisioning"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "operating",
+        accessorFn: (r) => (r.data?.loadBalancer?.operating_status as string) ?? "",
+        header: sortableHeader("Operating"),
+        cell: ({ getValue }) => <StatusBadge status={getValue() || undefined} />,
+      },
+      {
+        id: "vip",
+        accessorFn: (r) => lbVip(r),
+        header: sortableHeader("VIP address"),
+        cell: ({ getValue }) => <span className="font-mono text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${lbName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setManageFor(r)}>
+                    <Settings2 className="size-4" /> Manage
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Load balancers"
+        eyebrow="Network"
         description="Distribute traffic across servers in this project."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -104,11 +186,7 @@ export default function LoadBalancersPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : isError ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
-      ) : !data?.length ? (
+      {!isLoading && !isError && !data?.length ? (
         <EmptyState
           icon={Network}
           title="No load balancers yet"
@@ -120,55 +198,18 @@ export default function LoadBalancersPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Provisioning</TableHead>
-                <TableHead>Operating</TableHead>
-                <TableHead>VIP address</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-24" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">
-                    <button className="hover:underline" onClick={() => setManageFor(r)}>
-                      {lbName(r)}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={(r.data?.loadBalancer?.provisioning_status as string) ?? r.status} />
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={(r.data?.loadBalancer?.operating_status as string) ?? undefined} />
-                  </TableCell>
-                  <TableCell className="font-mono text-sm">{lbVip(r)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => setManageFor(r)} aria-label="Manage load balancer">
-                        <Settings2 className="size-4" />
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => setToDelete(r)} aria-label="Delete load balancer">
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={isError ? (error as Error) : null}
+          searchPlaceholder="Search load balancers…"
+          onRowClick={(r) => setManageFor(r)}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create load balancer</DialogTitle>
             <DialogDescription>The VIP is allocated on the network you pick.</DialogDescription>
@@ -223,7 +264,7 @@ export default function LoadBalancersPage() {
               onClick={() => toDelete && del.mutate(toDelete.id)}
               disabled={del.isPending}
             >
-              {del.isPending ? "Deleting…" : "Delete"}
+              {del.isPending ? "Deleting…" : "Delete load balancer"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -283,6 +324,8 @@ function LbManageSheet({
   const [confirm, setConfirm] = useState<{
     title: string
     description: string
+    /** Verb-specific destructive CTA ("Delete listener"), never a bare "Confirm". */
+    confirmLabel: string
     action: string
     data: Record<string, any>
     keys: string[]
@@ -323,20 +366,22 @@ function LbManageSheet({
     q.isLoading ? (
       <Skeleton className="h-32" />
     ) : q.isError ? (
-      <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">{(q.error as Error).message}</p>
+      <p className="rounded-lg border bg-card p-3 text-sm text-muted-foreground">{(q.error as Error).message}</p>
     ) : count === 0 ? (
-      <p className="py-6 text-center text-sm text-muted-foreground">{empty}</p>
+      <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">{empty}</p>
     ) : (
       table
     )
 
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="overflow-y-auto sm:max-w-2xl">
-        <SheetHeader>
-          <SheetTitle>{lbName(lb)}</SheetTitle>
+      <SheetContent className="w-full overflow-y-auto sm:max-w-2xl">
+        <SheetHeader className="border-b">
+          <div className="text-eyebrow">Load balancer</div>
+          <SheetTitle className="font-display text-lg tracking-tight">{lbName(lb)}</SheetTitle>
           <SheetDescription>
-            VIP {lbVip(lb)} — manage listeners, pools, members and health monitors.
+            VIP <span className="font-mono">{lbVip(lb) || "—"}</span> — manage listeners, pools, members and
+            health monitors.
           </SheetDescription>
         </SheetHeader>
 
@@ -358,44 +403,47 @@ function LbManageSheet({
                 listeners,
                 "No listeners configured.",
                 listenerList.length,
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Protocol</TableHead>
-                      <TableHead>Port</TableHead>
-                      <TableHead className="w-10" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {listenerList.map((l, i) => (
-                      <TableRow key={l.id ?? i}>
-                        <TableCell className="font-medium">{l.name || l.id || "—"}</TableCell>
-                        <TableCell>{l.protocol ?? "—"}</TableCell>
-                        <TableCell className="font-mono text-sm">{l.protocol_port ?? "—"}</TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            aria-label="Delete listener"
-                            onClick={() =>
-                              setConfirm({
-                                title: "Delete listener",
-                                description: `Delete listener "${l.name || l.id}"? This cannot be undone.`,
-                                action: "DELETE_LISTENER",
-                                data: { id: l.id },
-                                keys: ["lb-listeners"],
-                                success: "Listener deleted",
-                              })
-                            }
-                          >
-                            <Trash2 className="size-4" />
-                          </Button>
-                        </TableCell>
+                <div className="overflow-hidden rounded-xl border bg-card">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>Name</TableHead>
+                        <TableHead>Protocol</TableHead>
+                        <TableHead>Port</TableHead>
+                        <TableHead className="w-10" />
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>,
+                    </TableHeader>
+                    <TableBody>
+                      {listenerList.map((l, i) => (
+                        <TableRow key={l.id ?? i}>
+                          <TableCell className="font-medium">{l.name || l.id || "—"}</TableCell>
+                          <TableCell className="text-sm">{l.protocol ?? "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{l.protocol_port ?? "—"}</TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label="Delete listener"
+                              onClick={() =>
+                                setConfirm({
+                                  title: "Delete listener",
+                                  description: `Delete listener "${l.name || l.id}"? Traffic on port ${l.protocol_port ?? "—"} stops being accepted. This cannot be undone.`,
+                                  confirmLabel: "Delete listener",
+                                  action: "DELETE_LISTENER",
+                                  data: { id: l.id },
+                                  keys: ["lb-listeners"],
+                                  success: "Listener deleted",
+                                })
+                              }
+                            >
+                              <Trash2 className="size-4 text-muted-foreground" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>,
               )}
             </TabsContent>
 
@@ -411,12 +459,12 @@ function LbManageSheet({
                 poolList.length,
                 <div className="space-y-4">
                   {poolList.map((p, i) => (
-                    <div key={p.id ?? i} className="rounded-md border">
+                    <div key={p.id ?? i} className="overflow-hidden rounded-xl border bg-card">
                       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
                         <div>
                           <span className="text-sm font-medium">{p.name || p.id}</span>
                           <span className="ml-2 text-xs text-muted-foreground">
-                            {p.protocol ?? "—"} · {p.lb_algorithm ?? "—"}
+                            {p.protocol ?? "—"} · {(p.lb_algorithm as string | undefined)?.replaceAll("_", " ").toLowerCase() ?? "—"}
                           </span>
                         </div>
                         <div className="flex gap-1">
@@ -432,12 +480,13 @@ function LbManageSheet({
                           </Button>
                           <Button
                             variant="ghost"
-                            size="sm"
+                            size="icon-sm"
                             aria-label="Delete pool"
                             onClick={() =>
                               setConfirm({
                                 title: "Delete pool",
-                                description: `Delete pool "${p.name || p.id}" and its members? This cannot be undone.`,
+                                description: `Delete pool "${p.name || p.id}" and its members? Its listener stops routing traffic. This cannot be undone.`,
+                                confirmLabel: "Delete pool",
                                 action: "DELETE_POOL",
                                 data: { id: p.id },
                                 keys: ["lb-pools"],
@@ -445,7 +494,7 @@ function LbManageSheet({
                               })
                             }
                           >
-                            <Trash2 className="size-4" />
+                            <Trash2 className="size-4 text-muted-foreground" />
                           </Button>
                         </div>
                       </div>
@@ -454,7 +503,7 @@ function LbManageSheet({
                       ) : (
                         <Table>
                           <TableHeader>
-                            <TableRow>
+                            <TableRow className="hover:bg-transparent">
                               <TableHead>Address</TableHead>
                               <TableHead>Port</TableHead>
                               <TableHead>Status</TableHead>
@@ -469,15 +518,16 @@ function LbManageSheet({
                                 <TableCell>
                                   <StatusBadge status={(m.operating_status as string) ?? undefined} />
                                 </TableCell>
-                                <TableCell>
+                                <TableCell className="text-right">
                                   <Button
                                     variant="ghost"
-                                    size="sm"
+                                    size="icon-sm"
                                     aria-label="Remove member"
                                     onClick={() =>
                                       setConfirm({
                                         title: "Remove member",
-                                        description: `Remove member ${m.address}:${m.protocol_port} from "${p.name || p.id}"?`,
+                                        description: `Remove member ${m.address}:${m.protocol_port} from "${p.name || p.id}"? It stops receiving traffic immediately.`,
+                                        confirmLabel: "Remove member",
                                         action: "DELETE_MEMBER",
                                         data: { poolId: p.id, id: m.id },
                                         keys: ["lb-pools"],
@@ -485,7 +535,7 @@ function LbManageSheet({
                                       })
                                     }
                                   >
-                                    <Trash2 className="size-4" />
+                                    <Trash2 className="size-4 text-muted-foreground" />
                                   </Button>
                                 </TableCell>
                               </TableRow>
@@ -512,48 +562,51 @@ function LbManageSheet({
                 monitors,
                 "No health monitors configured.",
                 monitorList.length,
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Delay</TableHead>
-                      <TableHead>Timeout</TableHead>
-                      <TableHead>Retries</TableHead>
-                      <TableHead className="w-10" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {monitorList.map((m, i) => (
-                      <TableRow key={m.id ?? i}>
-                        <TableCell className="font-medium">{m.name || m.id || "—"}</TableCell>
-                        <TableCell>{m.type ?? "—"}</TableCell>
-                        <TableCell className="font-mono text-sm">{m.delay ?? "—"}s</TableCell>
-                        <TableCell className="font-mono text-sm">{m.timeout ?? "—"}s</TableCell>
-                        <TableCell className="font-mono text-sm">{m.max_retries ?? "—"}</TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            aria-label="Delete monitor"
-                            onClick={() =>
-                              setConfirm({
-                                title: "Delete health monitor",
-                                description: `Delete monitor "${m.name || m.id}"? This cannot be undone.`,
-                                action: "DELETE_MONITOR",
-                                data: { id: m.id },
-                                keys: ["lb-monitors"],
-                                success: "Monitor deleted",
-                              })
-                            }
-                          >
-                            <Trash2 className="size-4" />
-                          </Button>
-                        </TableCell>
+                <div className="overflow-hidden rounded-xl border bg-card">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>Name</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Delay</TableHead>
+                        <TableHead>Timeout</TableHead>
+                        <TableHead>Retries</TableHead>
+                        <TableHead className="w-10" />
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>,
+                    </TableHeader>
+                    <TableBody>
+                      {monitorList.map((m, i) => (
+                        <TableRow key={m.id ?? i}>
+                          <TableCell className="font-medium">{m.name || m.id || "—"}</TableCell>
+                          <TableCell className="text-sm">{m.type ?? "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{m.delay != null ? `${m.delay}s` : "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{m.timeout != null ? `${m.timeout}s` : "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{m.max_retries ?? "—"}</TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label="Delete monitor"
+                              onClick={() =>
+                                setConfirm({
+                                  title: "Delete health monitor",
+                                  description: `Delete monitor "${m.name || m.id}"? Unhealthy members are no longer ejected from the pool. This cannot be undone.`,
+                                  confirmLabel: "Delete monitor",
+                                  action: "DELETE_MONITOR",
+                                  data: { id: m.id },
+                                  keys: ["lb-monitors"],
+                                  success: "Monitor deleted",
+                                })
+                              }
+                            >
+                              <Trash2 className="size-4 text-muted-foreground" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>,
               )}
             </TabsContent>
           </Tabs>
@@ -561,7 +614,7 @@ function LbManageSheet({
 
         {/* Add listener */}
         <Dialog open={listenerOpen} onOpenChange={setListenerOpen}>
-          <DialogContent>
+          <DialogContent className="max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Add listener</DialogTitle>
               <DialogDescription>A listener accepts traffic on the VIP at the given port.</DialogDescription>
@@ -576,7 +629,7 @@ function LbManageSheet({
                   placeholder="http-listener"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="grid gap-2">
                   <Label>Protocol</Label>
                   <Select
@@ -635,7 +688,7 @@ function LbManageSheet({
 
         {/* Add pool */}
         <Dialog open={poolOpen} onOpenChange={setPoolOpen}>
-          <DialogContent>
+          <DialogContent className="max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Add pool</DialogTitle>
               <DialogDescription>A pool groups backend members behind a listener.</DialogDescription>
@@ -650,7 +703,7 @@ function LbManageSheet({
                   placeholder="web-pool"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="grid gap-2">
                   <Label>Protocol</Label>
                   <Select value={poolForm.protocol} onValueChange={(v) => setPoolForm({ ...poolForm, protocol: v })}>
@@ -729,14 +782,14 @@ function LbManageSheet({
 
         {/* Add member */}
         <Dialog open={!!memberFor} onOpenChange={(o) => !o && setMemberFor(null)}>
-          <DialogContent>
+          <DialogContent className="max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Add member</DialogTitle>
               <DialogDescription>
                 Add a backend to pool "{memberFor ? memberFor.name || memberFor.id : ""}" by IP address and port.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid grid-cols-2 gap-4 py-2">
+            <div className="grid grid-cols-1 gap-4 py-2 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="mem-addr">IP address</Label>
                 <Input
@@ -783,7 +836,7 @@ function LbManageSheet({
 
         {/* Add monitor */}
         <Dialog open={monitorOpen} onOpenChange={setMonitorOpen}>
-          <DialogContent>
+          <DialogContent className="max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Add health monitor</DialogTitle>
               <DialogDescription>Octavia probes the pool's members and ejects unhealthy ones.</DialogDescription>
@@ -804,7 +857,7 @@ function LbManageSheet({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="grid gap-2">
                   <Label>Type</Label>
                   <Select value={monitorForm.type} onValueChange={(v) => setMonitorForm({ ...monitorForm, type: v })}>
@@ -900,7 +953,7 @@ function LbManageSheet({
                 }
                 disabled={run.isPending}
               >
-                {run.isPending ? "Working…" : "Confirm"}
+                {run.isPending ? "Working…" : (confirm?.confirmLabel ?? "Confirm")}
               </Button>
             </DialogFooter>
           </DialogContent>

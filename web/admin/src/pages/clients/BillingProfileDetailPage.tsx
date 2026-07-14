@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useParams } from "react-router-dom"
+import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
@@ -9,6 +9,14 @@ import {
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -24,8 +32,9 @@ import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
-import { useAdminList } from "@/lib/hooks"
+import { useAdminList, useTabParam } from "@/lib/hooks"
 import { fmtDate, fmtDateTime, fmtMoney, timeAgo } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 // GET /admin/billing-profile/{id} → BillingSummary (profile + computed financials).
 // The summary DROPS a few raw-doc fields (taxConfiguration / projectProvisioningQuota / bank / iban /
@@ -66,13 +75,21 @@ function ErrorPanel({ error }: { error: unknown }) {
   )
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+/** Money stat: muted when zero (nothing to act on), destructive when negative (debt). */
+function Stat({ label, amount, currency }: { label: string; amount: unknown; currency?: string }) {
+  const n = Number(amount ?? 0)
   return (
-    <Card>
-      <CardContent className="p-5">
-        <p className="text-sm text-muted-foreground">{label}</p>
-        <p className="mt-1 font-display text-xl font-semibold tabular-nums">{value}</p>
-      </CardContent>
+    <Card className="gap-1 py-5">
+      <p className="px-5 text-sm font-medium text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          "px-5 font-mono text-xl font-semibold tabular-nums",
+          n === 0 && "text-muted-foreground",
+          n < 0 && "text-destructive-text",
+        )}
+      >
+        {fmtMoney(n, currency)}
+      </p>
     </Card>
   )
 }
@@ -87,6 +104,7 @@ type PendingAction = { target: "ACTIVE" | "SUSPENDED"; verb: string } | null
 export default function BillingProfileDetailPage() {
   const { id = "" } = useParams()
   const qc = useQueryClient()
+  const [tab, setTab] = useTabParam("dashboard")
   const [pending, setPending] = useState<PendingAction>(null)
 
   const { data: bp, isLoading, isError, error } = useQuery({
@@ -123,10 +141,26 @@ export default function BillingProfileDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const crumbs = (crumbLabel: string) => (
+    <Breadcrumb>
+      <BreadcrumbList>
+        <BreadcrumbItem>
+          <BreadcrumbLink asChild>
+            <Link to="/clients/billing-profiles">Billing profiles</Link>
+          </BreadcrumbLink>
+        </BreadcrumbItem>
+        <BreadcrumbSeparator />
+        <BreadcrumbItem>
+          <BreadcrumbPage>{crumbLabel}</BreadcrumbPage>
+        </BreadcrumbItem>
+      </BreadcrumbList>
+    </Breadcrumb>
+  )
+
   if (isLoading) {
     return (
       <>
-        <PageHeader title="Billing profile" />
+        <PageHeader title="Billing profile" eyebrow="Clients" breadcrumb={crumbs(id)} />
         <Skeleton className="h-72" />
       </>
     )
@@ -134,7 +168,7 @@ export default function BillingProfileDetailPage() {
   if (isError || !bp) {
     return (
       <>
-        <PageHeader title="Billing profile" />
+        <PageHeader title="Billing profile" eyebrow="Clients" breadcrumb={crumbs(id)} />
         <ErrorPanel error={error ?? new Error("Billing profile not found")} />
       </>
     )
@@ -143,12 +177,17 @@ export default function BillingProfileDetailPage() {
   const name =
     bp.fullName || [bp.firstName, bp.lastName].filter(Boolean).join(" ") || bp.companyName || bp.email || id
   const status = (bp.status as string) ?? ""
+  const subtitle = [bp.email, bp.companyName && bp.companyName !== name ? bp.companyName : null]
+    .filter(Boolean)
+    .join(" · ")
 
   return (
     <>
       <PageHeader
         title={name}
-        description={bp.email}
+        eyebrow="Clients"
+        breadcrumb={crumbs(name)}
+        description={subtitle}
         actions={
           <>
             {status === "NEW" && (
@@ -180,13 +219,13 @@ export default function BillingProfileDetailPage() {
       </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Balance" value={fmtMoney(bp.balance, bp.currency)} />
-        <Stat label="Account credit" value={fmtMoney(bp.accountCredit, bp.currency)} />
-        <Stat label="Promotional credit" value={fmtMoney(bp.promotionalCredit, bp.currency)} />
-        <Stat label="This month usage" value={fmtMoney(bp.currentMonthUsage, bp.currency)} />
+        <Stat label="Balance" amount={bp.balance} currency={bp.currency} />
+        <Stat label="Account credit" amount={bp.accountCredit} currency={bp.currency} />
+        <Stat label="Promotional credit" amount={bp.promotionalCredit} currency={bp.currency} />
+        <Stat label="This month usage" amount={bp.currentMonthUsage} currency={bp.currency} />
       </div>
 
-      <Tabs defaultValue="dashboard">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="h-auto flex-wrap">
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="address">Address</TabsTrigger>
@@ -247,12 +286,15 @@ export default function BillingProfileDetailPage() {
       <Dialog open={!!pending} onOpenChange={(o) => !o && setPending(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm status change</DialogTitle>
+            <DialogTitle>
+              {pending ? `${pending.verb.charAt(0).toUpperCase() + pending.verb.slice(1)} billing profile` : ""}
+            </DialogTitle>
             <DialogDescription>
-              You are about to {pending?.verb} this billing profile
               {pending?.target === "SUSPENDED"
-                ? " — its projects will be disabled and running servers paused."
-                : "."}
+                ? `Suspends ${name} — its projects are disabled and running servers paused until it is resumed.`
+                : pending?.verb === "resume"
+                  ? `Resumes ${name} — its projects are re-enabled and paused servers restarted.`
+                  : `Activates ${name} — the profile can accrue usage and be billed.`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -267,7 +309,7 @@ export default function BillingProfileDetailPage() {
                 setPending(null)
               }}
             >
-              {pending ? pending.verb.charAt(0).toUpperCase() + pending.verb.slice(1) : "Confirm"}
+              {pending ? `${pending.verb.charAt(0).toUpperCase() + pending.verb.slice(1)} profile` : "Confirm"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -303,10 +345,10 @@ function DashboardTab({ bpId, currency }: { bpId: string; currency?: string }) {
   return (
     <div className="grid gap-4">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Due amount" value={fmtMoney(cost.dueAmount, currency)} />
-        <Stat label="Current month" value={fmtMoney(cost.currentMonthCosts, currency)} />
-        <Stat label="Last month" value={fmtMoney(cost.lastMonthCosts, currency)} />
-        <Stat label="Forecasted month end" value={fmtMoney(cost.forecastedMonthEndCosts, currency)} />
+        <Stat label="Due amount" amount={cost.dueAmount} currency={currency} />
+        <Stat label="Current month" amount={cost.currentMonthCosts} currency={currency} />
+        <Stat label="Last month" amount={cost.lastMonthCosts} currency={currency} />
+        <Stat label="Forecasted month end" amount={cost.forecastedMonthEndCosts} currency={currency} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -344,8 +386,9 @@ function DashboardTab({ bpId, currency }: { bpId: string; currency?: string }) {
         </Card>
       </div>
 
-      <section>
-        <h3 className="mb-2 font-medium">Top cost generators</h3>
+      {/* min-w-0: the table's min-content must not widen the tab grid (mobile reflow). */}
+      <section className="min-w-0">
+        <h3 className="text-eyebrow mb-2">Top cost generators</h3>
         {top.length === 0 ? (
           <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
             No billed resources this month.
@@ -429,10 +472,12 @@ function AddressTab({ bpId, bp, raw }: { bpId: string; bp: Summary; raw: Doc | n
     onError: (e: Error) => toast.error(e.message),
   })
 
+  // autoComplete off: the operator edits the CLIENT's details — their own
+  // browser-autofilled address/IBAN here would be silently wrong data.
   const text = (k: string, label: string, placeholder = "") => (
     <div className="grid gap-1.5">
       <Label htmlFor={`bp-${k}`}>{label}</Label>
-      <Input id={`bp-${k}`} value={f[k]} placeholder={placeholder} onChange={set(k)} />
+      <Input id={`bp-${k}`} value={f[k]} placeholder={placeholder} autoComplete="off" onChange={set(k)} />
     </div>
   )
 
@@ -480,7 +525,7 @@ function AddressTab({ bpId, bp, raw }: { bpId: string; bp: Summary; raw: Doc | n
 
       <div className="flex justify-end">
         <Button disabled={save.isPending} onClick={() => save.mutate()}>
-          Save changes
+          {save.isPending ? "Saving…" : "Save changes"}
         </Button>
       </div>
 
@@ -495,6 +540,7 @@ function AddressTab({ bpId, bp, raw }: { bpId: string; bp: Summary; raw: Doc | n
 // ─── Projects — GET /admin/project/{billingProfileId}/billing-profile → {data:[raw project docs]} ─
 
 function ProjectsTab({ bpId }: { bpId: string }) {
+  const navigate = useNavigate()
   const { data, isLoading, isError, error } = useAdminList<Doc>(`/admin/project/${bpId}/billing-profile`)
   const rows = data?.data ?? []
 
@@ -508,9 +554,9 @@ function ProjectsTab({ bpId }: { bpId: string }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Project</TableHead>
             <TableHead>Name</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>Project</TableHead>
             <TableHead>Organization</TableHead>
             <TableHead>Created</TableHead>
           </TableRow>
@@ -518,14 +564,43 @@ function ProjectsTab({ bpId }: { bpId: string }) {
         <TableBody>
           {rows.map((p, i) => {
             const pid = p.id ?? p._id ?? String(i)
+            const hasId = Boolean(p.id ?? p._id)
             return (
-              <TableRow key={pid}>
-                <TableCell className="font-mono text-xs">{pid}</TableCell>
-                <TableCell className="text-sm">{p.name ?? "—"}</TableCell>
+              <TableRow
+                key={pid}
+                className={hasId ? "cursor-pointer" : undefined}
+                onClick={() => hasId && navigate(`/clients/projects/${pid}`)}
+              >
+                <TableCell>
+                  {hasId ? (
+                    <Link
+                      to={`/clients/projects/${pid}`}
+                      className="inline-block py-1 font-medium hover:underline"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {p.name ?? "—"}
+                    </Link>
+                  ) : (
+                    <span className="font-medium">{p.name ?? "—"}</span>
+                  )}
+                </TableCell>
                 <TableCell>
                   <StatusBadge status={p.status ?? "—"} />
                 </TableCell>
-                <TableCell className="font-mono text-xs">{p.organizationId ?? "—"}</TableCell>
+                <TableCell className="font-mono text-xs text-muted-foreground">{pid}</TableCell>
+                <TableCell>
+                  {p.organizationId ? (
+                    <Link
+                      to={`/clients/organizations/${p.organizationId}`}
+                      className="inline-block py-1 font-mono text-xs text-muted-foreground hover:underline"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {p.organizationId}
+                    </Link>
+                  ) : (
+                    <span className="font-mono text-xs text-muted-foreground">—</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-sm text-muted-foreground">{timeAgo(p.createdAt)}</TableCell>
               </TableRow>
             )
@@ -634,7 +709,7 @@ function CreditsTab({ bpId, currency }: { bpId: string; currency?: string }) {
               Cancel
             </Button>
             <Button disabled={!(amt > 0) || grant.isPending} onClick={() => grant.mutate(amt)}>
-              Grant credit
+              {grant.isPending ? "Granting…" : "Grant credit"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -682,7 +757,7 @@ function SuspendTab({
       )}
 
       <section>
-        <h3 className="mb-2 font-medium">Suspension processes</h3>
+        <h3 className="text-eyebrow mb-2">Suspension processes</h3>
         {isLoading ? (
           <Skeleton className="h-40" />
         ) : isError ? (
@@ -819,7 +894,7 @@ function AutoSuspensionOverrideCard({ bpId, raw }: { bpId: string; raw: Doc | nu
           <div className="grid gap-2">
             <Label>Suspend by</Label>
             <Select value={type} onValueChange={(v) => setType(v as "BALANCE" | "DUE_DATE")} disabled={!override}>
-              <SelectTrigger className="max-w-xs">
+              <SelectTrigger className="max-w-xs" aria-label="Suspend by">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -878,6 +953,7 @@ function AutoSuspensionOverrideCard({ bpId, raw }: { bpId: string; raw: Doc | nu
                       min={isBalance ? undefined : "0"}
                       className="max-w-xs"
                       placeholder={isBalance ? "Balance, e.g. -50.00" : "Days overdue, e.g. 3"}
+                      aria-label={`Warning threshold ${i + 1}`}
                       value={isBalance ? n.balance : n.days}
                       disabled={!override}
                       onChange={(e) => setNotif(i, isBalance ? "balance" : "days", e.target.value)}
@@ -885,7 +961,8 @@ function AutoSuspensionOverrideCard({ bpId, raw }: { bpId: string; raw: Doc | nu
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
+                      size="icon-sm"
+                      aria-label={`Remove warning threshold ${i + 1}`}
                       disabled={!override}
                       onClick={() => removeNotif(i)}
                     >
@@ -960,7 +1037,12 @@ function BillsTab({ bpId }: { bpId: string }) {
               <TableCell className="text-right font-mono text-sm tabular-nums">
                 {fmtMoney(b.totalInvoiceAmount, b.invoiceCurrency ?? b.currency)}
               </TableCell>
-              <TableCell className="text-right font-mono text-sm tabular-nums">
+              <TableCell
+                className={cn(
+                  "text-right font-mono text-sm tabular-nums",
+                  Number(b.unpaidAmount ?? 0) > 0 ? "text-destructive-text" : "text-muted-foreground",
+                )}
+              >
                 {fmtMoney(b.unpaidAmount, b.invoiceCurrency ?? b.currency)}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">{fmtDate(b.dueAt)}</TableCell>
@@ -1030,7 +1112,7 @@ function PricePlansTab({ bpId, bp }: { bpId: string; bp: Summary }) {
         <div className="space-y-6">
           {includePublic && publicPlans.length > 0 ? (
             <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <p className="text-eyebrow mb-2">
                 Included public plans (apply to every profile)
               </p>
               <Card className="overflow-hidden py-0">
@@ -1059,7 +1141,7 @@ function PricePlansTab({ bpId, bp }: { bpId: string; bp: Summary }) {
           ) : null}
 
           <div>
-            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="text-eyebrow mb-2">
               Scoped plans (this profile only)
             </p>
             {!assigned.length ? (
@@ -1116,7 +1198,7 @@ function PricePlansTab({ bpId, bp }: { bpId: string; bp: Summary }) {
           <div className="grid gap-2 py-2">
             <Label>Price plan</Label>
             <Select value={pick} onValueChange={setPick}>
-              <SelectTrigger>
+              <SelectTrigger aria-label="Price plan">
                 <SelectValue placeholder={unassigned.length ? "Pick a plan" : "No unassigned plans"} />
               </SelectTrigger>
               <SelectContent>
@@ -1136,7 +1218,7 @@ function PricePlansTab({ bpId, bp }: { bpId: string; bp: Summary }) {
               disabled={!pick || savePlans.isPending}
               onClick={() => savePlans.mutate([...assigned, pick])}
             >
-              Assign
+              {savePlans.isPending ? "Assigning…" : "Assign"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1159,7 +1241,7 @@ function PricePlansTab({ bpId, bp }: { bpId: string; bp: Summary }) {
               disabled={savePlans.isPending}
               onClick={() => removeId && savePlans.mutate(assigned.filter((x) => x !== removeId))}
             >
-              Remove
+              {savePlans.isPending ? "Removing…" : "Remove"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1286,7 +1368,7 @@ function PromoCreditsTab({ bpId, currency }: { bpId: string; currency?: string }
               Cancel
             </Button>
             <Button disabled={!(amt > 0) || !(d > 0) || grant.isPending} onClick={() => grant.mutate()}>
-              Grant credit
+              {grant.isPending ? "Granting…" : "Grant credit"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1345,7 +1427,7 @@ function TaxTab({ bpId, raw }: { bpId: string; raw: Doc | null }) {
             <ErrorPanel error={ratesQ.error} />
           ) : (
             <Select value={ruleId} onValueChange={setRuleId} disabled={!disabled}>
-              <SelectTrigger>
+              <SelectTrigger aria-label="Tax rule">
                 <SelectValue placeholder="No tax rule" />
               </SelectTrigger>
               <SelectContent>
@@ -1366,7 +1448,7 @@ function TaxTab({ bpId, raw }: { bpId: string; raw: Doc | null }) {
         </div>
         <div className="flex justify-end">
           <Button disabled={save.isPending} onClick={() => save.mutate()}>
-            Save tax configuration
+            {save.isPending ? "Saving…" : "Save tax configuration"}
           </Button>
         </div>
       </CardContent>
@@ -1424,7 +1506,7 @@ function TransactionsTab({ bpId }: { bpId: string }) {
   return (
     <div className="grid gap-6">
       <section>
-        <h3 className="mb-2 font-medium">Account credit transactions</h3>
+        <h3 className="text-eyebrow mb-2">Account credit transactions</h3>
         {credits.isLoading ? (
           <Skeleton className="h-32" />
         ) : credits.isError ? (
@@ -1486,7 +1568,7 @@ function TransactionsTab({ bpId }: { bpId: string }) {
       </section>
 
       <section>
-        <h3 className="mb-2 font-medium">Collect transactions</h3>
+        <h3 className="text-eyebrow mb-2">Collect transactions</h3>
         {collects.isLoading ? (
           <Skeleton className="h-32" />
         ) : collects.isError ? (
@@ -1628,7 +1710,7 @@ function ValidationTab({ bpId, bp }: { bpId: string; bp: Summary }) {
       </Card>
 
       <section>
-        <h3 className="mb-2 font-medium">Verifications</h3>
+        <h3 className="text-eyebrow mb-2">Verifications</h3>
         {!verifications.length ? (
           <EmptyState icon={ShieldCheck} title="No verifications" hint="Verification entries appear here." />
         ) : (
@@ -1746,7 +1828,7 @@ function QuotaTab({ bpId, raw }: { bpId: string; raw: Doc | null }) {
         )}
         <div className="flex justify-end">
           <Button disabled={save.isPending} onClick={() => save.mutate()}>
-            Save quota
+            {save.isPending ? "Saving…" : "Save quota"}
           </Button>
         </div>
       </CardContent>

@@ -1,28 +1,33 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Globe, Link2, Link2Off, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Globe, Link2, Link2Off, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { useCloudList, useCloudScope, useProject, useProjectId, usePublicNetworks } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 function fipAddress(r: CloudResource): string {
   return (r.data?.floatingIp?.floating_ip_address as string) || r.name || r.id
+}
+function fipAssigned(r: CloudResource): boolean {
+  return !!(r.data?.floatingIp?.port_id as string | undefined)
 }
 
 export default function FloatingIPsPage() {
@@ -34,6 +39,7 @@ export default function FloatingIPsPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [toDelete, setToDelete] = useState<CloudResource | null>(null)
   const [toAssign, setToAssign] = useState<CloudResource | null>(null)
+  const [toUnassign, setToUnassign] = useState<CloudResource | null>(null)
 
   // create form: external networks from GET /project/{pid}/public-networks (already filtered by
   // the project's allow-list server-side), with a manual-ID fallback for anything not listed.
@@ -75,6 +81,7 @@ export default function FloatingIPsPage() {
     onSuccess: (_d, { action }) => {
       toast.success(action === "ASSIGN" ? "Floating IP assigned" : "Floating IP unassigned")
       setToAssign(null)
+      setToUnassign(null)
       setAssignPort("")
       invalidate()
     },
@@ -92,14 +99,91 @@ export default function FloatingIPsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "address",
+        accessorFn: (r) => fipAddress(r),
+        header: sortableHeader("Address"),
+        cell: ({ getValue }) => <span className="font-mono font-medium">{getValue()}</span>,
+      },
+      {
+        id: "status",
+        accessorFn: (r) => (r.data?.floatingIp?.status as string) ?? r.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "fixedIp",
+        accessorFn: (r) => (r.data?.floatingIp?.fixed_ip_address as string) ?? "",
+        header: sortableHeader("Mapped fixed IP"),
+        cell: ({ getValue }) => <span className="font-mono text-sm">{getValue() || "—"}</span>,
+      },
+      {
+        id: "port",
+        // Name the port when the cache knows it; the raw UUID means nothing at
+        // a glance. Falls back to the id for ports outside the cache.
+        accessorFn: (r) => {
+          const portId = (r.data?.floatingIp?.port_id as string) ?? ""
+          if (!portId) return ""
+          const port = (ports ?? []).find(
+            (p) => ((p.data?.port?.id as string) ?? p.externalId) === portId,
+          )
+          return (port?.data?.port?.name as string) || portId
+        },
+        header: "Port",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${fipAddress(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {fipAssigned(r) ? (
+                    <DropdownMenuItem onClick={() => setToUnassign(r)}>
+                      <Link2Off className="size-4" /> Unassign
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem onClick={() => setToAssign(r)}>
+                      <Link2 className="size-4" /> Assign to port
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Release
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // Setters are stable; ports feeds the port-name lookup.
+    [ports],
+  )
+
   return (
     <>
       <PageHeader
         title="Floating IPs"
+        eyebrow="Network"
         description="Public IP addresses mapped onto your instances."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -109,11 +193,7 @@ export default function FloatingIPsPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : !data?.length ? (
+      {!isLoading && !error && !data?.length ? (
         <EmptyState
           icon={Globe}
           title="No floating IPs"
@@ -125,58 +205,13 @@ export default function FloatingIPsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Address</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Mapped fixed IP</TableHead>
-                <TableHead>Port</TableHead>
-                <TableHead className="w-40 text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => {
-                const f = (r.data?.floatingIp ?? {}) as Record<string, unknown>
-                const assigned = !!f.port_id
-                return (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-mono font-medium">{fipAddress(r)}</TableCell>
-                    <TableCell>
-                      <StatusBadge status={(f.status as string) ?? r.status} />
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">{(f.fixed_ip_address as string) || "—"}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {(f.port_id as string) || "—"}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-1">
-                        {assigned ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => act.mutate({ r, action: "UNASSIGN" })}
-                            disabled={act.isPending}
-                          >
-                            <Link2Off className="size-4" /> Unassign
-                          </Button>
-                        ) : (
-                          <Button variant="ghost" size="sm" onClick={() => setToAssign(r)}>
-                            <Link2 className="size-4" /> Assign
-                          </Button>
-                        )}
-                        <Button variant="ghost" size="icon" onClick={() => setToDelete(r)} aria-label="Delete floating IP">
-                          <Trash2 className="size-4 text-muted-foreground" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search floating IPs…"
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -247,7 +282,8 @@ export default function FloatingIPsPage() {
           <DialogHeader>
             <DialogTitle>Assign floating IP</DialogTitle>
             <DialogDescription>
-              Map {toAssign ? fipAddress(toAssign) : ""} onto a port (a server's network interface).
+              Map <span className="font-mono">{toAssign ? fipAddress(toAssign) : ""}</span> onto a port (a
+              server's network interface).
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2 py-2">
@@ -286,12 +322,41 @@ export default function FloatingIPsPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!toUnassign} onOpenChange={(o) => !o && setToUnassign(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Unassign floating IP</DialogTitle>
+            <DialogDescription>
+              Unassign <span className="font-mono">{toUnassign ? fipAddress(toUnassign) : ""}</span> from its
+              port? Anything reaching the instance through this address loses connectivity. The address stays
+              allocated to the project.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setToUnassign(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => toUnassign && act.mutate({ r: toUnassign, action: "UNASSIGN" })}
+              disabled={act.isPending}
+            >
+              {act.isPending ? "Unassigning…" : "Unassign floating IP"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Release floating IP</DialogTitle>
             <DialogDescription>
-              Release {toDelete ? fipAddress(toDelete) : ""}? The address returns to the pool.
+              Release <span className="font-mono">{toDelete ? fipAddress(toDelete) : ""}</span>?
+              {toDelete && fipAssigned(toDelete)
+                ? " It is currently assigned — anything reaching the instance through it loses connectivity. "
+                : " "}
+              The address returns to the pool and may be re-allocated to another project.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

@@ -1,12 +1,13 @@
-import { useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Pencil, Percent, Plus, RefreshCw, Trash2 } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table"
+import { MoreHorizontal, Percent, Plus, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -15,11 +16,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { useAdminList } from "@/lib/hooks"
 
@@ -65,7 +70,7 @@ function TaxForm({ form, setForm }: { form: FormState; setForm: (f: FormState) =
         <Label htmlFor="tax-name">Name</Label>
         <Input id="tax-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="VAT" />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="tax-pct">Percentage</Label>
           <Input
@@ -88,11 +93,11 @@ function TaxForm({ form, setForm }: { form: FormState; setForm: (f: FormState) =
           />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
-          <Label>Applies to</Label>
+          <Label htmlFor="tax-level">Applies to</Label>
           <Select value={form.level} onValueChange={(v) => setForm({ ...form, level: v })}>
-            <SelectTrigger>
+            <SelectTrigger id="tax-level">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -105,9 +110,9 @@ function TaxForm({ form, setForm }: { form: FormState; setForm: (f: FormState) =
           </Select>
         </div>
         <div className="grid gap-2">
-          <Label>Access mode</Label>
+          <Label htmlFor="tax-access">Access mode</Label>
           <Select value={form.accessMode} onValueChange={(v) => setForm({ ...form, accessMode: v })}>
-            <SelectTrigger>
+            <SelectTrigger id="tax-access">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -168,7 +173,7 @@ export default function TaxesPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  const openEdit = (t: TaxRate) => {
+  const openEdit = useCallback((t: TaxRate) => {
     setEditForm({
       name: t.name ?? "",
       percentage: String(t.rateLevels?.[0]?.percentage ?? ""),
@@ -177,18 +182,91 @@ export default function TaxesPage() {
       accessMode: t.accessMode ?? "PUBLIC",
     })
     setEditing(t)
-  }
+  }, [])
 
   const formValid = (f: FormState) => f.name.trim() !== "" && f.percentage !== "" && !Number.isNaN(parseInt(f.percentage, 10))
+
+  const columns = useMemo<ColumnDef<TaxRate, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (t) => t.name ?? t.id,
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "country",
+        accessorFn: (t) => t.country || "All countries",
+        header: sortableHeader("Country"),
+        cell: ({ getValue }) => <span className="text-sm">{getValue()}</span>,
+      },
+      {
+        id: "level",
+        accessorFn: (t) => t.level ?? "",
+        header: "Applies to",
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>,
+      },
+      {
+        id: "rateLevels",
+        accessorFn: (t) =>
+          t.rateLevels?.length ? t.rateLevels.map((l) => `${l.level}: ${l.percentage}%`).join(", ") : "",
+        header: "Rate levels",
+        enableSorting: false,
+        cell: ({ getValue }) => <span className="font-mono text-sm tabular-nums">{getValue() || "—"}</span>,
+      },
+      {
+        id: "access",
+        accessorFn: (t) => t.accessMode ?? "PUBLIC",
+        header: "Access",
+        cell: ({ getValue }) => (
+          <Badge variant={getValue() === "SCOPED" ? "secondary" : "outline"}>{getValue()}</Badge>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const t = row.original
+          return (
+            <div className="text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="Tax rate actions">
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => openEdit(t)}>Edit</DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive" onClick={() => setToDelete(t)}>
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // openEdit is a stable useCallback; setToDelete is a stable setter.
+    [openEdit],
+  )
 
   return (
     <>
       <PageHeader
         title="Taxes"
+        eyebrow="System"
         description="Tax rates applied when bills and payments are generated."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              aria-label="Refresh"
+            >
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -198,11 +276,7 @@ export default function TaxesPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">{(error as Error).message}</div>
-      ) : !rates.length ? (
+      {!isLoading && !error && !rates.length ? (
         <EmptyState
           icon={Percent}
           title="No tax rates yet"
@@ -214,45 +288,14 @@ export default function TaxesPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Country</TableHead>
-                <TableHead>Applies to</TableHead>
-                <TableHead>Rate levels</TableHead>
-                <TableHead>Access</TableHead>
-                <TableHead className="w-24" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rates.map((t) => (
-                <TableRow key={t.id}>
-                  <TableCell className="font-medium">{t.name ?? t.id}</TableCell>
-                  <TableCell className="text-sm">{t.country || "All countries"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{t.level ?? "—"}</TableCell>
-                  <TableCell className="font-mono text-sm tabular-nums">
-                    {t.rateLevels?.length ? t.rateLevels.map((l) => `${l.level}: ${l.percentage}%`).join(", ") : "—"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={t.accessMode === "SCOPED" ? "secondary" : "outline"}>{t.accessMode ?? "PUBLIC"}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" title="Edit" onClick={() => openEdit(t)}>
-                        <Pencil className="size-4 text-muted-foreground" />
-                      </Button>
-                      <Button variant="ghost" size="icon" title="Delete" onClick={() => setToDelete(t)}>
-                        <Trash2 className="size-4 text-muted-foreground" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={rates}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search tax rates…"
+          getRowId={(t) => t.id}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

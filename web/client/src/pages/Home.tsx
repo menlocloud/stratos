@@ -1,19 +1,103 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { BookOpen, Mail, RefreshCw } from "lucide-react"
 import { apiFetch } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
+import { fmtDateTime } from "@/lib/format"
 import { useProjects } from "@/lib/hooks"
 import type { Organization, Project } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Skeleton } from "@/components/ui/skeleton"
 
 // "/" — route to the first project; if the user is in an organization but has no
 // project yet (e.g. added to an org, awaiting a project assignment), show a waiting
 // state; otherwise walk a brand-new user through organization + project creation.
 type Invite = { token: string; projectId: string; projectName?: string; expiresAt?: string }
+
+// Brand frame shared by every "/" state. This page lives outside AppShell (it is
+// the landing that decides where to send you), so it opens like Login: Menlo
+// logo + console chip over the warm background, one focused card.
+function BrandShell({ children }: { children: ReactNode }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
+      <div className="flex w-full max-w-md flex-col gap-8">
+        <div className="flex items-center justify-center gap-2.5">
+          <img src="/brand/menlo-logo.svg" alt="Menlo" className="h-6 w-auto" />
+          <span className="text-eyebrow rounded border px-1.5 py-0.5">console</span>
+        </div>
+        {children}
+        <SignedInFooter />
+      </div>
+    </main>
+  )
+}
+
+// Every pre-project state ("waiting for a project", "invite sent to a different
+// email", …) has "wrong account" as its most likely cause — give it an exit.
+function SignedInFooter() {
+  const auth = useAuth()
+  const email = auth.user?.profile.email
+  return (
+    <p className="text-center text-xs text-muted-foreground">
+      {email ? (
+        <>
+          Signed in as <span className="font-medium text-foreground">{email}</span>
+          {" · "}
+        </>
+      ) : null}
+      <button
+        type="button"
+        className="underline underline-offset-4 transition-colors hover:text-foreground"
+        onClick={() => void auth.signoutRedirect()}
+      >
+        Sign out
+      </button>
+    </p>
+  )
+}
+
+// Card opening: eyebrow, display-face title, description, the horizon line.
+function BrandCardHeader({
+  eyebrow,
+  title,
+  description,
+}: {
+  eyebrow: string
+  title: string
+  description?: ReactNode
+}) {
+  return (
+    <CardHeader>
+      <div className="text-eyebrow">{eyebrow}</div>
+      <CardTitle className="font-display text-2xl font-semibold tracking-tight">{title}</CardTitle>
+      {description ? <CardDescription>{description}</CardDescription> : null}
+      <div className="horizon mt-2" />
+    </CardHeader>
+  )
+}
+
+function LoadingCard() {
+  return (
+    <BrandShell>
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-7 w-48" />
+          <Skeleton className="h-4 w-full" />
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+        </CardContent>
+      </Card>
+    </BrandShell>
+  )
+}
 
 export function HomePage() {
   const { data: projects, isLoading } = useProjects()
@@ -31,7 +115,7 @@ export function HomePage() {
     if (projects && projects.length > 0) navigate(`/p/${projects[0].id}/dashboard`, { replace: true })
   }, [projects, navigate])
 
-  if (isLoading || orgsLoading || invLoading) return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>
+  if (isLoading || orgsLoading || invLoading) return <LoadingCard />
   if (projects && projects.length > 0) return null
   // Pending invitations (logged in directly without the email link) → let them accept here.
   if (invites && invites.length > 0) return <PendingInvites invites={invites} />
@@ -55,17 +139,25 @@ function PendingInvites({ invites }: { invites: Invite[] }) {
     onError: (e: Error) => toast.error(e.message),
   })
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-6">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="font-display text-xl">Pending invitations</CardTitle>
-          <CardDescription>You've been invited to join the following project(s).</CardDescription>
-          <div className="horizon mt-2" />
-        </CardHeader>
+    <BrandShell>
+      <Card>
+        <BrandCardHeader
+          eyebrow="Invitations"
+          title="Pending invitations"
+          description="You've been invited to join the following projects. Accepting adds you to the project and its organization."
+        />
         <CardContent className="space-y-3">
           {invites.map((inv) => (
             <div key={inv.token} className="flex items-center justify-between gap-3 rounded-lg border p-3">
-              <span className="text-sm font-medium">{inv.projectName ?? "Project"}</span>
+              <div className="flex min-w-0 items-center gap-3">
+                <Mail className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{inv.projectName ?? "Project"}</div>
+                  {inv.expiresAt ? (
+                    <div className="text-xs text-muted-foreground">Expires {fmtDateTime(inv.expiresAt)}</div>
+                  ) : null}
+                </div>
+              </div>
               <Button size="sm" disabled={accept.isPending} onClick={() => accept.mutate(inv.token)}>
                 {accept.isPending ? "Accepting…" : "Accept"}
               </Button>
@@ -73,7 +165,7 @@ function PendingInvites({ invites }: { invites: Invite[] }) {
           ))}
         </CardContent>
       </Card>
-    </div>
+    </BrandShell>
   )
 }
 
@@ -82,23 +174,25 @@ function PendingInvites({ invites }: { invites: Invite[] }) {
 function NoProjectYet({ orgs }: { orgs: Organization[] }) {
   const names = orgs.map((o) => o.name).filter(Boolean).join(", ")
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-6">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="font-display text-xl">Welcome to Stratos</CardTitle>
-          <CardDescription>
-            You're a member of {names || "your organization"}, but no project has been assigned to
-            you yet. Please contact your organization admin to be added to a project.
-          </CardDescription>
-          <div className="horizon mt-2" />
-        </CardHeader>
+    <BrandShell>
+      <Card>
+        <BrandCardHeader
+          eyebrow="Organization"
+          title="Waiting for a project"
+          description={
+            <>
+              You're a member of {names || "your organization"}, but no project has been assigned to
+              you yet. Ask your organization admin to add you to a project.
+            </>
+          }
+        />
         <CardContent>
           <Button variant="outline" className="w-full" onClick={() => window.location.reload()}>
-            Refresh
+            <RefreshCw className="size-4" /> Check again
           </Button>
         </CardContent>
       </Card>
-    </div>
+    </BrandShell>
   )
 }
 
@@ -131,52 +225,63 @@ function Onboarding() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  if (selfService.isLoading) {
-    return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>
-  }
+  if (selfService.isLoading) return <LoadingCard />
   if (selfService.data && selfService.data.canCreateOrganization === false) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background px-6">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="font-display text-xl">Welcome to Stratos</CardTitle>
-            <CardDescription>
-              Your account isn't part of any project yet. Organizations on this platform are
-              created by the operator — please contact support or wait for a project invitation.
-            </CardDescription>
-            <div className="horizon mt-2" />
-          </CardHeader>
+      <BrandShell>
+        <Card>
+          <BrandCardHeader
+            eyebrow="Get started"
+            title="Welcome to Stratos"
+            description="Your account isn't part of any project yet. Organizations on this platform are created by the operator — please contact support or wait for a project invitation."
+          />
+          <CardContent>
+            <Button asChild variant="outline" className="w-full">
+              <a href="/docs" target="_blank" rel="noopener noreferrer">
+                <BookOpen className="size-4" /> View docs
+              </a>
+            </Button>
+          </CardContent>
         </Card>
-      </div>
+      </BrandShell>
     )
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-6">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="font-display text-xl">Welcome to Stratos</CardTitle>
-          <CardDescription>Create your organization and first project to get started.</CardDescription>
-          <div className="horizon mt-2" />
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="org">Organization name</Label>
-            <Input id="org" value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Acme Inc" />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="proj">Project name</Label>
-            <Input id="proj" value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="production" />
-          </div>
-          <Button
-            className="w-full"
-            disabled={!orgName || !projectName || create.isPending}
-            onClick={() => create.mutate()}
+    <BrandShell>
+      <Card>
+        <BrandCardHeader
+          eyebrow="Get started"
+          title="Welcome to Stratos"
+          description="Create your organization and first project to get started."
+        />
+        <CardContent>
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (orgName && projectName && !create.isPending) create.mutate()
+            }}
           >
-            {create.isPending ? "Creating…" : "Create organization"}
-          </Button>
+            <div className="space-y-2">
+              <Label htmlFor="org">Organization name</Label>
+              <Input id="org" value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Acme Inc" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="proj">Project name</Label>
+              <Input
+                id="proj"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                placeholder="production"
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={!orgName || !projectName || create.isPending}>
+              {create.isPending ? "Creating…" : "Create organization"}
+            </Button>
+          </form>
         </CardContent>
       </Card>
-    </div>
+    </BrandShell>
   )
 }

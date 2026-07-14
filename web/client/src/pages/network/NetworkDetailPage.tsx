@@ -1,10 +1,13 @@
 import { useState } from "react"
-import { useParams } from "react-router-dom"
+import { Link, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { Pencil, Plus, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatusBadge } from "@/components/status-badge"
+import {
+  Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -21,6 +24,28 @@ import { useCloudList, useCloudResource, useCloudScope, useProjectId } from "@/l
 import type { CloudResource } from "@/lib/types"
 import { networkName, networkStatus } from "./NetworksPage"
 
+function NetworkBreadcrumb({ pid, name }: { pid: string; name?: string }) {
+  return (
+    <Breadcrumb>
+      <BreadcrumbList>
+        <BreadcrumbItem>
+          <BreadcrumbLink asChild>
+            <Link to={`/p/${pid}/networks`}>Networks</Link>
+          </BreadcrumbLink>
+        </BreadcrumbItem>
+        {name ? (
+          <>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>{name}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </>
+        ) : null}
+      </BreadcrumbList>
+    </Breadcrumb>
+  )
+}
+
 export default function NetworkDetailPage() {
   const pid = useProjectId()
   const { resourceId = "" } = useParams()
@@ -29,16 +54,19 @@ export default function NetworkDetailPage() {
   if (isLoading || (!network && !error)) {
     return (
       <>
-        <PageHeader title="Network" />
-        <Skeleton className="h-72" />
+        <PageHeader title="Network" eyebrow="Network" breadcrumb={<NetworkBreadcrumb pid={pid} />} />
+        <div className="grid gap-3">
+          <Skeleton className="h-9 w-64" />
+          <Skeleton className="h-64" />
+        </div>
       </>
     )
   }
   if (error || !network) {
     return (
       <>
-        <PageHeader title="Network" />
-        <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">
+        <PageHeader title="Network" eyebrow="Network" breadcrumb={<NetworkBreadcrumb pid={pid} />} />
+        <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">
           {(error as Error | null)?.message ?? "Network not found."}
         </div>
       </>
@@ -50,7 +78,12 @@ export default function NetworkDetailPage() {
 
   return (
     <>
-      <PageHeader title={networkName(network)} description="Network detail." />
+      <PageHeader
+        title={networkName(network)}
+        eyebrow="Network"
+        description={`${subnets.length} ${subnets.length === 1 ? "subnet" : "subnets"} — servers, subnets and settings for this network.`}
+        breadcrumb={<NetworkBreadcrumb pid={pid} name={networkName(network)} />}
+      />
 
       <div className="mb-4 flex items-center gap-3">
         <StatusBadge status={networkStatus(network)} />
@@ -112,7 +145,7 @@ function NetworkServers({ pid, resourceId }: { pid: string; resourceId: string }
   if (isLoading) return <Skeleton className="h-40" />
   if (error) {
     return (
-      <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">{(error as Error).message}</div>
+      <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">{(error as Error).message}</div>
     )
   }
   const servers = data?.result ?? []
@@ -123,7 +156,9 @@ function NetworkServers({ pid, resourceId }: { pid: string; resourceId: string }
           <ul className="grid gap-2 text-sm">
             {servers.map((s) => (
               <li key={s.id} className="flex items-center justify-between border-b pb-2 last:border-0">
-                <span className="font-medium">{(s.data?.server?.name as string) ?? s.id}</span>
+                <Link className="inline-block py-1 font-medium hover:underline" to={`/p/${pid}/servers/${s.id}`}>
+                  {(s.data?.server?.name as string) ?? s.id}
+                </Link>
                 <StatusBadge status={(s.data?.server?.status as string) ?? s.status} />
               </li>
             ))}
@@ -232,7 +267,8 @@ function SubnetsTab({ pid, networkExtId }: { pid: string; networkExtId: string }
 
   return (
     <>
-      <div className="mb-3 flex justify-end">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <span className="text-eyebrow">Subnets</span>
         <Button size="sm" onClick={openCreate}>
           <Plus className="size-4" /> Add subnet
         </Button>
@@ -241,14 +277,16 @@ function SubnetsTab({ pid, networkExtId }: { pid: string; networkExtId: string }
       {isLoading ? (
         <Skeleton className="h-40" />
       ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">{(error as Error).message}</div>
+        <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">{(error as Error).message}</div>
       ) : !rows.length ? (
-        <p className="py-8 text-center text-sm text-muted-foreground">No subnets on this network yet.</p>
+        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+          No subnets on this network yet.
+        </div>
       ) : (
-        <Card className="overflow-hidden py-0">
+        <div className="overflow-hidden rounded-xl border bg-card">
           <Table>
             <TableHeader>
-              <TableRow>
+              <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>
                 <TableHead>CIDR</TableHead>
                 <TableHead>Gateway</TableHead>
@@ -266,14 +304,14 @@ function SubnetsTab({ pid, networkExtId }: { pid: string; networkExtId: string }
                     <TableCell className="font-mono text-xs">{(s.cidr as string) ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">{(s.gateway_ip as string) || "—"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{s.enable_dhcp !== false ? "Yes" : "No"}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="font-mono text-xs text-muted-foreground">
                       {((s.dns_nameservers as string[]) ?? []).join(", ") || "—"}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="icon" onClick={() => openEdit(r)} aria-label="Edit subnet">
+                      <Button variant="ghost" size="icon-sm" onClick={() => openEdit(r)} aria-label="Edit subnet">
                         <Pencil className="size-4 text-muted-foreground" />
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => setToDelete(r)} aria-label="Delete subnet">
+                      <Button variant="ghost" size="icon-sm" onClick={() => setToDelete(r)} aria-label="Delete subnet">
                         <Trash2 className="size-4 text-muted-foreground" />
                       </Button>
                     </TableCell>
@@ -282,7 +320,7 @@ function SubnetsTab({ pid, networkExtId }: { pid: string; networkExtId: string }
               })}
             </TableBody>
           </Table>
-        </Card>
+        </div>
       )}
 
       {/* Create / edit share one form */}

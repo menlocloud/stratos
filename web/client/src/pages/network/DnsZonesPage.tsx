@@ -1,20 +1,22 @@
-import { useState } from "react"
-import { Link } from "react-router-dom"
+import { useMemo, useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Globe, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Globe, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
@@ -27,18 +29,19 @@ function zoneStatus(r: CloudResource): string | undefined {
   return (r.data?.zone?.status as string) ?? r.status
 }
 function zoneEmail(r: CloudResource): string {
-  return (r.data?.zone?.email as string) ?? "—"
+  return (r.data?.zone?.email as string) ?? ""
 }
-function zoneTtl(r: CloudResource): string {
+function zoneTtl(r: CloudResource): number | null {
   const ttl = r.data?.zone?.ttl as number | undefined
-  return ttl != null ? String(ttl) : "—"
+  return ttl ?? null
 }
 
 export default function DnsZonesPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
+  const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, refetch, isFetching } = useCloudList(pid, "DNS_ZONE")
+  const { data, isLoading, refetch, isFetching, error } = useCloudList(pid, "DNS_ZONE")
 
   const [createOpen, setCreateOpen] = useState(false)
   const [domain, setDomain] = useState("")
@@ -83,14 +86,94 @@ export default function DnsZonesPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "domain",
+        accessorFn: (r) => zoneDomain(r),
+        header: sortableHeader("Domain"),
+        cell: ({ row, getValue }) => (
+          <Link
+            className="inline-block py-1 font-mono font-medium hover:underline"
+            to={`/p/${pid}/dns/${row.original.id}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {getValue()}
+          </Link>
+        ),
+      },
+      {
+        id: "status",
+        accessorFn: (r) => zoneStatus(r) ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "email",
+        accessorFn: (r) => zoneEmail(r),
+        header: "Contact email",
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "ttl",
+        accessorFn: (r) => zoneTtl(r) ?? -1,
+        header: sortableHeader("TTL"),
+        cell: ({ row }) => {
+          const ttl = zoneTtl(row.original)
+          return <span className="font-mono text-sm">{ttl != null ? `${ttl}s` : "—"}</span>
+        },
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${zoneDomain(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => navigate(`/p/${pid}/dns/${r.id}`)}>
+                    Manage record sets
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // pid is stable per mount; setters/navigate are stable.
+    [pid, navigate],
+  )
+
   return (
     <>
       <PageHeader
         title="DNS zones"
+        eyebrow="Network"
         description="Authoritative DNS zones managed in this project."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -100,9 +183,7 @@ export default function DnsZonesPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : !data?.length ? (
+      {!isLoading && !error && !data?.length ? (
         <EmptyState
           icon={Globe}
           title="No DNS zones yet"
@@ -114,44 +195,14 @@ export default function DnsZonesPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Domain</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>TTL</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-12" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">
-                    <Link className="hover:underline" to={`/p/${pid}/dns/${r.id}`}>
-                      {zoneDomain(r)}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={zoneStatus(r)} />
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{zoneEmail(r)}</TableCell>
-                  <TableCell className="font-mono text-sm">{zoneTtl(r)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" onClick={() => setToDelete(r)} aria-label="Delete zone">
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search DNS zones…"
+          onRowClick={(r) => navigate(`/p/${pid}/dns/${r.id}`)}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -165,6 +216,7 @@ export default function DnsZonesPage() {
               <Label htmlFor="zone-domain">Domain</Label>
               <Input
                 id="zone-domain"
+                className="font-mono"
                 value={domain}
                 onChange={(e) => setDomain(e.target.value)}
                 placeholder="example.com"
@@ -180,7 +232,7 @@ export default function DnsZonesPage() {
                 placeholder="hostmaster@example.com"
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="zone-ttl">TTL (seconds, optional)</Label>
                 <Input
@@ -230,7 +282,7 @@ export default function DnsZonesPage() {
               onClick={() => toDelete && del.mutate(toDelete.id)}
               disabled={del.isPending}
             >
-              {del.isPending ? "Deleting…" : "Delete"}
+              {del.isPending ? "Deleting…" : "Delete zone"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,19 +1,21 @@
-import { useState } from "react"
-import { Link } from "react-router-dom"
+import { useMemo, useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Plus, RefreshCw, Shield, Trash2 } from "lucide-react"
+import { MoreHorizontal, Plus, RefreshCw, Shield, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
@@ -33,8 +35,9 @@ function sgRuleCount(r: CloudResource): number | undefined {
 export default function SecurityGroupsPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
+  const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, refetch, isFetching } = useCloudList(pid, "SECURITY_GROUP")
+  const { data, isLoading, refetch, isFetching, error } = useCloudList(pid, "SECURITY_GROUP")
 
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
@@ -71,14 +74,87 @@ export default function SecurityGroupsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => sgName(r),
+        header: sortableHeader("Name"),
+        cell: ({ row, getValue }) => (
+          <Link
+            className="inline-block py-1 font-medium hover:underline"
+            to={`/p/${pid}/security-groups/${row.original.id}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {getValue()}
+          </Link>
+        ),
+      },
+      {
+        id: "description",
+        accessorFn: (r) => sgDescription(r),
+        header: "Description",
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "rules",
+        accessorFn: (r) => sgRuleCount(r) ?? -1,
+        header: sortableHeader("Rules"),
+        cell: ({ row }) => (
+          <span className="text-sm tabular-nums">{sgRuleCount(row.original) ?? "—"}</span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${sgName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => navigate(`/p/${pid}/security-groups/${r.id}`)}>
+                    Manage rules
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // pid is stable per mount; setters/navigate are stable.
+    [pid, navigate],
+  )
+
   return (
     <>
       <PageHeader
         title="Security groups"
+        eyebrow="Network"
         description="Firewall rule sets applied to servers and ports."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -88,9 +164,7 @@ export default function SecurityGroupsPage() {
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : !data?.length ? (
+      {!isLoading && !error && !data?.length ? (
         <EmptyState
           icon={Shield}
           title="No security groups yet"
@@ -102,40 +176,14 @@ export default function SecurityGroupsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Rules</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-12" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">
-                    <Link className="hover:underline" to={`/p/${pid}/security-groups/${r.id}`}>
-                      {sgName(r)}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{sgDescription(r) || "—"}</TableCell>
-                  <TableCell className="text-sm">{sgRuleCount(r) ?? "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" onClick={() => setToDelete(r)} aria-label="Delete security group">
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search security groups…"
+          onRowClick={(r) => navigate(`/p/${pid}/security-groups/${r.id}`)}
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -187,7 +235,7 @@ export default function SecurityGroupsPage() {
               onClick={() => toDelete && del.mutate(toDelete.id)}
               disabled={del.isPending}
             >
-              {del.isPending ? "Deleting…" : "Delete"}
+              {del.isPending ? "Deleting…" : "Delete security group"}
             </Button>
           </DialogFooter>
         </DialogContent>

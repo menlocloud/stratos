@@ -1,11 +1,13 @@
+import type { ReactNode } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { CheckCircle2, MailX, UserPlus } from "lucide-react"
+import { CheckCircle2, MailX } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { apiFetch } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import { fmtDateTime } from "@/lib/format"
 
 // GET /project-invites/{token} → the invite doc for the CALLER's email + token,
@@ -13,7 +15,69 @@ import { fmtDateTime } from "@/lib/format"
 type Invite = {
   email?: string
   projectId?: string
+  projectName?: string
   expiresAt?: string
+}
+
+// Deep-link brand moment: this page renders outside AppShell (email links land
+// here before the user has any project context), so it opens like Login — the
+// Menlo logo + console chip over the warm background, one focused card.
+function BrandShell({ children }: { children: ReactNode }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
+      <div className="flex w-full max-w-md flex-col gap-8">
+        <div className="flex items-center justify-center gap-2.5">
+          <img src="/brand/menlo-logo.svg" alt="Menlo" className="h-6 w-auto" />
+          <span className="text-eyebrow rounded border px-1.5 py-0.5">console</span>
+        </div>
+        {children}
+        <SignedInFooter />
+      </div>
+    </main>
+  )
+}
+
+// "Sent to a different email address" is this page's most common dead end —
+// show which account is signed in and give it an exit.
+function SignedInFooter() {
+  const auth = useAuth()
+  const email = auth.user?.profile.email
+  return (
+    <p className="text-center text-xs text-muted-foreground">
+      {email ? (
+        <>
+          Signed in as <span className="font-medium text-foreground">{email}</span>
+          {" · "}
+        </>
+      ) : null}
+      <button
+        type="button"
+        className="underline underline-offset-4 transition-colors hover:text-foreground"
+        onClick={() => void auth.signoutRedirect()}
+      >
+        Sign out
+      </button>
+    </p>
+  )
+}
+
+function BrandCardHeader({
+  eyebrow,
+  title,
+  description,
+}: {
+  eyebrow: string
+  title: string
+  description?: ReactNode
+}) {
+  return (
+    <CardHeader>
+      <div className="text-eyebrow">{eyebrow}</div>
+      <CardTitle className="font-display text-2xl font-semibold tracking-tight">{title}</CardTitle>
+      {description ? <CardDescription>{description}</CardDescription> : null}
+      <div className="horizon mt-2" />
+    </CardHeader>
+  )
 }
 
 export default function JoinProjectPage() {
@@ -49,75 +113,112 @@ export default function JoinProjectPage() {
 
   const valid = !!invite?.projectId
 
+  if (isLoading) {
+    return (
+      <BrandShell>
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-7 w-44" />
+            <Skeleton className="h-4 w-full" />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Skeleton className="h-28 w-full" />
+            <Skeleton className="h-9 w-full" />
+          </CardContent>
+        </Card>
+      </BrandShell>
+    )
+  }
+
+  if (error) {
+    return (
+      <BrandShell>
+        <Card>
+          <BrandCardHeader
+            eyebrow="Invitation"
+            title="Couldn't load the invitation"
+            description="Something went wrong while looking up this invite."
+          />
+          <CardContent className="space-y-4">
+            <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {(error as Error).message}
+            </p>
+            <Button variant="outline" className="w-full" onClick={() => navigate("/")}>
+              Go to console
+            </Button>
+          </CardContent>
+        </Card>
+      </BrandShell>
+    )
+  }
+
+  if (!valid) {
+    return (
+      <BrandShell>
+        <Card>
+          <BrandCardHeader
+            eyebrow="Invitation"
+            title="Invite not found"
+            description="This invitation is invalid, has expired, or was sent to a different email address than the account you are signed in with."
+          />
+          <CardContent className="flex flex-col items-center gap-6 pt-2">
+            <div className="flex size-12 items-center justify-center rounded-full border bg-muted/50">
+              <MailX className="size-6 text-muted-foreground" strokeWidth={1.5} />
+            </div>
+            <Button className="w-full" onClick={() => navigate("/")}>
+              Go to console
+            </Button>
+          </CardContent>
+        </Card>
+      </BrandShell>
+    )
+  }
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
-        {isLoading ? (
-          <CardContent className="py-8">
-            <Skeleton className="h-32" />
-          </CardContent>
-        ) : error ? (
-          <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            {(error as Error).message}
-          </CardContent>
-        ) : !valid ? (
-          <>
-            <CardHeader className="items-center text-center">
-              <MailX className="mx-auto mb-2 size-10 text-muted-foreground/60" strokeWidth={1.5} />
-              <CardTitle>Invite not found</CardTitle>
-            </CardHeader>
-            <CardContent className="text-center">
-              <p className="text-sm text-muted-foreground">
-                This invitation is invalid, has expired, or was sent to a different email address than the
-                account you are signed in with.
-              </p>
-              <Button className="mt-6" onClick={() => navigate("/")}>
-                Go to console
-              </Button>
-            </CardContent>
-          </>
-        ) : (
-          <>
-            <CardHeader className="items-center text-center">
-              <UserPlus className="mx-auto mb-2 size-10 text-primary" strokeWidth={1.5} />
-              <CardTitle>Project invitation</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-center text-sm text-muted-foreground">
-                You have been invited to join a project. Accepting adds you to the project and its
-                organization.
-              </p>
-              <dl className="mt-6 space-y-2 rounded-md border bg-muted/30 p-4 text-sm">
-                <div className="flex justify-between gap-4">
-                  <dt className="text-muted-foreground">Invited email</dt>
-                  <dd className="font-medium">{invite?.email ?? "—"}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt className="text-muted-foreground">Project</dt>
-                  <dd className="font-mono text-xs">{invite?.projectId}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt className="text-muted-foreground">Expires</dt>
-                  <dd>{fmtDateTime(invite?.expiresAt)}</dd>
-                </div>
-              </dl>
-              <div className="mt-6 flex justify-center gap-3">
-                <Button
-                  variant="outline"
-                  onClick={() => decline.mutate()}
-                  disabled={decline.isPending || accept.isPending}
-                >
-                  {decline.isPending ? "Declining…" : "Decline"}
-                </Button>
-                <Button onClick={() => accept.mutate()} disabled={accept.isPending || decline.isPending}>
-                  <CheckCircle2 className="size-4" />
-                  {accept.isPending ? "Accepting…" : "Accept invite"}
-                </Button>
-              </div>
-            </CardContent>
-          </>
-        )}
+    <BrandShell>
+      <Card>
+        <BrandCardHeader
+          eyebrow="Invitation"
+          title="Join project"
+          description="You have been invited to join a project. Accepting adds you to the project and its organization."
+        />
+        <CardContent>
+          <dl className="divide-y rounded-lg border text-sm">
+            <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+              <dt className="text-muted-foreground">Invited email</dt>
+              <dd className="truncate font-medium">{invite?.email ?? "—"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+              <dt className="text-muted-foreground">Project</dt>
+              <dd className="truncate">
+                {invite?.projectName ? (
+                  <span className="font-medium">{invite.projectName}</span>
+                ) : (
+                  <span className="font-mono text-xs">{invite?.projectId}</span>
+                )}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+              <dt className="text-muted-foreground">Expires</dt>
+              <dd>{fmtDateTime(invite?.expiresAt)}</dd>
+            </div>
+          </dl>
+          <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Button
+              variant="outline"
+              onClick={() => decline.mutate()}
+              disabled={decline.isPending || accept.isPending}
+            >
+              {decline.isPending ? "Declining…" : "Decline"}
+            </Button>
+            <Button onClick={() => accept.mutate()} disabled={accept.isPending || decline.isPending}>
+              <CheckCircle2 className="size-4" />
+              {accept.isPending ? "Accepting…" : "Accept invite"}
+            </Button>
+          </div>
+        </CardContent>
       </Card>
-    </div>
+    </BrandShell>
   )
 }

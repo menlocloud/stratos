@@ -1,20 +1,20 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
+import { Link } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { CreditCard, Download, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
-import { useAdminList } from "@/lib/hooks"
+import { useAdminList, useTabParam } from "@/lib/hooks"
 import { fmtDateTime, fmtMoney } from "@/lib/format"
 
 // Platform-wide transaction lists (the old admin's global Financial → Transactions):
@@ -46,8 +46,22 @@ async function downloadResponse(resp: Response, fallback: string) {
   URL.revokeObjectURL(url)
 }
 
+function BpCell({ id }: { id?: string }) {
+  return id ? (
+    <Link
+      className="inline-block py-1 font-mono text-xs hover:underline"
+      to={`/clients/billing-profiles/${id}`}
+    >
+      {id}
+    </Link>
+  ) : (
+    <span className="font-mono text-xs text-muted-foreground">—</span>
+  )
+}
+
 export default function TransactionsPage() {
   const qc = useQueryClient()
+  const [tab, setTab] = useTabParam("credits")
   const profiles = useAdminList<Row>("/admin/billing-profile")
   const [selected, setSelected] = useState("") // "" = all profiles
 
@@ -78,14 +92,152 @@ export default function TransactionsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const creditColumns = useMemo<ColumnDef<Row, any>[]>(
+    () => [
+      {
+        id: "date",
+        accessorFn: (t) => (t.createdAt as string) ?? "",
+        header: sortableHeader("Date"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDateTime(getValue())}</span>,
+      },
+      {
+        id: "profile",
+        accessorFn: (t) => (t.billingProfileId as string) ?? "",
+        header: "Billing profile",
+        cell: ({ row }) => <BpCell id={row.original.billingProfileId} />,
+      },
+      {
+        id: "status",
+        accessorFn: (t) => (t.status as string) ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "amount",
+        accessorFn: (t) => Number(t.amount ?? 0),
+        header: sortableRightHeader("Amount"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono text-sm tabular-nums">
+            {fmtMoney(row.original.amount, row.original.currency)}
+          </div>
+        ),
+      },
+      {
+        id: "externalId",
+        accessorFn: (t) => (t.externalId as string) ?? "",
+        header: "External ID",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          // Gateway re-sync only re-drives a PENDING deposit; settled rows get no dead button.
+          if ((row.original.status as string) !== "PENDING") return null
+          const busy = sync.isPending && sync.variables === row.original.id
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Re-sync transaction ${row.original.id}`}
+                disabled={sync.isPending}
+                onClick={() => sync.mutate(row.original.id)}
+              >
+                <RefreshCw className={busy ? "size-4 animate-spin" : "size-4"} />
+              </Button>
+            </div>
+          )
+        },
+      },
+    ],
+    // sync.isPending/variables drive the row buttons' disabled/spinner state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sync.isPending, sync.variables],
+  )
+
+  const collectColumns = useMemo<ColumnDef<Row, any>[]>(
+    () => [
+      {
+        id: "date",
+        accessorFn: (t) => (t.createdAt as string) ?? "",
+        header: sortableHeader("Date"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDateTime(getValue())}</span>,
+      },
+      {
+        id: "profile",
+        accessorFn: (t) => (t.billingProfileId as string) ?? "",
+        header: "Billing profile",
+        cell: ({ row }) => <BpCell id={row.original.billingProfileId} />,
+      },
+      {
+        id: "status",
+        accessorFn: (t) => (t.status as string) ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "amount",
+        accessorFn: (t) => Number(t.amount ?? 0),
+        header: sortableRightHeader("Amount"),
+        cell: ({ row }) => (
+          <div className="text-right font-mono text-sm tabular-nums">
+            {fmtMoney(row.original.amount, row.original.currency)}
+          </div>
+        ),
+      },
+      {
+        id: "gateway",
+        accessorFn: (t) => (t.paymentGatewayId as string) ?? "",
+        header: "Gateway",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "externalId",
+        accessorFn: (t) => (t.externalId as string) ?? "",
+        header: "External ID",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="text-right" onClick={(e) => e.stopPropagation()}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Download receipt for transaction ${row.original.id}`}
+              disabled={download.isPending}
+              onClick={() => download.mutate(row.original.id)}
+            >
+              <Download className="size-4" />
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    // download.isPending drives the disabled state on the row buttons.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [download.isPending],
+  )
+
   return (
     <>
       <PageHeader
         title="Transactions"
+        eyebrow="Clients"
         description="Every deposit and collect transaction across all billing profiles. Filter by profile with the picker."
         actions={
           <Select value={selected || "all"} onValueChange={(v) => setSelected(v === "all" ? "" : v)}>
-            <SelectTrigger className="w-64">
+            <SelectTrigger className="w-64" aria-label="Filter by billing profile">
               <SelectValue placeholder="All profiles" />
             </SelectTrigger>
             <SelectContent>
@@ -105,107 +257,54 @@ export default function TransactionsPage() {
           {(credits.error as Error).message}
         </div>
       ) : (
-        <Tabs defaultValue="credits">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
-            <TabsTrigger value="credits">Account credit</TabsTrigger>
-            <TabsTrigger value="collects">Collect</TabsTrigger>
+            <TabsTrigger value="credits">
+              Account credit{credits.data ? ` (${creditRows.length})` : ""}
+            </TabsTrigger>
+            <TabsTrigger value="collects">
+              Collect{collects.data ? ` (${collectRows.length})` : ""}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="credits" className="mt-4">
-            {credits.isLoading ? (
-              <Skeleton className="h-48" />
-            ) : !creditRows.length ? (
-              <EmptyState icon={CreditCard} title="No deposit transactions" hint={selected ? "No deposits for this profile." : "Client deposits will show up here."} />
+            {!credits.isLoading && !creditRows.length ? (
+              <EmptyState
+                icon={CreditCard}
+                title="No deposit transactions"
+                hint={selected ? "No deposits for this profile." : "Client deposits will show up here."}
+              />
             ) : (
-              <Card className="overflow-hidden py-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Billing profile</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>External ID</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {creditRows.map((t) => (
-                      <TableRow key={t.id}>
-                        <TableCell className="text-sm text-muted-foreground">{fmtDateTime(t.createdAt)}</TableCell>
-                        <TableCell className="font-mono text-xs">{t.billingProfileId}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={t.status} />
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-sm tabular-nums">
-                          {fmtMoney(t.amount, t.currency)}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{t.externalId ?? "—"}</TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={sync.isPending}
-                            onClick={() => sync.mutate(t.id)}
-                          >
-                            <RefreshCw className={sync.isPending ? "size-4 animate-spin" : "size-4"} /> Sync
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Card>
+              <DataTable
+                columns={creditColumns}
+                data={creditRows}
+                isLoading={credits.isLoading}
+                searchPlaceholder="Search deposits…"
+                getRowId={(t) => t.id}
+                initialSorting={[{ id: "date", desc: true }]}
+                pageSize={25}
+              />
             )}
           </TabsContent>
 
           <TabsContent value="collects" className="mt-4">
-            {collects.isLoading ? (
-              <Skeleton className="h-48" />
-            ) : !collectRows.length ? (
-              <EmptyState icon={CreditCard} title="No collect transactions" hint={selected ? "No collect charges for this profile." : "Card charges for bills land here."} />
+            {!collects.isLoading && !collectRows.length ? (
+              <EmptyState
+                icon={CreditCard}
+                title="No collect transactions"
+                hint={selected ? "No collect charges for this profile." : "Card charges for bills land here."}
+              />
             ) : (
-              <Card className="overflow-hidden py-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Billing profile</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Gateway</TableHead>
-                      <TableHead>External ID</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {collectRows.map((t) => (
-                      <TableRow key={t.id}>
-                        <TableCell className="text-sm text-muted-foreground">{fmtDateTime(t.createdAt)}</TableCell>
-                        <TableCell className="font-mono text-xs">{t.billingProfileId}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={t.status} />
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-sm tabular-nums">
-                          {fmtMoney(t.amount, t.currency)}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{t.paymentGatewayId ?? "—"}</TableCell>
-                        <TableCell className="font-mono text-xs">{t.externalId ?? "—"}</TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={download.isPending}
-                            onClick={() => download.mutate(t.id)}
-                          >
-                            <Download className="size-4" /> Download
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Card>
+              <DataTable
+                columns={collectColumns}
+                data={collectRows}
+                isLoading={collects.isLoading}
+                error={collects.isError ? (collects.error as Error) : null}
+                searchPlaceholder="Search collect charges…"
+                getRowId={(t) => t.id}
+                initialSorting={[{ id: "date", desc: true }]}
+                pageSize={25}
+              />
             )}
           </TabsContent>
         </Tabs>

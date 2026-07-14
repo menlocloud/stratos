@@ -1,13 +1,14 @@
-import { useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useMemo, useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { FolderKanban, Pause, Play, RefreshCw } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table"
+import { FolderKanban, MoreHorizontal, Pause, Play, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -16,8 +17,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { apiFetch } from "@/lib/api"
 import { fmtDate } from "@/lib/format"
 import { useAdminList } from "@/lib/hooks"
@@ -30,6 +35,7 @@ type Project = {
   status?: string
   organizationId?: string
   organization?: { name?: string }
+  billingProfileId?: string
   createdAt?: string
 }
 
@@ -79,92 +85,152 @@ export default function ProjectsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<Project, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (p) => p.name ?? "",
+        header: sortableHeader("Name"),
+        cell: ({ row }) => {
+          const p = row.original
+          return p.id ? (
+            <Link
+              to={`/clients/projects/${p.id}`}
+              className="inline-block py-1 font-medium hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {p.name ?? "—"}
+            </Link>
+          ) : (
+            <span className="font-medium">{p.name ?? "—"}</span>
+          )
+        },
+      },
+      {
+        id: "status",
+        accessorFn: (p) => p.status ?? "",
+        header: sortableHeader("Status"),
+        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+      },
+      {
+        id: "organization",
+        accessorFn: (p) => p.organization?.name ?? p.organizationId ?? "",
+        header: sortableHeader("Organization"),
+        cell: ({ row }) => {
+          const p = row.original
+          if (!p.organizationId) return <span className="text-sm text-muted-foreground">—</span>
+          return (
+            <Link
+              to={`/clients/organizations/${p.organizationId}`}
+              className={
+                p.organization?.name
+                  ? "inline-block py-1 text-sm hover:underline"
+                  : "inline-block py-1 font-mono text-xs text-muted-foreground hover:underline"
+              }
+              onClick={(e) => e.stopPropagation()}
+            >
+              {p.organization?.name ?? p.organizationId}
+            </Link>
+          )
+        },
+      },
+      {
+        id: "billingProfile",
+        accessorFn: (p) => p.billingProfileId ?? "",
+        header: "Billing profile",
+        cell: ({ row }) => {
+          const bp = row.original.billingProfileId
+          return bp ? (
+            <Link
+              to={`/clients/billing-profiles/${bp}`}
+              className="inline-block py-1 font-mono text-xs text-muted-foreground hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {bp}
+            </Link>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground">—</span>
+          )
+        },
+      },
+      {
+        id: "id",
+        accessorFn: (p) => p.id ?? "",
+        header: "ID",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (p) => p.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDate(getValue())}</span>,
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const p = row.original
+          const enabled = (p.status ?? "").toUpperCase() === "ENABLED"
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${p.name ?? p.id}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {enabled ? (
+                    <DropdownMenuItem onClick={() => setPending({ project: p, kind: "DISABLED" })}>
+                      <Pause className="size-4" /> Disable
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem onClick={() => setPending({ project: p, kind: "ENABLED" })}>
+                      <Play className="size-4" /> Enable
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onClick={() => setPending({ project: p, kind: "sync" })}>
+                    <RefreshCw className="size-4" /> Sync
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Projects"
+        eyebrow="Clients"
         description="Client projects across every organization."
         actions={
-          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-            <RefreshCw className={isFetching ? "animate-spin" : ""} />
-            Refresh
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching} aria-label="Refresh">
+            <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
           </Button>
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">
-          {(error as Error).message}
-        </div>
-      ) : projects.length === 0 ? (
+      {!isLoading && !error && projects.length === 0 ? (
         <EmptyState icon={FolderKanban} title="No projects yet" hint="Projects appear when clients create them." />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Organization</TableHead>
-                <TableHead>ID</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-40 text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {projects.map((p) => {
-                const enabled = (p.status ?? "").toUpperCase() === "ENABLED"
-                return (
-                  <TableRow
-                    key={p.id}
-                    className="cursor-pointer"
-                    onClick={() => p.id && navigate(`/clients/projects/${p.id}`)}
-                  >
-                    <TableCell className="font-medium">{p.name ?? "—"}</TableCell>
-                    <TableCell>
-                      <StatusBadge status={p.status} />
-                    </TableCell>
-                    <TableCell>
-                      {p.organization?.name ?? (
-                        <span className="font-mono text-xs text-muted-foreground">{p.organizationId ?? "—"}</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{p.id ?? "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{fmtDate(p.createdAt)}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setPending({ project: p, kind: enabled ? "DISABLED" : "ENABLED" })
-                          }}
-                        >
-                          {enabled ? <Pause /> : <Play />}
-                          {enabled ? "Disable" : "Enable"}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setPending({ project: p, kind: "sync" })
-                          }}
-                        >
-                          <RefreshCw />
-                          Sync
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={projects}
+          isLoading={isLoading}
+          error={error as Error | null}
+          searchPlaceholder="Search projects…"
+          onRowClick={(p) => p.id && navigate(`/clients/projects/${p.id}`)}
+          getRowId={(p) => p.id ?? p.name ?? ""}
+        />
       )}
 
       {/* Action confirm */}

@@ -1,21 +1,23 @@
 // Keypairs: list KEYPAIR cloud resources, create (data{name, publicKey?} per
 // internal/cloud/providers/write.go TypeKeypair; a nova-generated private key comes back
 // once as ephemeralData.privateKey) and delete with confirm.
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Copy, Download, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Copy, Download, KeyRound, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
@@ -56,7 +58,7 @@ export default function KeypairsPage() {
       }),
     onSuccess: (res) => {
       const kpName = name.trim()
-      toast.success(`Keypair "${kpName}" created`)
+      toast.success(`Key pair "${kpName}" created`)
       setCreateOpen(false)
       setName("")
       setPublicKey("")
@@ -71,7 +73,7 @@ export default function KeypairsPage() {
     mutationFn: (r: CloudResource) =>
       apiFetch(`/project/${pid}/cloud/${r.id}`, { method: "DELETE", cloud: scope }),
     onSuccess: (_d, r) => {
-      toast.success(`Keypair "${keypairName(r)}" deleted`)
+      toast.success(`Key pair "${keypairName(r)}" deleted`)
       invalidate()
     },
     onError: (e: Error) => toast.error(e.message),
@@ -92,77 +94,104 @@ export default function KeypairsPage() {
     URL.revokeObjectURL(url)
   }
 
+  const columns = useMemo<ColumnDef<CloudResource, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (r) => keypairName(r),
+        header: sortableHeader("Name"),
+        cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+      },
+      {
+        id: "fingerprint",
+        accessorFn: (r) => keypairFingerprint(r),
+        header: "Fingerprint",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue()}</span>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (r) => r.info?.createdAt ?? r.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => (
+          <span className="text-sm text-muted-foreground">{timeAgo(getValue())}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: () => null,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const r = row.original
+          return (
+            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${keypairName(r)}`}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem variant="destructive" onClick={() => setToDelete(r)}>
+                    <Trash2 className="size-4" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        },
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   return (
     <>
       <PageHeader
-        title="Keypairs"
-        description="SSH keypairs injected into servers at boot."
+        title="Key pairs"
+        eyebrow="Compute"
+        description="SSH key pairs injected into servers at boot."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching} aria-label="Refresh">
               <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" /> Create keypair
+              <Plus className="size-4" /> Create key pair
             </Button>
           </>
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <p className="rounded-md bg-muted p-4 text-sm text-muted-foreground">{(error as Error).message}</p>
-      ) : !data?.length ? (
+      {!isLoading && !error && !data?.length ? (
         <EmptyState
           icon={KeyRound}
-          title="No keypairs yet"
-          hint="Create a keypair to SSH into your servers — import your public key or let the cloud generate one."
+          title="No key pairs yet"
+          hint="Create a key pair to SSH into your servers — import your public key or let the cloud generate one."
           action={
             <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" /> Create keypair
+              <Plus className="size-4" /> Create key pair
             </Button>
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Fingerprint</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-16" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">{keypairName(r)}</TableCell>
-                  <TableCell className="font-mono text-sm text-muted-foreground">
-                    {keypairFingerprint(r)}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {timeAgo(r.info?.createdAt ?? r.createdAt)}
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" onClick={() => setToDelete(r)}>
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={data}
+          isLoading={isLoading}
+          error={error ? (error as Error) : null}
+          searchPlaceholder="Search key pairs…"
+        />
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create keypair</DialogTitle>
+            <DialogTitle>Create key pair</DialogTitle>
             <DialogDescription>
-              Leave the public key empty to have a new keypair generated — the private key is shown only once.
+              Leave the public key empty to have a new key pair generated — the private key is shown only once.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
@@ -178,7 +207,7 @@ export default function KeypairsPage() {
                 onChange={(e) => setPublicKey(e.target.value)}
                 placeholder="ssh-ed25519 AAAA…"
                 rows={4}
-                className="font-mono text-xs"
+                className="max-h-40 font-mono text-xs"
               />
             </div>
           </div>
@@ -187,7 +216,7 @@ export default function KeypairsPage() {
               Cancel
             </Button>
             <Button onClick={() => create.mutate()} disabled={!name.trim() || create.isPending}>
-              {create.isPending ? "Creating…" : "Create keypair"}
+              {create.isPending ? "Creating…" : "Create key pair"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -201,7 +230,7 @@ export default function KeypairsPage() {
               This is the only time the private key is shown — copy or download it now.
             </DialogDescription>
           </DialogHeader>
-          <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-all">
+          <pre className="max-h-64 overflow-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs whitespace-pre-wrap break-all">
             {privateKey?.key}
           </pre>
           <DialogFooter>
@@ -218,9 +247,9 @@ export default function KeypairsPage() {
       <Dialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete keypair</DialogTitle>
+            <DialogTitle>Delete key pair</DialogTitle>
             <DialogDescription>
-              Delete keypair “{toDelete ? keypairName(toDelete) : ""}”? This cannot be undone.
+              Delete key pair “{toDelete ? keypairName(toDelete) : ""}”? This cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

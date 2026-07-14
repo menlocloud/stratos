@@ -4,9 +4,9 @@ import { toast } from "sonner"
 import { ExternalLink, KeyRound, Pencil, Plus, ScrollText, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
-import { Badge } from "@/components/ui/badge"
+import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -17,6 +17,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { apiFetch, apiFetchEnvelope, apiFetchRaw } from "@/lib/api"
 import { config } from "@/lib/config"
 import { fmtDate, fmtDateTime } from "@/lib/format"
+import { cn } from "@/lib/utils"
+import { identityChip } from "../org/AuditPage"
 
 // GET /account/details — RAW endpoint (AccountDetailsDTO, no envelope).
 type AccountDetails = {
@@ -52,6 +54,8 @@ export default function AccountPage() {
   })
 
   // Security log: GET /account/audit — cursor-paged CursorList envelope.
+  // Same escape hatch as the org audit page: server-ordered cursor walk,
+  // bare styled table, "Load more", no client sorting.
   const audit = useInfiniteQuery({
     queryKey: ["account-audit"],
     queryFn: ({ pageParam }) =>
@@ -110,27 +114,36 @@ export default function AccountPage() {
 
   const customInfo = Object.entries(details?.customInfo ?? {})
   const fullName = [details?.firstName, details?.lastName].filter(Boolean).join(" ")
+  const avatarInitial = (details?.firstName || details?.email || details?.sub || "?").charAt(0).toUpperCase()
   // config.authIssuer = <keycloak origin>/realms/clients → the Keycloak account console.
   const keycloakAccountUrl = `${config.authIssuer.replace(/\/$/, "")}/account`
 
   return (
     <>
-      <PageHeader title="Account" description="Your profile, security log and custom info." />
+      <PageHeader
+        title="Account"
+        eyebrow="Account"
+        description="Your profile, security log and custom info."
+      />
 
       {isLoading ? (
-        <Skeleton className="h-64" />
+        <div className="space-y-6">
+          <Skeleton className="h-44" />
+          <Skeleton className="h-20" />
+          <Skeleton className="h-32" />
+        </div>
       ) : error ? (
         <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
           {(error as Error).message}
         </div>
       ) : (
         <div className="space-y-6">
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle>Profile</CardTitle>
+          <Card className="gap-0 overflow-hidden py-0">
+            <div className="flex items-center justify-between border-b px-5 py-2.5">
+              <span className="text-eyebrow">Profile</span>
               <Button
                 size="sm"
-                variant="outline"
+                variant="ghost"
                 onClick={() => {
                   setFirstName(details?.firstName ?? "")
                   setLastName(details?.lastName ?? "")
@@ -139,15 +152,22 @@ export default function AccountPage() {
               >
                 <Pencil className="size-4" /> Edit name
               </Button>
-            </CardHeader>
-            <CardContent className="flex items-start gap-4">
+            </div>
+            <div className="flex items-start gap-5 p-5">
+              {/* Avatar: gravatar when present, else an identity-hued initial chip. */}
               {details?.gravatarUrl ? (
-                <img
-                  src={details.gravatarUrl}
-                  alt=""
-                  className="size-16 shrink-0 rounded-full border"
-                />
-              ) : null}
+                <img src={details.gravatarUrl} alt="" className="size-14 shrink-0 rounded-full border" />
+              ) : (
+                <div
+                  aria-hidden
+                  className={cn(
+                    "flex size-14 shrink-0 items-center justify-center rounded-full border font-display text-xl font-semibold",
+                    identityChip(details?.sub ?? "account"),
+                  )}
+                >
+                  {avatarInitial}
+                </div>
+              )}
               <dl className="grid flex-1 gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
                 <div>
                   <dt className="text-muted-foreground">Name</dt>
@@ -166,16 +186,14 @@ export default function AccountPage() {
                   <dd>{fmtDate(details?.createdAt)}</dd>
                 </div>
               </dl>
-            </CardContent>
+            </div>
           </Card>
 
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle>Password & two-factor auth</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-center justify-between gap-3">
+          <Card className="gap-0 overflow-hidden py-0">
+            <div className="text-eyebrow border-b px-5 py-3">Password & two-factor auth</div>
+            <div className="flex flex-wrap items-center justify-between gap-3 p-5">
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                <KeyRound className="size-4 shrink-0" />
+                <KeyRound className="size-4 shrink-0" strokeWidth={1.5} />
                 Password and two-factor authentication are managed by the identity provider.
               </p>
               <Button size="sm" variant="outline" asChild>
@@ -183,24 +201,24 @@ export default function AccountPage() {
                   Open account console <ExternalLink className="size-4" />
                 </a>
               </Button>
-            </CardContent>
+            </div>
           </Card>
 
-          <Card className="gap-0 overflow-hidden pb-0">
-            <CardHeader className="flex-row items-center justify-between pb-4">
-              <CardTitle>Custom info</CardTitle>
-              <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
+          <Card className="gap-0 overflow-hidden py-0">
+            <div className="flex items-center justify-between border-b px-5 py-2.5">
+              <span className="text-eyebrow">Custom info</span>
+              <Button size="sm" variant="ghost" onClick={() => setAddOpen(true)}>
                 <Plus className="size-4" /> Add entry
               </Button>
-            </CardHeader>
+            </div>
             {!customInfo.length ? (
-              <CardContent className="pb-6 text-sm text-muted-foreground">
+              <p className="p-5 text-sm text-muted-foreground">
                 No custom info entries. Key/value pairs stored on your user record.
-              </CardContent>
+              </p>
             ) : (
               <Table>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>Key</TableHead>
                     <TableHead>Value</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -210,10 +228,15 @@ export default function AccountPage() {
                   {customInfo.map(([k, v]) => (
                     <TableRow key={k}>
                       <TableCell className="font-mono text-xs">{k}</TableCell>
-                      <TableCell className="text-sm">{String(v)}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{String(v)}</TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => setCiDeleting(k)}>
-                          <Trash2 className="size-4" /> Delete
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Delete custom info ${k}`}
+                          onClick={() => setCiDeleting(k)}
+                        >
+                          <Trash2 className="size-4" />
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -224,7 +247,10 @@ export default function AccountPage() {
           </Card>
 
           <div>
-            <h2 className="mb-3 font-display text-lg font-semibold">Security log</h2>
+            <div className="mb-3">
+              <h2 className="font-display text-lg font-semibold">Security log</h2>
+              <p className="text-sm text-muted-foreground">Recent activity on your account.</p>
+            </div>
             {audit.isLoading ? (
               <Skeleton className="h-40" />
             ) : audit.error ? (
@@ -238,7 +264,7 @@ export default function AccountPage() {
                 <Card className="overflow-hidden py-0">
                   <Table>
                     <TableHeader>
-                      <TableRow>
+                      <TableRow className="hover:bg-transparent">
                         <TableHead>Time</TableHead>
                         <TableHead>Event</TableHead>
                         <TableHead>Outcome</TableHead>
@@ -248,16 +274,18 @@ export default function AccountPage() {
                     <TableBody>
                       {events.map((e, i) => (
                         <TableRow key={e.id ?? i}>
-                          <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                          <TableCell className="whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground">
                             {fmtDateTime(e.timestamp)}
                           </TableCell>
                           <TableCell>
-                            <Badge variant="secondary">{e.action ?? "—"}</Badge>
+                            <span className="font-mono text-xs">{e.action ?? "—"}</span>
                             {e.resourceType ? (
                               <span className="ml-2 text-xs text-muted-foreground">{e.resourceType}</span>
                             ) : null}
                           </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{e.outcome ?? "—"}</TableCell>
+                          <TableCell>
+                            <StatusBadge status={e.outcome} />
+                          </TableCell>
                           <TableCell className="font-mono text-xs text-muted-foreground">
                             {e.actor?.ipAddress ?? "—"}
                           </TableCell>
@@ -266,8 +294,8 @@ export default function AccountPage() {
                     </TableBody>
                   </Table>
                 </Card>
-                {audit.hasNextPage ? (
-                  <div className="mt-4 text-center">
+                <div className="mt-4 flex flex-col items-center gap-2">
+                  {audit.hasNextPage ? (
                     <Button
                       variant="outline"
                       onClick={() => void audit.fetchNextPage()}
@@ -275,8 +303,12 @@ export default function AccountPage() {
                     >
                       {audit.isFetchingNextPage ? "Loading…" : "Load more"}
                     </Button>
-                  </div>
-                ) : null}
+                  ) : null}
+                  <p className="font-mono text-xs text-muted-foreground">
+                    {events.length} event{events.length === 1 ? "" : "s"} loaded
+                    {audit.hasNextPage ? "" : " · end of log"}
+                  </p>
+                </div>
               </>
             )}
           </div>
@@ -290,12 +322,24 @@ export default function AccountPage() {
           </DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <Label className="mb-1.5 block">First name</Label>
-              <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} maxLength={100} />
+              <Label className="mb-1.5 block" htmlFor="account-first-name">First name</Label>
+              <Input
+                id="account-first-name"
+                autoComplete="given-name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                maxLength={100}
+              />
             </div>
             <div>
-              <Label className="mb-1.5 block">Last name</Label>
-              <Input value={lastName} onChange={(e) => setLastName(e.target.value)} maxLength={100} />
+              <Label className="mb-1.5 block" htmlFor="account-last-name">Last name</Label>
+              <Input
+                id="account-last-name"
+                autoComplete="family-name"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                maxLength={100}
+              />
             </div>
           </div>
           <DialogFooter>
@@ -315,14 +359,28 @@ export default function AccountPage() {
             <DialogTitle>Add custom info</DialogTitle>
             <DialogDescription>A key/value pair stored on your user record.</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <Label className="mb-1.5 block">Key</Label>
-              <Input value={ciKey} onChange={(e) => setCiKey(e.target.value)} placeholder="lang" />
+              <Label className="mb-1.5 block" htmlFor="ci-key">Key</Label>
+              <Input
+                id="ci-key"
+                autoComplete="off"
+                className="font-mono"
+                value={ciKey}
+                onChange={(e) => setCiKey(e.target.value)}
+                placeholder="lang"
+              />
             </div>
             <div>
-              <Label className="mb-1.5 block">Value</Label>
-              <Input value={ciValue} onChange={(e) => setCiValue(e.target.value)} placeholder="en-us" />
+              <Label className="mb-1.5 block" htmlFor="ci-value">Value</Label>
+              <Input
+                id="ci-value"
+                autoComplete="off"
+                className="font-mono"
+                value={ciValue}
+                onChange={(e) => setCiValue(e.target.value)}
+                placeholder="en-us"
+              />
             </div>
           </div>
           <DialogFooter>

@@ -33,28 +33,37 @@ func gpuLimitFor(quota map[string]any, model string) (limit int, limited bool) {
 	return 0, false
 }
 
-// gpuUsage sums the project's cached servers' GPU devices per model (DELETED excluded —
-// everything else, including ERROR, still holds its devices until the server is gone).
-func (h *Handler) gpuUsage(ctx context.Context, projectID string) map[string]int {
+// gpuUsageDetail sums the project's cached servers' GPU devices per model (DELETED excluded —
+// everything else, including ERROR, still holds its devices until the server is gone). Keeping
+// the repository error lets read surfaces warn instead of presenting a misleading zero; the
+// create/resize gate intentionally retains its existing fail-open behavior through gpuUsage.
+func (h *Handler) gpuUsageDetail(ctx context.Context, projectID string) (map[string]int, error) {
 	out := map[string]int{}
-	crs, err := h.cloud.FindByProjectAndType(ctx, projectID, cloud.TypeServer)
-	if err != nil {
-		return out
+	for _, resourceType := range []string{cloud.TypeServer, cloud.TypeBaremetalServer} {
+		crs, err := h.cloud.FindByProjectAndType(ctx, projectID, resourceType)
+		if err != nil {
+			return out, err
+		}
+		for i := range crs {
+			srv, ok := crs[i].Data["server"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if status, _ := srv["status"].(string); status == "DELETED" {
+				continue
+			}
+			fl, _ := srv["flavor"].(map[string]any)
+			if model, n := cloud.GPUFromFlavor(fl["extra_specs"]); n > 0 {
+				out[model] += n
+			}
+		}
 	}
-	for i := range crs {
-		srv, ok := crs[i].Data["server"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if status, _ := srv["status"].(string); status == "DELETED" {
-			continue
-		}
-		fl, _ := srv["flavor"].(map[string]any)
-		if model, n := cloud.GPUFromFlavor(fl["extra_specs"]); n > 0 {
-			out[model] += n
-		}
-	}
-	return out
+	return out, nil
+}
+
+func (h *Handler) gpuUsage(ctx context.Context, projectID string) map[string]int {
+	usage, _ := h.gpuUsageDetail(ctx, projectID)
+	return usage
 }
 
 // enforceGPUQuota rejects a server create/resize that would push the project's GPU usage

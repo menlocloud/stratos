@@ -1,12 +1,15 @@
 import { useState } from "react"
-import { useParams } from "react-router-dom"
+import { Link, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { Plus, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatusBadge } from "@/components/status-badge"
+import { Badge } from "@/components/ui/badge"
+import {
+  Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -36,6 +39,28 @@ function portRange(rule: SgRule): string {
   if (rule.port_range_min == null && rule.port_range_max == null) return "any"
   if (rule.port_range_min === rule.port_range_max) return String(rule.port_range_min)
   return `${rule.port_range_min ?? "*"} – ${rule.port_range_max ?? "*"}`
+}
+
+function SgBreadcrumb({ pid, name }: { pid: string; name?: string }) {
+  return (
+    <Breadcrumb>
+      <BreadcrumbList>
+        <BreadcrumbItem>
+          <BreadcrumbLink asChild>
+            <Link to={`/p/${pid}/security-groups`}>Security groups</Link>
+          </BreadcrumbLink>
+        </BreadcrumbItem>
+        {name ? (
+          <>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>{name}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </>
+        ) : null}
+      </BreadcrumbList>
+    </Breadcrumb>
+  )
 }
 
 export default function SecurityGroupDetailPage() {
@@ -112,8 +137,11 @@ export default function SecurityGroupDetailPage() {
   if (isLoading || !group) {
     return (
       <>
-        <PageHeader title="Security group" />
-        <Skeleton className="h-72" />
+        <PageHeader title="Security group" eyebrow="Network" breadcrumb={<SgBreadcrumb pid={pid} />} />
+        <div className="grid gap-3">
+          <Skeleton className="h-9 w-64" />
+          <Skeleton className="h-64" />
+        </div>
       </>
     )
   }
@@ -125,7 +153,9 @@ export default function SecurityGroupDetailPage() {
     <>
       <PageHeader
         title={name}
+        eyebrow="Network"
         description={(sg.description as string) || "Security group rules."}
+        breadcrumb={<SgBreadcrumb pid={pid} name={name} />}
         actions={
           <Button size="sm" onClick={() => setAddOpen(true)}>
             <Plus className="size-4" /> Add rule
@@ -138,51 +168,55 @@ export default function SecurityGroupDetailPage() {
         <span className="font-mono text-xs text-muted-foreground">{group.externalId}</span>
       </div>
 
-      <Card className="overflow-hidden py-0">
-        <CardHeader className="pt-6">
-          <CardTitle className="text-base">Rules</CardTitle>
-        </CardHeader>
-        <CardContent className="px-0 pb-0">
-          {rules.isLoading ? (
-            <Skeleton className="m-6 h-32" />
-          ) : rules.isError ? (
-            <p className="p-6 text-sm text-muted-foreground">{(rules.error as Error).message}</p>
-          ) : !rules.data?.result?.length ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">No rules in this group.</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Direction</TableHead>
-                  <TableHead>Ether type</TableHead>
-                  <TableHead>Protocol</TableHead>
-                  <TableHead>Port range</TableHead>
-                  <TableHead>Remote</TableHead>
-                  <TableHead className="w-12" />
+      <div className="mb-3 text-eyebrow">Rules</div>
+      {rules.isLoading ? (
+        <Skeleton className="h-40" />
+      ) : rules.isError ? (
+        <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">
+          {(rules.error as Error).message}
+        </div>
+      ) : !rules.data?.result?.length ? (
+        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+          No rules in this group yet — add one to allow traffic.
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Direction</TableHead>
+                <TableHead>Ether type</TableHead>
+                <TableHead>Protocol</TableHead>
+                <TableHead>Port range</TableHead>
+                <TableHead>Remote</TableHead>
+                <TableHead className="w-12" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rules.data.result.map((rule, i) => (
+                <TableRow key={rule.id ?? i}>
+                  <TableCell>
+                    <Badge variant={rule.direction === "ingress" ? "secondary" : "outline"} className="capitalize">
+                      {rule.direction ?? "—"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-sm">{rule.ethertype ?? "—"}</TableCell>
+                  <TableCell className="text-sm uppercase">{rule.protocol ?? "any"}</TableCell>
+                  <TableCell className="font-mono text-sm">{portRange(rule)}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    {rule.remote_ip_prefix ?? rule.remote_group_id ?? "any"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="icon-sm" onClick={() => setRuleToDelete(rule)} aria-label="Delete rule">
+                      <Trash2 className="size-4 text-muted-foreground" />
+                    </Button>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rules.data.result.map((rule, i) => (
-                  <TableRow key={rule.id ?? i}>
-                    <TableCell className="capitalize">{rule.direction ?? "—"}</TableCell>
-                    <TableCell>{rule.ethertype ?? "—"}</TableCell>
-                    <TableCell>{rule.protocol ?? "any"}</TableCell>
-                    <TableCell className="font-mono text-sm">{portRange(rule)}</TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {rule.remote_ip_prefix ?? rule.remote_group_id ?? "any"}
-                    </TableCell>
-                    <TableCell>
-                      <Button variant="ghost" size="sm" onClick={() => setRuleToDelete(rule)} aria-label="Delete rule">
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent>
@@ -191,7 +225,7 @@ export default function SecurityGroupDetailPage() {
             <DialogDescription>Allow traffic matching this rule.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label>Direction</Label>
                 <Select value={direction} onValueChange={setDirection}>
@@ -217,7 +251,7 @@ export default function SecurityGroupDetailPage() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div className="grid gap-2">
                 <Label htmlFor="rule-proto">Protocol</Label>
                 <Input
@@ -252,6 +286,7 @@ export default function SecurityGroupDetailPage() {
               <Label htmlFor="rule-cidr">Remote IP prefix (CIDR)</Label>
               <Input
                 id="rule-cidr"
+                className="font-mono"
                 value={remoteIpPrefix}
                 onChange={(e) => setRemoteIpPrefix(e.target.value)}
                 placeholder="0.0.0.0/0"
@@ -287,7 +322,7 @@ export default function SecurityGroupDetailPage() {
               onClick={() => ruleToDelete?.id && deleteRule.mutate(ruleToDelete.id)}
               disabled={deleteRule.isPending}
             >
-              {deleteRule.isPending ? "Deleting…" : "Delete"}
+              {deleteRule.isPending ? "Deleting…" : "Delete rule"}
             </Button>
           </DialogFooter>
         </DialogContent>

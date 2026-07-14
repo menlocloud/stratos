@@ -101,7 +101,7 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Bucket settings — {bucketName}</DialogTitle>
           <DialogDescription>Configuration for this S3 bucket.</DialogDescription>
@@ -124,8 +124,8 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
             {/* --- general: versioning, object lock, quota, placement --- */}
             <TabsContent value="general" className="grid gap-5 pt-4">
               <div className="flex items-center justify-between gap-4">
-                <div>
-                  <Label>Versioning</Label>
+                <div className="grid gap-1">
+                  <Label className="text-eyebrow">Versioning</Label>
                   <p className="text-xs text-muted-foreground">
                     Keeps previous versions of every object. Old versions still count towards storage you are billed
                     for. Once enabled it can only be suspended, never fully turned off.
@@ -138,7 +138,7 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
               </div>
 
               <div className="grid gap-1.5">
-                <Label>Object lock</Label>
+                <Label className="text-eyebrow">Object lock</Label>
                 {s.objectLock?.enabled ? (
                   <>
                     <p className="text-xs text-muted-foreground">
@@ -186,7 +186,7 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
               </div>
 
               <div className="grid gap-1.5">
-                <Label>Quota</Label>
+                <Label className="text-eyebrow">Quota</Label>
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="grid gap-1">
                     <Label className="text-xs text-muted-foreground">Max size (GB)</Label>
@@ -268,7 +268,7 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Website URL</Label>
                   <a
-                    className="flex items-center gap-1 text-sm text-primary hover:underline"
+                    className="flex items-center gap-1 text-sm text-primary-text hover:underline"
                     href={s.website.url}
                     target="_blank"
                     rel="noreferrer"
@@ -278,7 +278,7 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
                 </div>
               ) : null}
 
-              <div className="grid gap-2 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="grid gap-1.5">
                   <Label htmlFor="idx">Index document</Label>
                   <Input id="idx" value={indexDoc} onChange={(e) => setIndexDoc(e.target.value)} />

@@ -5,6 +5,9 @@ name: docker
 #                     docs/README/CHANGELOG/chart-only push is skipped)
 #   push a git tag -> that tag name (e.g. v1.2.3) — always builds
 #   pull request   -> build only, no push — always builds
+#   manual run     -> build + push from any branch (Actions ▸ docker ▸ Run workflow):
+#                     tag `dev-<short-sha>`, or `dev-<image_tag>` if a suffix is given.
+#                     Use it to deploy a PR branch to the test environment.
 #
 # On a `v*` tag, once all four images are built the `release` job creates the
 # matching GitHub Release (the chart is published in parallel by helm.yml). Its
@@ -22,6 +25,16 @@ on:
   pull_request:
     branches:
       - main
+  # Manual: build + PUSH an on-demand image from any branch (e.g. a PR branch) so it can be
+  # deployed to the test environment. Tag defaults to `dev-<short-sha>` like a push to main;
+  # set `image_tag` to give the build a memorable name (e.g. `test-metrics`) — it is prefixed
+  # with `dev-` so test builds never collide with `v*` release tags.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Optional tag suffix (published as dev-<suffix>); blank → dev-<short-sha>"
+        required: false
+        default: ""
 
 jobs:
   # Gate: on a push to main, only rebuild when image-relevant sources changed — a
@@ -54,9 +67,9 @@ jobs:
 
   build:
     needs: changes
-    # Tags (release) and PRs always build; a push to main builds only when the gate saw
-    # image-relevant changes.
-    if: github.ref_type == 'tag' || github.event_name == 'pull_request' || needs.changes.outputs.build == 'true'
+    # Tags (release), PRs, and manual runs always build; a push to main builds only when the
+    # gate saw image-relevant changes.
+    if: github.ref_type == 'tag' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -88,7 +101,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to ghcr.io
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -97,19 +110,32 @@ jobs:
 
       - name: Compute tag
         id: meta
+        env:
+          MANUAL_TAG: ${{ github.event.inputs.image_tag }}   # kept out of the script text (no ${{ }} splice)
         run: |
+          set -euo pipefail
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${MANUAL_TAG}" ]; then
+            # Sanitize the operator-supplied suffix: a Docker tag component is [A-Za-z0-9._-];
+            # rejecting anything else also blocks newlines (which would inject extra
+            # $GITHUB_OUTPUT lines). Fail fast with a clear message rather than a cryptic
+            # build error. Always dev-prefixed so it can't shadow a v* release.
+            if ! printf '%s' "${MANUAL_TAG}" | grep -qE '^[A-Za-z0-9._-]+$'; then
+              echo "::error::image_tag must match [A-Za-z0-9._-]+ (got: '${MANUAL_TAG}')"
+              exit 1
+            fi
+            echo "tag=dev-${MANUAL_TAG}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
           tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.meta.outputs.tag }}
           build-args: ${{ matrix.build-args }}
           cache-from: type=gha

@@ -1,12 +1,13 @@
-import { useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useMemo, useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import type { ColumnDef } from "@tanstack/react-table"
 import { Building2, Plus, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -17,8 +18,6 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch } from "@/lib/api"
 import { fmtDate } from "@/lib/format"
 import { useAdminList } from "@/lib/hooks"
@@ -28,6 +27,7 @@ import { useAdminList } from "@/lib/hooks"
 type Org = {
   id?: string
   name?: string
+  description?: string
   billingProfileId?: string
   memberCount?: number
   projectCount?: number
@@ -61,76 +61,133 @@ export default function OrganizationsPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const columns = useMemo<ColumnDef<Org, any>[]>(
+    () => [
+      {
+        id: "name",
+        accessorFn: (o) => o.name ?? "",
+        header: sortableHeader("Name"),
+        cell: ({ row }) => {
+          const o = row.original
+          return (
+            <div className="min-w-0">
+              {o.id ? (
+                <Link
+                  to={`/clients/organizations/${o.id}`}
+                  className="inline-block py-0.5 font-medium hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {o.name ?? "—"}
+                </Link>
+              ) : (
+                <span className="font-medium">{o.name ?? "—"}</span>
+              )}
+              {o.description ? (
+                <p className="max-w-72 truncate text-xs text-muted-foreground" title={o.description}>
+                  {o.description}
+                </p>
+              ) : null}
+            </div>
+          )
+        },
+      },
+      {
+        id: "id",
+        accessorFn: (o) => o.id ?? "",
+        header: "ID",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-xs text-muted-foreground">{getValue() || "—"}</span>
+        ),
+      },
+      {
+        id: "members",
+        accessorFn: (o) => o.memberCount ?? 0,
+        header: sortableRightHeader("Members"),
+        cell: ({ getValue }) => (
+          <div className={`text-right text-sm tabular-nums${getValue() ? "" : " text-muted-foreground"}`}>
+            {getValue()}
+          </div>
+        ),
+      },
+      {
+        id: "projects",
+        accessorFn: (o) => o.projectCount ?? 0,
+        header: sortableRightHeader("Projects"),
+        cell: ({ getValue }) => (
+          <div className={`text-right text-sm tabular-nums${getValue() ? "" : " text-muted-foreground"}`}>
+            {getValue()}
+          </div>
+        ),
+      },
+      {
+        id: "billingProfile",
+        accessorFn: (o) => o.billingProfileId ?? "",
+        header: "Billing profile",
+        cell: ({ row }) => {
+          const bp = row.original.billingProfileId
+          return bp ? (
+            <Link
+              to={`/clients/billing-profiles/${bp}`}
+              className="inline-block py-1 font-mono text-xs text-muted-foreground hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {bp}
+            </Link>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground">—</span>
+          )
+        },
+      },
+      {
+        id: "created",
+        accessorFn: (o) => o.createdAt ?? "",
+        header: sortableHeader("Created"),
+        cell: ({ getValue }) => <span className="text-sm text-muted-foreground">{fmtDate(getValue())}</span>,
+      },
+    ],
+    // useState setters are stable; helpers are module-scope.
+    [],
+  )
+
   return (
     <>
       <PageHeader
         title="Organizations"
+        eyebrow="Clients"
         description="Client organizations and their memberships."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-              <RefreshCw className={isFetching ? "animate-spin" : ""} />
-              Refresh
+            <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching} aria-label="Refresh">
+              <RefreshCw className={isFetching ? "size-4 animate-spin" : "size-4"} />
             </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus />
-              Create organization
+              <Plus className="size-4" /> Create organization
             </Button>
           </>
         }
       />
 
-      {isLoading ? (
-        <Skeleton className="h-64" />
-      ) : error ? (
-        <div className="rounded-lg border bg-muted/40 p-6 text-sm text-muted-foreground">
-          {(error as Error).message}
-        </div>
-      ) : orgs.length === 0 ? (
+      {!isLoading && !error && orgs.length === 0 ? (
         <EmptyState
           icon={Building2}
           title="No organizations yet"
           hint="Organizations appear when clients sign up."
           action={
             <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus />
-              Create organization
+              <Plus className="size-4" /> Create organization
             </Button>
           }
         />
       ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>ID</TableHead>
-                <TableHead>Members</TableHead>
-                <TableHead>Projects</TableHead>
-                <TableHead>Billing profile</TableHead>
-                <TableHead>Created</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {orgs.map((o) => (
-                <TableRow
-                  key={o.id}
-                  className="cursor-pointer"
-                  onClick={() => o.id && navigate(`/clients/organizations/${o.id}`)}
-                >
-                  <TableCell className="font-medium">{o.name ?? "—"}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{o.id ?? "—"}</TableCell>
-                  <TableCell className="tabular-nums">{o.memberCount ?? 0}</TableCell>
-                  <TableCell className="tabular-nums">{o.projectCount ?? 0}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    {o.billingProfileId ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{fmtDate(o.createdAt)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={orgs}
+          isLoading={isLoading}
+          error={error as Error | null}
+          searchPlaceholder="Search organizations…"
+          onRowClick={(o) => o.id && navigate(`/clients/organizations/${o.id}`)}
+          getRowId={(o) => o.id ?? o.name ?? ""}
+        />
       )}
 
       {/* Create organization */}
@@ -149,19 +206,21 @@ export default function OrganizationsPage() {
               createOrg.mutate()
             }}
           >
-            <div className="space-y-2">
+            <div className="grid gap-2">
               <Label htmlFor="org-name">Name</Label>
               <Input
                 id="org-name"
+                autoComplete="off"
                 required
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
             </div>
-            <div className="space-y-2">
+            <div className="grid gap-2">
               <Label htmlFor="org-desc">Description</Label>
               <Input
                 id="org-desc"
+                autoComplete="off"
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
               />
