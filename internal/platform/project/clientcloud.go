@@ -571,12 +571,12 @@ func serverIPv4s(server map[string]any) []string {
 func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 	cfg := es.Config
 	get := func(k string) any { return cfg[k] }
-	return map[string]any{
+	dto := map[string]any{
 		"id":   es.ID,
 		"name": es.Name,
 		"type": es.Type,
-		// provider ("openstack" | "ceph-s3") lets the client UI label which object-store backend a
-		// service (and therefore its buckets) rides on — the two run side by side and never mix.
+		// provider ("openstack" | "ceph-s3" | "kamaji") lets the client UI label which backend a
+		// service rides on — they run side by side and never mix.
 		"provider":          es.Provider(),
 		"status":            es.Status,
 		"vhi":               boolOf(cfg["vhi"]),
@@ -587,6 +587,16 @@ func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 		"services":          orEmptyMap(get("services")),
 		"availabilityZones": orEmptyMap(get("availabilityZones")),
 	}
+	// kamaji: the curated k8s VERSION list (keys only — image ids are operator detail) feeds the
+	// client create/upgrade pickers. Config is not a secret; still expose the minimum needed.
+	if es.IsKamaji() {
+		versions := []any{}
+		for v := range es.KamajiConfig().Defaults.Versions {
+			versions = append(versions, v)
+		}
+		dto["kubernetesVersions"] = versions
+	}
+	return dto
 }
 
 func boolOf(v any) bool { b, _ := v.(bool); return b }

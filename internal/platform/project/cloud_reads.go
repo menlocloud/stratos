@@ -151,7 +151,8 @@ var serviceResourceTypes = map[string][]string{
 	"volume":          {cloud.TypeVolume, cloud.TypeVolumeSnapshot, cloud.TypeVolumeBackup},
 	"image":           {cloud.TypeImage},
 	"orchestration":   {cloud.TypeStack},             // Heat → stacks (was mis-mapped to cluster)
-	"container-infra": {cloud.TypeKubernetesCluster}, // Magnum
+	"container-infra": {cloud.TypeKubernetesCluster}, // Magnum (dormant — no Magnum backend)
+	"kubernetes":      {cloud.TypeKubernetesCluster}, // Kamaji managed k8s (the kamaji provider's only slug)
 	"load-balancer":   {cloud.TypeLoadBalancer},
 	"object-store":    {cloud.TypeBucket},
 	"key-manager":     {cloud.TypeBarbicanSecret, cloud.TypeBarbicanContainer},

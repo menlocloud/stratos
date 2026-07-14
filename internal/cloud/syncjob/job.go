@@ -16,6 +16,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
+	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/cloud/providers"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
 	"github.com/menlocloud/stratos/internal/platform/project"
@@ -31,12 +32,17 @@ type ClientFactory func(ctx context.Context, es *externalservice.ExternalService
 // project S3 keys needed). Injectable so the ceph sync walk is testable against a fake.
 type CephClientFactory func(ctx context.Context, es *externalservice.ExternalService, region, projectID string) (*client.Client, error)
 
+// KamajiFactory builds the Managed-Kubernetes service for a kamaji provider (management-cluster
+// client from the provider kubeconfig). Injectable so the kamaji sync walk is testable.
+type KamajiFactory func(es *externalservice.ExternalService) (*kamaji.Service, error)
+
 type Job struct {
 	projects      *project.Repo
 	services      *externalservice.Service
 	cloud         *cloud.Repo
 	clientFor     ClientFactory
 	cephClientFor CephClientFactory
+	kamajiFor     KamajiFactory
 	now           func() time.Time
 	log           *slog.Logger
 }
@@ -53,6 +59,9 @@ func New(projects *project.Repo, services *externalservice.Service, cloudRepo *c
 		cephClientFor: func(ctx context.Context, es *externalservice.ExternalService, region, projectID string) (*client.Client, error) {
 			return client.NewCephS3(ctx, es.CephConfig(region, "", "", es.RGWUIDFor(projectID)))
 		},
+		kamajiFor: func(es *externalservice.ExternalService) (*kamaji.Service, error) {
+			return kamaji.New(es.KamajiConfig(), es.ID)
+		},
 		now: func() time.Time { return time.Now().UTC() },
 		log: log,
 	}
@@ -60,6 +69,7 @@ func New(projects *project.Repo, services *externalservice.Service, cloudRepo *c
 
 func (j *Job) WithClientFactory(f ClientFactory) *Job         { j.clientFor = f; return j }
 func (j *Job) WithCephClientFactory(f CephClientFactory) *Job { j.cephClientFor = f; return j }
+func (j *Job) WithKamajiFactory(f KamajiFactory) *Job         { j.kamajiFor = f; return j }
 func (j *Job) WithNow(now func() time.Time) *Job              { j.now = now; return j }
 
 // SyncOne runs the sync for a single project — the admin POST /project/{id}/sync leg.
@@ -193,6 +203,10 @@ func (j *Job) syncService(ctx context.Context, p *project.Project, es *externals
 	if es.IsCephS3() {
 		return j.syncCephService(ctx, p, es)
 	}
+	// kamaji: no Keystone tenant — sync only the managed k8s clusters off the management cluster.
+	if es.IsKamaji() {
+		return j.syncKamajiService(ctx, p, es)
+	}
 	count := 0
 	extProjID := p.ExternalProjectID(es.ID)
 	if extProjID == "" {
@@ -238,6 +252,27 @@ func (j *Job) syncCephService(ctx context.Context, p *project.Project, es *exter
 	st, err := providers.Reconcile(ctx, providers.NewBucketProvider(cc, region, p.ID), j.cloud, es.ID, j.now())
 	if err != nil {
 		j.log.Error("syncjob: reconcile ceph buckets", "project", p.ID, "serviceId", es.ID, "region", region, "err", err)
+	}
+	return st.Created + st.Updated
+}
+
+// syncKamajiService reconciles the project's KUBERNETES_CLUSTER resources off the kamaji
+// management cluster (Applications labelled with the project id, enriched from the TCP +
+// MachineDeployments). The project-label filter is the leak-guard: only this project's
+// clusters are listed, and Reconcile's delete-of-vanished scan is ProjectScoped.
+func (j *Job) syncKamajiService(ctx context.Context, p *project.Project, es *externalservice.ExternalService) int {
+	region := es.KamajiRegion()
+	if !es.ServiceEnabledInRegion("kubernetes", region) {
+		return 0
+	}
+	ks, err := j.kamajiFor(es)
+	if err != nil {
+		j.log.Error("syncjob: build kamaji client", "project", p.ID, "serviceId", es.ID, "region", region, "err", err)
+		return 0
+	}
+	st, err := providers.Reconcile(ctx, ks.SyncProvider(region, p.ID), j.cloud, es.ID, j.now())
+	if err != nil {
+		j.log.Error("syncjob: reconcile kamaji clusters", "project", p.ID, "serviceId", es.ID, "region", region, "err", err)
 	}
 	return st.Created + st.Updated
 }

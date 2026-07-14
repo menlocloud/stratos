@@ -28,6 +28,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/billingresource"
 	"github.com/menlocloud/stratos/internal/cloud/cephcred"
+	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/metrics"
 	"github.com/menlocloud/stratos/internal/cloud/metricsjob"
@@ -246,6 +247,11 @@ func run() error {
 	// Ceph RGW (S3) per-project credentials — enables ceph-s3 provisioning + bucket writes.
 	cephCredRepo := cephcred.New(pg, enc)
 	projectH.SetCephCreds(cephCredRepo, cephcred.NewKeyRepo(pg, enc))
+	// Kamaji Managed Kubernetes — enables kamaji provisioning + the KUBERNETES_CLUSTER write
+	// surface (Application CRs on the provider's management cluster; tasks/managed-k8s-plan.md).
+	projectH.SetKamaji(func(es *externalservice.ExternalService) (*kamaji.Service, error) {
+		return kamaji.New(es.KamajiConfig(), es.ID)
+	})
 
 	// Promotion (deposit config) + Affiliate (cfy check + project config/log) — client reads.
 	// The promo-redeem authz gate resolves the bp's org WITH a membership check on the caller
@@ -475,10 +481,11 @@ func run() error {
 		Engine:           pricing.NewEngine(nil),
 		Cloud:            cloudRepo,
 		Registry: map[string]billingresource.Provider{
-			cloud.TypeServer:       billingresource.NewServerProvider(metricsRepo),
-			cloud.TypeVolume:       billingresource.NewVolumeProvider(),
-			cloud.TypeFloatingIP:   billingresource.NewFloatingIPProvider(),
-			cloud.TypeLoadBalancer: billingresource.NewLoadBalancerProvider(),
+			cloud.TypeServer:            billingresource.NewServerProvider(metricsRepo),
+			cloud.TypeVolume:            billingresource.NewVolumeProvider(),
+			cloud.TypeFloatingIP:        billingresource.NewFloatingIPProvider(),
+			cloud.TypeLoadBalancer:      billingresource.NewLoadBalancerProvider(),
+			cloud.TypeKubernetesCluster: billingresource.NewKubernetesClusterProvider(),
 		},
 	})
 	metricsJob := metricsjob.New(projectRepo, cloudRepo, esSvc, metrics.NewService(metricsRepo), log)

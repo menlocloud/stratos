@@ -13,6 +13,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/cephcred"
 	"github.com/menlocloud/stratos/internal/cloud/client"
+	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/internal/platform/billing"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
@@ -58,6 +59,10 @@ type Handler struct {
 	// cephKeys stores the project's EXTRA S3 access keys (each is its own RGW user, granted onto buckets
 	// via bucket policy). Set via SetCephCreds (nil = the S3-key surface is unavailable).
 	cephKeys *cephcred.KeyRepo
+	// kamajiFor builds the Managed-Kubernetes service for a kamaji provider (management-cluster
+	// client from the provider's kubeconfig). Set via SetKamaji (nil = kamaji provisioning +
+	// cluster writes are unavailable).
+	kamajiFor func(es *externalservice.ExternalService) (*kamaji.Service, error)
 }
 
 // SetCustomMenu wires the customMenuItem reader into the /init menu build.
@@ -67,6 +72,12 @@ func (h *Handler) SetCustomMenu(r *CustomMenuReader) { h.customMenu = r }
 // the per-project S3 access keys).
 func (h *Handler) SetCephCreds(r *cephcred.Repo, keys *cephcred.KeyRepo) {
 	h.cephCreds, h.cephKeys = r, keys
+}
+
+// SetKamaji wires the kamaji Managed-Kubernetes service factory (enables kamaji provisioning and
+// the KUBERNETES_CLUSTER write surface for kamaji providers).
+func (h *Handler) SetKamaji(f func(es *externalservice.ExternalService) (*kamaji.Service, error)) {
+	h.kamajiFor = f
 }
 
 // SetDownloads wires the cloud-download token repo + the api base URL for the object DOWNLOAD action.

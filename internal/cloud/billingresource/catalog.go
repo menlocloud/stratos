@@ -13,5 +13,6 @@ func Catalog() []*pricing.BillingResourceType {
 		volumeType(),
 		floatingIPType(),
 		loadBalancerType(),
+		kubernetesClusterType(),
 	}
 }

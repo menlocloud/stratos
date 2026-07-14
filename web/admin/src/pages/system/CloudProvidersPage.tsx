@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
 import { useAdminList } from "@/lib/hooks"
 
@@ -169,6 +170,175 @@ function cephFormToBody(f: CephFormState) {
   }
 }
 
+// ── kamaji (managed kubernetes) create form ──────────────────────────────────
+// config.provider === "kamaji": clusters are ArgoCD Applications of the pinned
+// `openstack-kamaji-cluster` chart on the provider's Kamaji MANAGEMENT cluster; the secret is a
+// kubeconfig for a stratos-scoped service account there (tasks/managed-k8s-plan.md D3/D7).
+type KamajiFormState = {
+  name: string
+  region: string
+  kubeconfig: string
+  chartRepo: string
+  chartVersion: string
+  argoNamespace: string
+  argoProject: string
+  dataStoreName: string
+  floatingNetworkId: string
+  externalNetworkId: string
+  dnsZone: string
+  versions: string // one "1.35.4=<glance-image-id>" per line
+}
+
+const emptyKamajiForm: KamajiFormState = {
+  name: "",
+  region: "az1",
+  kubeconfig: "",
+  chartRepo: "ghcr.io/menlocloud/charts",
+  chartVersion: "",
+  argoNamespace: "argocd",
+  argoProject: "stratos-k8s",
+  dataStoreName: "default",
+  floatingNetworkId: "",
+  externalNetworkId: "",
+  dnsZone: "",
+  versions: "",
+}
+
+// parseVersions turns the "version=imageId" lines into the config.cluster.versions map;
+// null = at least one non-empty line is malformed.
+function parseVersions(raw: string): Record<string, string> | null {
+  const out: Record<string, string> = {}
+  for (const line of raw.split("\n")) {
+    const t = line.trim()
+    if (!t) continue
+    const eq = t.indexOf("=")
+    if (eq <= 0 || eq === t.length - 1) return null
+    out[t.slice(0, eq).trim()] = t.slice(eq + 1).trim()
+  }
+  return out
+}
+
+const kamajiFormValid = (f: KamajiFormState) => {
+  const versions = parseVersions(f.versions)
+  return (
+    [f.name, f.region, f.kubeconfig, f.chartRepo, f.chartVersion].every((v) => v.trim() !== "") &&
+    versions !== null &&
+    Object.keys(versions).length > 0
+  )
+}
+
+function kamajiFormToBody(f: KamajiFormState) {
+  const region = f.region.trim()
+  return {
+    name: f.name.trim(),
+    type: "CLOUD",
+    status: "PUBLIC",
+    config: {
+      provider: "kamaji",
+      regions: { [region]: { name: region, country: "", displayName: region } },
+      // kubernetes is the ONLY service a kamaji provider serves — enabled directly, no discovery.
+      services: { kubernetes: { [region]: true } },
+      argocd: {
+        namespace: f.argoNamespace.trim() || "argocd",
+        project: f.argoProject.trim() || "default",
+        chartRepo: f.chartRepo.trim(),
+        chartName: "openstack-kamaji-cluster",
+        chartVersion: f.chartVersion.trim(),
+      },
+      cluster: {
+        ...(f.dataStoreName.trim() ? { dataStoreName: f.dataStoreName.trim() } : {}),
+        ...(f.floatingNetworkId.trim() ? { floatingNetworkId: f.floatingNetworkId.trim() } : {}),
+        ...(f.externalNetworkId.trim() ? { externalNetworkId: f.externalNetworkId.trim() } : {}),
+        ...(f.dnsZone.trim() ? { dnsZone: f.dnsZone.trim() } : {}),
+        versions: parseVersions(f.versions) ?? {},
+      },
+    },
+    secret: { kubeconfig: f.kubeconfig.trim() },
+  }
+}
+
+function KamajiProviderForm({ form, setForm }: { form: KamajiFormState; setForm: (f: KamajiFormState) => void }) {
+  return (
+    <div className="grid gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="km-name">Display name</Label>
+          <Input id="km-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Managed Kubernetes AZ1" />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="km-region">Region</Label>
+          <Input id="km-region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} placeholder="az1" />
+        </div>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="km-kubeconfig">Management-cluster kubeconfig</Label>
+        <Textarea
+          id="km-kubeconfig"
+          className="min-h-28 font-mono text-xs"
+          value={form.kubeconfig}
+          onChange={(e) => setForm({ ...form, kubeconfig: e.target.value })}
+          placeholder="apiVersion: v1&#10;kind: Config&#10;…"
+          autoComplete="off"
+        />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="km-repo">Chart OCI repo</Label>
+          <Input id="km-repo" className="font-mono" value={form.chartRepo} onChange={(e) => setForm({ ...form, chartRepo: e.target.value })} placeholder="ghcr.io/menlocloud/charts" />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="km-chartver">Chart version (pinned)</Label>
+          <Input id="km-chartver" className="font-mono" value={form.chartVersion} onChange={(e) => setForm({ ...form, chartVersion: e.target.value })} placeholder="0.2.3" />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="km-argons">ArgoCD namespace</Label>
+          <Input id="km-argons" value={form.argoNamespace} onChange={(e) => setForm({ ...form, argoNamespace: e.target.value })} placeholder="argocd" />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="km-argoproj">ArgoCD AppProject</Label>
+          <Input id="km-argoproj" value={form.argoProject} onChange={(e) => setForm({ ...form, argoProject: e.target.value })} placeholder="stratos-k8s" />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="km-fnet">Floating network ID (API LB)</Label>
+          <Input id="km-fnet" className="font-mono" value={form.floatingNetworkId} onChange={(e) => setForm({ ...form, floatingNetworkId: e.target.value })} autoComplete="off" />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="km-extnet">External network ID (workers)</Label>
+          <Input id="km-extnet" className="font-mono" value={form.externalNetworkId} onChange={(e) => setForm({ ...form, externalNetworkId: e.target.value })} autoComplete="off" />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="km-datastore">Kamaji DataStore</Label>
+          <Input id="km-datastore" value={form.dataStoreName} onChange={(e) => setForm({ ...form, dataStoreName: e.target.value })} placeholder="default" />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="km-dns">DNS zone (optional)</Label>
+          <Input id="km-dns" value={form.dnsZone} onChange={(e) => setForm({ ...form, dnsZone: e.target.value })} placeholder="k8s.example.com" />
+        </div>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="km-versions">Kubernetes versions (one “version=image-id” per line)</Label>
+        <Textarea
+          id="km-versions"
+          className="min-h-20 font-mono text-xs"
+          value={form.versions}
+          onChange={(e) => setForm({ ...form, versions: e.target.value })}
+          placeholder="1.35.4=db37655f-…"
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        The kubeconfig belongs to a stratos service account on the Kamaji management cluster (ArgoCD +
+        AppProject installed there). Only versions listed here are offered to customers.
+      </p>
+    </div>
+  )
+}
+
 function CephProviderForm({ form, setForm }: { form: CephFormState; setForm: (f: CephFormState) => void }) {
   return (
     <div className="grid gap-4">
@@ -290,9 +460,10 @@ export default function CloudProvidersPage() {
   const items = data?.data ?? []
 
   const [createOpen, setCreateOpen] = useState(false)
-  const [kind, setKind] = useState<"openstack" | "ceph-s3">("openstack")
+  const [kind, setKind] = useState<"openstack" | "ceph-s3" | "kamaji">("openstack")
   const [form, setForm] = useState<FormState>(emptyForm)
   const [cephForm, setCephForm] = useState<CephFormState>(emptyCephForm)
+  const [kamajiForm, setKamajiForm] = useState<KamajiFormState>(emptyKamajiForm)
 
   const create = useMutation({
     // POST /admin/service (externalServiceCreate). The operator finishes the Services/Features tabs on
@@ -300,13 +471,14 @@ export default function CloudProvidersPage() {
     mutationFn: () =>
       apiFetch<CloudProvider>(LIST_PATH, {
         method: "POST",
-        body: kind === "ceph-s3" ? cephFormToBody(cephForm) : formToBody(form),
+        body: kind === "ceph-s3" ? cephFormToBody(cephForm) : kind === "kamaji" ? kamajiFormToBody(kamajiForm) : formToBody(form),
       }),
     onSuccess: (created) => {
       toast.success("Cloud provider created")
       setCreateOpen(false)
       setForm(emptyForm)
       setCephForm(emptyCephForm)
+      setKamajiForm(emptyKamajiForm)
       void qc.invalidateQueries({ queryKey: ["admin-list", LIST_PATH] })
       if (created?.id) navigate(`/system/cloud-providers/${created.id}`)
     },
@@ -402,11 +574,12 @@ export default function CloudProvidersPage() {
         open={createOpen}
         onOpenChange={(o) => {
           setCreateOpen(o)
-          // Clear BOTH forms on every close (Cancel, Esc, overlay) — the ceph form holds admin keys,
-          // which must not sit in state and re-appear on the next open.
+          // Clear ALL forms on every close (Cancel, Esc, overlay) — the ceph form holds admin keys
+          // and the kamaji form a kubeconfig; neither must sit in state and re-appear on next open.
           if (!o) {
             setForm(emptyForm)
             setCephForm(emptyCephForm)
+            setKamajiForm(emptyKamajiForm)
             setKind("openstack")
           }
         }}
@@ -417,19 +590,26 @@ export default function CloudProvidersPage() {
             <DialogDescription>
               {kind === "ceph-s3"
                 ? "Connect a Ceph RGW object store over its S3 and Admin Ops endpoints. No Keystone involved — projects get a dedicated RGW user."
-                : 'Connect an OpenStack cloud with its Keystone admin credentials. You will enable per-region services and run "Test connection" on the provider page after it is created.'}
+                : kind === "kamaji"
+                  ? "Connect a Kamaji management cluster for Managed Kubernetes. Clusters are delivered as ArgoCD Applications of the pinned chart; worker nodes run in each customer's OpenStack tenant."
+                  : 'Connect an OpenStack cloud with its Keystone admin credentials. You will enable per-region services and run "Test connection" on the provider page after it is created.'}
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <Button variant={kind === "openstack" ? "default" : "outline"} onClick={() => setKind("openstack")}>
               OpenStack
             </Button>
             <Button variant={kind === "ceph-s3" ? "default" : "outline"} onClick={() => setKind("ceph-s3")}>
               Ceph S3
             </Button>
+            <Button variant={kind === "kamaji" ? "default" : "outline"} onClick={() => setKind("kamaji")}>
+              Kubernetes
+            </Button>
           </div>
           {kind === "ceph-s3" ? (
             <CephProviderForm form={cephForm} setForm={setCephForm} />
+          ) : kind === "kamaji" ? (
+            <KamajiProviderForm form={kamajiForm} setForm={setKamajiForm} />
           ) : (
             <ProviderForm form={form} setForm={setForm} />
           )}
@@ -439,7 +619,10 @@ export default function CloudProvidersPage() {
             </Button>
             <Button
               onClick={() => create.mutate()}
-              disabled={(kind === "ceph-s3" ? !cephFormValid(cephForm) : !formValid(form)) || create.isPending}
+              disabled={
+                (kind === "ceph-s3" ? !cephFormValid(cephForm) : kind === "kamaji" ? !kamajiFormValid(kamajiForm) : !formValid(form)) ||
+                create.isPending
+              }
             >
               {create.isPending ? "Creating…" : "Create provider"}
             </Button>

@@ -79,6 +79,7 @@ export default function App() {
           <Route path="dns/:resourceId" element={lazyPage(() => import("@/pages/network/DnsZoneDetailPage"))} />
 
           {/* Platform */}
+          <Route path="kubernetes" element={lazyPage(() => import("@/pages/platform/KubernetesPage"))} />
           <Route path="stacks" element={lazyPage(() => import("@/pages/platform/StacksPage"))} />
           <Route path="secrets" element={lazyPage(() => import("@/pages/platform/SecretsPage"))} />
 

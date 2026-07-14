@@ -1393,6 +1393,10 @@ const TAB_DEFS = [
 // machinery (quota, features, volume types, AZs, …) with nothing to configure on RGW.
 const CEPH_TAB_KEYS = new Set(["connection", "services", "configuration"])
 
+// A kamaji provider serves ONLY managed Kubernetes off its management cluster — same trimmed set
+// (connection = kubeconfig/chart pin, services = the kubernetes toggle, configuration = raw doc).
+const KAMAJI_TAB_KEYS = CEPH_TAB_KEYS
+
 const crumbs = (label: string) => (
   <Breadcrumb>
     <BreadcrumbList>
@@ -1430,7 +1434,12 @@ export default function CloudProviderDetailPage() {
     )
   }
   const p = data
-  const tabs = p.config?.provider === "ceph-s3" ? TAB_DEFS.filter((t) => CEPH_TAB_KEYS.has(t.v)) : TAB_DEFS
+  const tabs =
+    p.config?.provider === "ceph-s3"
+      ? TAB_DEFS.filter((t) => CEPH_TAB_KEYS.has(t.v))
+      : p.config?.provider === "kamaji"
+        ? TAB_DEFS.filter((t) => KAMAJI_TAB_KEYS.has(t.v))
+        : TAB_DEFS
 
   return (
     <>
