@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { ImageIcon } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { StatusBadge } from "@/components/status-badge"
@@ -43,11 +44,116 @@ type PlatformForm = {
   name: string
   brandingName: string
   brandingColor: string
+  brandingLogo: string
+  brandingFaviconUrl: string
   dateFormat: string
   quotaEnabled: boolean
   quotaLimit: string
   orgQuotaEnabled: boolean
   orgQuotaLimit: string
+}
+
+function platformConfigToForm(cfg: PlatformConfig): PlatformForm {
+  return {
+    name: cfg.name ?? "",
+    brandingName: cfg.branding?.name ?? "",
+    brandingColor: cfg.branding?.color ?? "",
+    brandingLogo: cfg.branding?.logo ?? "",
+    brandingFaviconUrl: cfg.branding?.faviconUrl ?? "",
+    dateFormat: cfg.dateConfiguration?.dateFormat ?? "",
+    quotaEnabled: cfg.projectProvisioningQuota?.enabled === true,
+    quotaLimit: String(cfg.projectProvisioningQuota?.limit ?? 0),
+    orgQuotaEnabled: cfg.organizationProvisioningQuota?.enabled === true,
+    orgQuotaLimit: String(cfg.organizationProvisioningQuota?.limit ?? 0),
+  }
+}
+
+function brandAssetUrlError(value: string): string | null {
+  const candidate = value.trim()
+  if (!candidate) return null
+  if (candidate.startsWith("/") && !candidate.startsWith("//")) return null
+  try {
+    const url = new URL(candidate)
+    if (url.protocol === "http:" || url.protocol === "https:") return null
+  } catch {
+    // Fall through to the user-facing validation message.
+  }
+  return "Enter an HTTP(S) URL or a root-relative path beginning with /."
+}
+
+function BrandAssetField({
+  id,
+  label,
+  value,
+  placeholder,
+  widePreview = false,
+  onChange,
+}: {
+  id: string
+  label: string
+  value: string
+  placeholder: string
+  widePreview?: boolean
+  onChange: (value: string) => void
+}) {
+  const [failedPreview, setFailedPreview] = useState<string | null>(null)
+  const previewUrl = value.trim()
+  const urlError = brandAssetUrlError(value)
+  const previewFailed = Boolean(previewUrl) && failedPreview === previewUrl
+  const canPreview = Boolean(previewUrl) && !urlError && !previewFailed
+  const hint = urlError
+    ?? (previewFailed
+      ? "Preview could not be loaded. Check that the asset is publicly reachable."
+      : "Use an HTTPS URL or root-relative path. Leave empty to use the default asset.")
+
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <div className="flex min-w-0 items-center gap-3">
+        <div
+          className={`${widePreview ? "h-12 w-20" : "size-12"} flex shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/30`}
+        >
+          {canPreview ? (
+            <img
+              src={previewUrl}
+              alt=""
+              className={widePreview ? "max-h-10 max-w-16 object-contain" : "size-8 object-contain"}
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+              onError={() => setFailedPreview(previewUrl)}
+            />
+          ) : (
+            <ImageIcon className="size-5 text-muted-foreground/60" aria-hidden="true" />
+          )}
+        </div>
+        <Input
+          id={id}
+          type="text"
+          inputMode="url"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          maxLength={2048}
+          placeholder={placeholder}
+          value={value}
+          aria-invalid={urlError ? true : undefined}
+          aria-describedby={`${id}-hint`}
+          onChange={(event) => {
+            setFailedPreview(null)
+            onChange(event.target.value)
+          }}
+        />
+      </div>
+      <p
+        id={`${id}-hint`}
+        aria-live="polite"
+        className={`text-xs ${urlError || previewFailed ? "text-destructive" : "text-muted-foreground"}`}
+      >
+        {hint}
+      </p>
+    </div>
+  )
 }
 
 export default function ConfigurationPage() {
@@ -60,38 +166,41 @@ export default function ConfigurationPage() {
   useEffect(() => {
     // cfg.id guard: an empty envelope ({} — nothing stored yet) unwraps to a truthy object.
     if (cfg?.id && !form) {
-      setForm({
-        name: cfg.name ?? "",
-        brandingName: cfg.branding?.name ?? "",
-        brandingColor: cfg.branding?.color ?? "",
-        dateFormat: cfg.dateConfiguration?.dateFormat ?? "",
-        quotaEnabled: cfg.projectProvisioningQuota?.enabled === true,
-        quotaLimit: String(cfg.projectProvisioningQuota?.limit ?? 0),
-        orgQuotaEnabled: cfg.organizationProvisioningQuota?.enabled === true,
-        orgQuotaLimit: String(cfg.organizationProvisioningQuota?.limit ?? 0),
-      })
+      setForm(platformConfigToForm(cfg))
     }
   }, [cfg, form])
 
   const save = useMutation({
     mutationFn: () => {
       if (!cfg || !form) throw new Error("Configuration not loaded")
+      const brandingUrlError = brandAssetUrlError(form.brandingLogo)
+        ?? brandAssetUrlError(form.brandingFaviconUrl)
+      if (brandingUrlError) throw new Error(brandingUrlError)
       // PUT /{id} REPLACES the stored document — send back every field the read returned, merged
       // with the edits, or unedited fields would be lost.
       const id = typeof cfg.id === "string" ? cfg.id : String(cfg.id)
       const body: PlatformConfig = {
         ...cfg,
         name: form.name,
-        branding: { ...(cfg.branding ?? {}), name: form.brandingName, color: form.brandingColor },
+        branding: {
+          ...(cfg.branding ?? {}),
+          name: form.brandingName,
+          color: form.brandingColor,
+          logo: form.brandingLogo.trim(),
+          faviconUrl: form.brandingFaviconUrl.trim(),
+        },
         dateConfiguration: { ...(cfg.dateConfiguration ?? {}), dateFormat: form.dateFormat },
         projectProvisioningQuota: { enabled: form.quotaEnabled, limit: Number(form.quotaLimit) || 0 },
         organizationProvisioningQuota: { enabled: form.orgQuotaEnabled, limit: Number(form.orgQuotaLimit) || 0 },
       }
-      return apiFetch(`/admin/platform-configuration/${id}`, { method: "PUT", body })
+      return apiFetch<PlatformConfig>(`/admin/platform-configuration/${id}`, { method: "PUT", body })
     },
-    onSuccess: () => {
-      setForm(null) // re-derive from the fresh read
-      qc.invalidateQueries({ queryKey: ["admin-get", PLATFORM_PATH] })
+    onSuccess: (saved) => {
+      // Hydrate from the PUT response before the background refetch. Resetting to null first can
+      // race with stale cached data and make a successful branding change appear reverted.
+      qc.setQueryData<PlatformConfig>(["admin-get", PLATFORM_PATH], saved)
+      setForm(platformConfigToForm(saved))
+      void qc.invalidateQueries({ queryKey: ["admin-get", PLATFORM_PATH] })
       toast.success("Platform configuration saved")
     },
     onError: (e) => toast.error((e as Error).message),
@@ -142,6 +251,10 @@ export default function ConfigurationPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
+  const hasBrandAssetError = form
+    ? Boolean(brandAssetUrlError(form.brandingLogo) || brandAssetUrlError(form.brandingFaviconUrl))
+    : false
+
   return (
     <>
       <PageHeader
@@ -186,14 +299,21 @@ export default function ConfigurationPage() {
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label>Logo</Label>
-                    <p className="truncate font-mono text-xs text-muted-foreground">{cfg.branding?.logo || "—"}</p>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Favicon</Label>
-                    <p className="truncate font-mono text-xs text-muted-foreground">{cfg.branding?.faviconUrl || "—"}</p>
-                  </div>
+                  <BrandAssetField
+                    id="pc-logo"
+                    label="Logo"
+                    value={form.brandingLogo}
+                    placeholder="https://example.com/logo.svg"
+                    widePreview
+                    onChange={(brandingLogo) => setForm({ ...form, brandingLogo })}
+                  />
+                  <BrandAssetField
+                    id="pc-favicon"
+                    label="Favicon"
+                    value={form.brandingFaviconUrl}
+                    placeholder="https://example.com/favicon.ico"
+                    onChange={(brandingFaviconUrl) => setForm({ ...form, brandingFaviconUrl })}
+                  />
                 </div>
 
                 <div className="space-y-3">
@@ -327,7 +447,7 @@ export default function ConfigurationPage() {
                   </div>
                 </div>
 
-                <Button onClick={() => save.mutate()} disabled={save.isPending}>
+                <Button onClick={() => save.mutate()} disabled={save.isPending || hasBrandAssetError}>
                   {save.isPending ? "Saving…" : "Save platform configuration"}
                 </Button>
               </div>
