@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Cell, Pie, PieChart } from "recharts"
@@ -8,12 +8,16 @@ import {
 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, MoneyCell } from "@/components/data-table"
+import { QuotaOverview } from "@/components/quota-overview"
 import { StatCard } from "@/components/stat-card"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useBillingSummary, useCostInfo, useFeatures, useProject, useProjectId, useUIMenu } from "@/lib/hooks"
+import {
+  useBillingSummary, useCostInfo, useFeatures, useLocations, useProject, useProjectId, useProjectQuota,
+  useUIMenu,
+} from "@/lib/hooks"
 import { fmtMoney, timeAgo } from "@/lib/format"
 import type { CostInfo } from "@/lib/types"
 
@@ -77,6 +81,31 @@ function QuickActions({ pid }: { pid: string }) {
 export function DashboardPage() {
   const pid = useProjectId()
   const { project } = useProject(pid)
+  const { data: locations, isLoading: locationsLoading } = useLocations(pid)
+  const [quotaScopeKey, setQuotaScopeKey] = useState<string>()
+  const quotaScopeOptions = useMemo(
+    () =>
+      (locations ?? [])
+        .filter(
+          (location) =>
+            location.provider !== "ceph-s3" &&
+            !!location.serviceId &&
+            !!location.region &&
+            (!location.resourceTypes ||
+              location.resourceTypes.includes("SERVER") ||
+              location.resourceTypes.includes("VOLUME")),
+        )
+        .map((location) => ({
+          key: `${location.serviceId}/${location.region}`,
+          label: location.displayName || [location.serviceName, location.region].filter(Boolean).join(" / "),
+          scope: { serviceId: location.serviceId!, region: location.region! },
+        })),
+    [locations],
+  )
+  const selectedQuotaScope =
+    quotaScopeOptions.find((option) => option.key === quotaScopeKey) ?? quotaScopeOptions[0]
+  const quotaScope = selectedQuotaScope?.scope
+  const quota = useProjectQuota(pid, quotaScope)
   const { data: cost, isLoading: costLoading } = useCostInfo(pid)
   const { data: summary } = useBillingSummary(pid)
 
@@ -222,6 +251,18 @@ export function DashboardPage() {
           />
         </div>
       )}
+
+      <div className="mt-6">
+        <QuotaOverview
+          data={quota.data}
+          scope={quotaScope}
+          scopeOptions={quotaScopeOptions}
+          selectedScopeKey={selectedQuotaScope?.key}
+          onScopeChange={setQuotaScopeKey}
+          isLoading={locationsLoading || quota.isLoading}
+          error={quota.error}
+        />
+      </div>
 
       <div className="mt-6 grid gap-4 xl:grid-cols-2">
         <Card className="min-w-0">

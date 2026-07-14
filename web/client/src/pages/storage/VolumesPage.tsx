@@ -2,11 +2,12 @@ import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { HardDrive, MoreHorizontal, Plus, RefreshCw } from "lucide-react"
+import { CircleAlert, HardDrive, MoreHorizontal, Plus, RefreshCw } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -21,7 +22,8 @@ import {
 } from "@/components/ui/select"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudList, useCloudScope, useProjectId, useProjectQuota } from "@/lib/hooks"
+import { volumeCreateQuotaViolations } from "@/lib/quota"
 import type { CloudResource } from "@/lib/types"
 
 function vol(r: CloudResource): Record<string, any> {
@@ -46,6 +48,7 @@ export default function VolumesPage() {
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
   const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "VOLUME")
+  const projectQuota = useProjectQuota(pid, scope)
 
   const { data: servers } = useCloudList(pid, "SERVER")
 
@@ -60,6 +63,19 @@ export default function VolumesPage() {
   const [retypeTarget, setRetypeTarget] = useState<CloudResource | null>(null)
   const [newType, setNewType] = useState("")
   const [migrationPolicy, setMigrationPolicy] = useState<"never" | "on-demand">("never")
+
+  const requestedSize = Number(form.size)
+  // Cinder reports per-type quota rows for every type in the deployment (including
+  // __DEFAULT__), so a blank type stays valid — Cinder applies default_volume_type and
+  // the aggregate volumes/gigabytes pre-check still covers the request. The per-type
+  // pre-check only engages when the entered type matches a reported quota row.
+  const quotaVolumeTypes = Object.keys(projectQuota.data?.storage?.volumeTypes ?? {}).sort((a, b) =>
+    a.localeCompare(b),
+  )
+  const createQuotaViolations = volumeCreateQuotaViolations(projectQuota.data, requestedSize, form.type)
+  const quotaCheckPending = createOpen && projectQuota.isLoading
+  const storageQuotaUnavailable =
+    createOpen && !projectQuota.isLoading && (!!projectQuota.error || !projectQuota.data?.storage)
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["cloud", pid, "VOLUME"] })
 
@@ -131,8 +147,14 @@ export default function VolumesPage() {
   })
 
   const create = useMutation({
-    mutationFn: () =>
-      apiFetch(`/project/${pid}/cloud`, {
+    mutationFn: async () => {
+      const latestQuota = await projectQuota.refetch()
+      const selectedVolumeType = form.type.trim()
+      const latestViolations = volumeCreateQuotaViolations(latestQuota.data, requestedSize, form.type)
+      if (latestViolations.length > 0) {
+        throw new Error(latestViolations.map((violation) => violation.message).join(" "))
+      }
+      return apiFetch(`/project/${pid}/cloud`, {
         method: "POST",
         cloud: scope,
         body: {
@@ -140,16 +162,18 @@ export default function VolumesPage() {
           data: {
             name: form.name,
             size: Number(form.size),
-            ...(form.type ? { type: form.type } : {}),
+            ...(selectedVolumeType ? { type: selectedVolumeType } : {}),
             ...(form.availabilityZone ? { availabilityZone: form.availabilityZone } : {}),
           },
         },
-      }),
+      })
+    },
     onSuccess: () => {
       toast.success("Volume created")
       setCreateOpen(false)
       setForm({ name: "", size: "10", type: "", availabilityZone: "" })
       invalidate()
+      void qc.invalidateQueries({ queryKey: ["project-quota", pid] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -355,6 +379,11 @@ export default function VolumesPage() {
             <div className="grid gap-2">
               <Label htmlFor="vol-type">Volume type (optional)</Label>
               <Input id="vol-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} />
+              {quotaVolumeTypes.length > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Known types: {quotaVolumeTypes.join(", ")}. Leave blank to use the default type.
+                </p>
+              ) : null}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="vol-az">Availability zone (optional)</Label>
@@ -364,6 +393,31 @@ export default function VolumesPage() {
                 onChange={(e) => setForm({ ...form, availabilityZone: e.target.value })}
               />
             </div>
+            {quotaCheckPending ? (
+              <p className="text-sm text-muted-foreground">Checking the current storage quota…</p>
+            ) : createQuotaViolations.length > 0 ? (
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>This volume exceeds the project quota</AlertTitle>
+                <AlertDescription>
+                  <ul className="list-disc space-y-1 pl-4">
+                    {createQuotaViolations.map((violation) => (
+                      <li key={`${violation.resource}-${violation.message}`}>{violation.message}</li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            ) : storageQuotaUnavailable ? (
+              <Alert>
+                <CircleAlert />
+                <AlertTitle>Live storage quota is unavailable</AlertTitle>
+                <AlertDescription>
+                  The API will still validate this request when you create the volume.
+                </AlertDescription>
+              </Alert>
+            ) : projectQuota.data && requestedSize > 0 ? (
+              <p className="text-sm text-muted-foreground">This volume fits the current quota snapshot.</p>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
@@ -371,7 +425,15 @@ export default function VolumesPage() {
             </Button>
             <Button
               onClick={() => create.mutate()}
-              disabled={!form.name || !Number(form.size) || create.isPending}
+              disabled={
+                !form.name ||
+                !scope ||
+                !Number.isFinite(requestedSize) ||
+                requestedSize <= 0 ||
+                quotaCheckPending ||
+                createQuotaViolations.length > 0 ||
+                create.isPending
+              }
             >
               {create.isPending ? "Creating…" : "Create volume"}
             </Button>

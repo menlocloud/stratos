@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
 import { useParams } from "react-router-dom"
 import { apiFetch, apiFetchEnvelope, type CloudScope } from "./api"
-import type { CloudResource, CostInfo, Location, Project, BillingSummary, ProjectService } from "./types"
+import type {
+  BillingSummary, CloudResource, CostInfo, Location, Project, ProjectQuotaUsage, ProjectService,
+} from "./types"
 
 export function useProjects() {
   return useQuery({
@@ -33,9 +35,23 @@ export function useLocations(pid: string) {
 
 export function useCloudScope(pid: string): CloudScope | undefined {
   const { data } = useLocations(pid)
-  const loc = data?.[0]
+  // Generic compute/network/storage pages need an OpenStack scope. A project can
+  // also attach Ceph S3, which serves buckets only and may appear first.
+  const loc = data?.find((candidate) => candidate.provider !== "ceph-s3") ?? data?.[0]
   if (!loc?.serviceId || !loc?.region) return undefined
   return { serviceId: loc.serviceId, region: loc.region }
+}
+
+// Live quota usage for the selected OpenStack service/region. The response can
+// be partial (with warnings), so callers should render each metric defensively.
+export function useProjectQuota(pid: string, scope: CloudScope | undefined) {
+  return useQuery({
+    queryKey: ["project-quota", pid, scope?.serviceId, scope?.region],
+    queryFn: () =>
+      apiFetch<ProjectQuotaUsage>(`/project/${pid}/quota-usage`, { cloud: scope }),
+    enabled: !!pid && !!scope,
+    staleTime: 30_000,
+  })
 }
 
 // Cached cloud-resource list by type (POST /project/{pid}/resource?type=X).

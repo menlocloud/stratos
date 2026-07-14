@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live project quota on the client console** — new `GET /project/{id}/quota-usage` combines Nova quota detail (microversion 2.50), Cinder `os-quota-sets?usage=true` (including per-volume-type rows) and the Stratos-managed GPU quota; partial provider failures degrade to a `warnings` list instead of an error. The dashboard gains a **Quota & usage** card with per-region scope switching, and the server / volume create flows pre-check the selected flavor / size against the live snapshot (re-validated right before submit). Provider quota races on create **and** resize/extend now surface as client-correctable 409s instead of internal errors.
+
 - **Ceph S3 (RGW) object-storage provider** — a second object-store backend alongside OpenStack Swift, driven purely by the RGW S3 + Admin Ops APIs (no Keystone). Per-project RGW users with encrypted credentials, S3 access-key management, bucket grants and per-bucket settings, optional static-website endpoint, per-project storage quota. Admin **Add provider** dialog gains an OpenStack | Ceph S3 switch, and ceph providers get a tailored detail page (RGW card, trimmed tabs). (#19, #20)
 - Onboarding existing projects onto a Ceph S3 provider: the admin attach-external-service leg now routes ceph providers through the RGW bootstrap (`BootstrapCephOnto`) instead of the Keystone tenant bootstrap. (#20)
 - **Attach provider** action on the project detail Cloud-services card — lists providers the project is not on yet and provisions the binding (shows the RGW user id for ceph-s3 bindings). Previously the backend leg existed but no UI called it. (#22)

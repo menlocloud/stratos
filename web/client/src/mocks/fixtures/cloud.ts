@@ -28,7 +28,46 @@ function res(type: string, name: string, data: Record<string, any>, extra: Parti
 const flavorSmall = { id: "flv-small", name: "m1.small", vcpus: 1, ram: 2048, disk: 20 }
 const flavorMedium = { id: "flv-medium", name: "m1.medium", vcpus: 2, ram: 4096, disk: 40 }
 const flavorLarge = { id: "flv-large", name: "m1.large", vcpus: 4, ram: 8192, disk: 80 }
-const flavorGpu = { id: "flv-gpu-a10", name: "g1.a10", vcpus: 8, ram: 32768, disk: 200 }
+const flavorGpu = {
+  id: "flv-gpu-a10",
+  name: "g1.a10",
+  vcpus: 8,
+  ram: 32768,
+  disk: 200,
+  extra_specs: { "pci_passthrough:alias": "nvidia-a10:1" },
+}
+
+export const quotaUsage = {
+  serviceId: "svc-openstack-1",
+  region: "RegionOne",
+  compute: {
+    instances: { used: 4, reserved: 0, limit: 8 },
+    cores: { used: 16, reserved: 0, limit: 32 },
+    ramMb: { used: 49_152, reserved: 0, limit: 65_536 },
+  },
+  storage: {
+    volumes: { used: 3, reserved: 0, limit: 10 },
+    gigabytes: { used: 240, reserved: 0, limit: 1_000 },
+    snapshots: { used: 1, reserved: 0, limit: 10 },
+    perVolumeGigabytes: { used: 0, reserved: 0, limit: 500 },
+    volumeTypes: {
+      standard: {
+        volumes: { used: 1, reserved: 0, limit: 8 },
+        gigabytes: { used: 100, reserved: 0, limit: 800 },
+      },
+      "high-iops": {
+        volumes: { used: 2, reserved: 0, limit: 5 },
+        gigabytes: { used: 90, reserved: 0, limit: 100 },
+      },
+    },
+  },
+  gpu: {
+    limits: { "nvidia-a10": 1 },
+    usage: { "nvidia-a10": 1 },
+    usageAvailable: true,
+  },
+  warnings: [],
+}
 
 export const flavors = [flavorSmall, flavorMedium, flavorLarge, flavorGpu].map((f) => ({
   externalId: f.id,
@@ -94,7 +133,13 @@ function server(name: string, status: string, flavor: any, addr: string) {
         status,
         key_name: "ops-key",
         addresses: { "net-private": [{ addr, "OS-EXT-IPS:type": "fixed" }] },
-        flavor: { original_name: flavor.name, vcpus: flavor.vcpus, ram: flavor.ram, disk: flavor.disk },
+        flavor: {
+          original_name: flavor.name,
+          vcpus: flavor.vcpus,
+          ram: flavor.ram,
+          disk: flavor.disk,
+          extra_specs: flavor.extra_specs ?? {},
+        },
         "OS-EXT-AZ:availability_zone": "az-1",
         created: "2026-06-12T09:30:00Z",
       },

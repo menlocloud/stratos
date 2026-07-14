@@ -7,8 +7,9 @@ import { useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { Check, Server } from "lucide-react"
+import { Check, CircleAlert, Server } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -23,9 +24,11 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch, type CloudScope } from "@/lib/api"
 import {
-  useFlavorCategories, useImageGroups, useLocations, useProject, useProjectId, usePublicNetworks,
+  useFlavorCategories, useImageGroups, useLocations, useProject, useProjectId, useProjectQuota,
+  usePublicNetworks,
 } from "@/lib/hooks"
 import type { FlavorCategory, ImageGrouping } from "@/lib/hooks"
+import { gpuFromFlavor, serverQuotaViolations } from "@/lib/quota"
 import type { CloudResource, Location } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { isPrivateNetwork } from "../network/NetworksPage"
@@ -87,7 +90,14 @@ type Az = { name?: string; displayName?: string; available?: boolean }
 type GlanceImage = Record<string, any>
 type Flavor = {
   externalId?: string
-  data?: { id?: string; name?: string; vcpus?: number; ram?: number; disk?: number }
+  data?: {
+    id?: string
+    name?: string
+    vcpus?: number
+    ram?: number
+    disk?: number
+    extra_specs?: Record<string, unknown>
+  }
 }
 
 const gb = (bytes?: number) => (bytes ? (bytes / 1073741824).toFixed(2) : "0.00")
@@ -131,7 +141,13 @@ export default function CreateServerPage() {
 
   const locations = useLocations(pid)
   const [locKey, setLocKey] = useState<string>()
-  const locs = (locations.data ?? []).filter((l) => l.serviceId && l.region)
+  const locs = (locations.data ?? []).filter(
+    (location) =>
+      location.serviceId &&
+      location.region &&
+      location.provider !== "ceph-s3" &&
+      (!location.resourceTypes || location.resourceTypes.includes("SERVER")),
+  )
   const locOf = (l: Location) => `${l.serviceId}/${l.region}`
   const selectedLoc = locs.find((l) => locOf(l) === locKey) ?? locs[0]
   const scope: CloudScope | undefined =
@@ -142,6 +158,7 @@ export default function CreateServerPage() {
   const azs = useBulkAction<Az>(pid, scope, "LIST_AVAILABILITY_ZONES")
   const images = useBulkAction<GlanceImage>(pid, scope, "PUBLIC_IMAGES")
   const flavors = useBulkAction<Flavor>(pid, scope, "LIST_FLAVORS")
+  const projectQuota = useProjectQuota(pid, scope)
   // Curated catalog: show only the flavors/images the admin grouped into categories (grouped by
   // category), not the raw live cloud lists. Falls back to showing everything if nothing matches.
   const flavorCats = useFlavorCategories()
@@ -187,6 +204,17 @@ export default function CreateServerPage() {
   const [sgNames, setSgNames] = useState<string[]>([])
   const [name, setName] = useState("")
 
+  const selectedFlavor = flavors.data?.find((flavor) => flavor.externalId === flavorId)
+  const quotaViolations = serverQuotaViolations(projectQuota.data, selectedFlavor)
+  const quotaCheckPending = !!flavorId && projectQuota.isLoading
+  const selectedGpu = gpuFromFlavor(selectedFlavor?.data?.extra_specs)
+  const quotaUnavailable =
+    !!flavorId &&
+    !projectQuota.isLoading &&
+    (!!projectQuota.error ||
+      !projectQuota.data?.compute ||
+      (!!selectedGpu && projectQuota.data.gpu.usageAvailable === false))
+
   const keypairName = (r: CloudResource) => (r.data?.keypair?.name as string) ?? r.name ?? ""
   const sgName = (r: CloudResource) => (r.data?.securityGroup?.name as string) ?? r.name ?? ""
 
@@ -197,7 +225,14 @@ export default function CreateServerPage() {
   const wantFip = assignFip && (netsVisible ? !!pubNets.data?.length : true)
 
   const create = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      // Refresh immediately before submit as well as checking on flavor change.
+      // This narrows the race window; OpenStack/the GPU backend remain the final authority.
+      const latestQuota = await projectQuota.refetch()
+      const latestViolations = serverQuotaViolations(latestQuota.data, selectedFlavor)
+      if (latestViolations.length > 0) {
+        throw new Error(latestViolations.map((violation) => violation.message).join(" "))
+      }
       // Password login with a username creates that user via cloud-init (reliable on any cloud-init
       // image); the generated user-data wins over a manually-typed one. Without a username, fall back
       // to nova adminPass on the image's default account.
@@ -230,20 +265,21 @@ export default function CreateServerPage() {
     onSuccess: () => {
       toast.success(`Server "${name.trim()}" is being created`)
       void qc.invalidateQueries({ queryKey: ["cloud", pid, "SERVER"] })
+      void qc.invalidateQueries({ queryKey: ["project-quota", pid] })
       navigate(`/p/${pid}/servers`)
     },
     onError: (e: Error) => toast.error(e.message),
   })
 
   const ready =
-    !!scope && !!imageId && !!flavorId && netIds.length > 0 && !!name.trim() &&
+    !!scope && !!imageId && !!selectedFlavor && netIds.length > 0 && !!name.trim() &&
     (!wantFip || !netsVisible || !!fipNet)
 
   // What still blocks Create — shown next to the disabled button so nobody
   // has to scroll back up hunting for the unfinished step.
   const missing = [
     !imageId && "an image",
-    !flavorId && "a flavor",
+    !selectedFlavor && "a flavor",
     netIds.length === 0 && "a network",
     wantFip && netsVisible && !fipNet && "a public network",
     !name.trim() && "a name",
@@ -294,7 +330,17 @@ export default function CreateServerPage() {
                     className={cn(
                       active && "border-primary bg-transparent ring-1 ring-primary hover:bg-transparent",
                     )}
-                    onClick={() => setLocKey(locOf(l))}
+                    onClick={() => {
+                      setLocKey(locOf(l))
+                      setAzName(undefined)
+                      setImageId(undefined)
+                      setFlavorId(undefined)
+                      setNetIds([])
+                      setFixedIps({})
+                      setFipNetId(undefined)
+                      setKeyName("")
+                      setSgNames([])
+                    }}
                   >
                     {active ? <Check className="size-4 text-primary" /> : null}
                     {l.displayName || l.region} <span className="font-mono text-xs opacity-70">{l.region}</span>
@@ -387,12 +433,16 @@ export default function CreateServerPage() {
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
                       {sec.items.map((f) => {
                         const selected = flavorId === f.externalId
+                        const flavorQuotaViolations = serverQuotaViolations(projectQuota.data, f)
                         return (
                           <button
                             key={f.externalId}
                             type="button"
                             aria-pressed={selected}
-                            className={optionCardClass(selected)}
+                            className={cn(
+                              optionCardClass(selected),
+                              flavorQuotaViolations.length > 0 && "border-destructive/50",
+                            )}
                             onClick={() => setFlavorId(f.externalId)}
                           >
                             <div className="flex items-start justify-between gap-2">
@@ -403,12 +453,40 @@ export default function CreateServerPage() {
                               {f.data?.vcpus ?? "—"} vCPU · {f.data?.ram ? `${Math.round(f.data.ram / 1024)} GB` : "—"} RAM ·{" "}
                               {f.data?.disk != null ? `${f.data.disk} GB` : "—"} disk
                             </div>
+                            {flavorQuotaViolations.length > 0 ? (
+                              <div className="mt-2 text-xs text-destructive">Exceeds project quota</div>
+                            ) : null}
                           </button>
                         )
                       })}
                     </div>
                   </div>
                 ))}
+                {quotaCheckPending ? (
+                  <p className="text-sm text-muted-foreground">Checking this flavor against the current quota…</p>
+                ) : quotaViolations.length > 0 ? (
+                  <Alert variant="destructive">
+                    <CircleAlert />
+                    <AlertTitle>This flavor exceeds the project quota</AlertTitle>
+                    <AlertDescription>
+                      <ul className="list-disc space-y-1 pl-4">
+                        {quotaViolations.map((violation) => (
+                          <li key={`${violation.resource}-${violation.message}`}>{violation.message}</li>
+                        ))}
+                      </ul>
+                    </AlertDescription>
+                  </Alert>
+                ) : quotaUnavailable ? (
+                  <Alert>
+                    <CircleAlert />
+                    <AlertTitle>Live quota check is partly unavailable</AlertTitle>
+                    <AlertDescription>
+                      The API will still validate this request when you create the server.
+                    </AlertDescription>
+                  </Alert>
+                ) : flavorId && projectQuota.data ? (
+                  <p className="text-sm text-muted-foreground">This flavor fits the current quota snapshot.</p>
+                ) : null}
               </div>
             )}
           </Step>
@@ -652,7 +730,10 @@ export default function CreateServerPage() {
           </Step>
 
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <Button onClick={() => create.mutate()} disabled={!ready || create.isPending}>
+            <Button
+              onClick={() => create.mutate()}
+              disabled={!ready || quotaCheckPending || quotaViolations.length > 0 || create.isPending}
+            >
               <Server className="size-4" />
               {create.isPending ? "Creating…" : "Create server"}
             </Button>

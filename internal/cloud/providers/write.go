@@ -329,6 +329,19 @@ func (s *WriteService) Create(ctx context.Context, serviceID, region, projectID,
 		if full, gerr := s.w.GetServer(ctx, srvID); gerr == nil && mstr(full, "id") != "" {
 			srv = full
 		}
+		// Keep the just-created cache entry quota/rating-ready. Nova's server
+		// response generally carries only flavor.id; resolving it here prevents
+		// GPU usage from reading as zero until the next background sync.
+		requestedFlavorID := mstr(d, "flavorId")
+		flavor, ok := srv["flavor"].(map[string]any)
+		if !ok || flavor == nil {
+			flavor = map[string]any{}
+			srv["flavor"] = flavor
+		}
+		if mstr(flavor, "id") == "" {
+			flavor["id"] = requestedFlavorID
+		}
+		enrichServerFlavorForCache(ctx, s.w, srv)
 		cr.ExternalID = srvID
 		cr.Data = map[string]any{"server": srv}
 
@@ -791,6 +804,35 @@ func (s *WriteService) Create(ctx context.Context, serviceID, region, projectID,
 	// transient data so the create response can carry it (KEYPAIR privateKey), unpersisted.
 	saved.EphemeralData = cr.EphemeralData
 	return saved, nil
+}
+
+type flavorReader interface {
+	GetFlavor(context.Context, string) (map[string]any, error)
+}
+
+// enrichServerFlavorForCache is optional for fake writers and non-OpenStack
+// implementations, but *client.Client supplies it. It mirrors the read-side
+// enrichment without coupling the provider package back to the project layer.
+func enrichServerFlavorForCache(ctx context.Context, writer any, srv map[string]any) {
+	flavor, ok := srv["flavor"].(map[string]any)
+	if !ok || flavor == nil {
+		return
+	}
+	if _, resolved := flavor["extra_specs"]; resolved {
+		return
+	}
+	flavorID, _ := flavor["id"].(string)
+	reader, ok := writer.(flavorReader)
+	if !ok || flavorID == "" {
+		return
+	}
+	specs, err := reader.GetFlavor(ctx, flavorID)
+	if err != nil {
+		return
+	}
+	for key, value := range specs {
+		flavor[key] = value
+	}
 }
 
 // Action handles POST /cloud/{rid}/action: dispatches by the

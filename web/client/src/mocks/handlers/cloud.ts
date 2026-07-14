@@ -4,7 +4,7 @@ import { db } from "../db"
 import {
   availabilityZones, bucketSettings, dnsRecordsets, flavorCategories,
   flavors, imageGrouping, lbListeners, lbMonitors, lbPools, publicImages,
-  s3Credentials, stackEvents, stackResources, volumeTypes,
+  quotaUsage, s3Credentials, stackEvents, stackResources, volumeTypes,
 } from "../fixtures/cloud"
 import { locations, publicNetworks } from "../fixtures/platform"
 
@@ -14,6 +14,9 @@ const ok = (result: unknown = null) => ({ data: { result } })
 
 on("GET /project/:pid/resource-types", () => ({ data: locations }))
 on("GET /project/:pid/public-networks", () => ({ data: publicNetworks }))
+on("GET /project/:pid/quota-usage", ({ opts }) => ({
+  data: { ...quotaUsage, region: opts.cloud?.region ?? quotaUsage.region },
+}))
 
 on("POST /project/:pid/resource", ({ query }) => {
   const type = query.get("type")

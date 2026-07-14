@@ -45,6 +45,7 @@ func TestRoutes_registerAndMatch(t *testing.T) {
 		{http.MethodGet, "/project/p1/service/details"},
 		{http.MethodGet, "/project/p1/service/CLOUD/location"},
 		{http.MethodGet, "/project/p1/billing"},
+		{http.MethodGet, "/project/p1/quota-usage"},
 	} {
 		rctx := chi.NewRouteContext()
 		if !r.Match(rctx, tc.method, tc.path) {

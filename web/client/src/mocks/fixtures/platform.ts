@@ -64,6 +64,14 @@ export const locations: Location[] = [
     serviceName: "Menlo Cloud",
   },
   {
+    serviceId: "svc-openstack-1",
+    region: "RegionTwo",
+    displayName: "Da Nang (RegionTwo)",
+    resourceTypes: ALL_TYPES,
+    provider: "openstack",
+    serviceName: "Menlo Cloud",
+  },
+  {
     serviceId: "svc-ceph-1",
     region: "RegionOne",
     displayName: "Hanoi Object Storage",

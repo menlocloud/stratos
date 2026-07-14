@@ -726,6 +726,10 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 				"Bucket name is already taken — S3 bucket names are globally unique"))
 			return
 		}
+		if quotaErr := cloudQuotaConflict(err); quotaErr != nil {
+			h.fail(w, quotaErr)
+			return
+		}
 		h.fail(w, err)
 		return
 	}
@@ -1725,6 +1729,12 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := ws.Action(r.Context(), svcID, proj.ID, externalID, req.Action, req.Data)
 	if err != nil {
+		// RESIZE races Nova's cores/ram quota and EXTEND races Cinder's gigabytes quota
+		// exactly like create does — same client-correctable 409 mapping.
+		if quotaErr := cloudQuotaConflict(err); quotaErr != nil {
+			h.fail(w, quotaErr)
+			return
+		}
 		h.fail(w, err)
 		return
 	}
