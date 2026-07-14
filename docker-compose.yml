@@ -63,7 +63,7 @@ services:
       dockerfile: Dockerfile
       args:
         APP: client
-    image: registry.menlo.ai/library/stratos-web:dev
+    image: registry.menlo.ai/library/stratos-web:latest
     restart: unless-stopped
     depends_on:
       - api
@@ -80,7 +80,7 @@ services:
       dockerfile: Dockerfile
       args:
         APP: admin
-    image: registry.menlo.ai/library/stratos-admin:dev
+    image: registry.menlo.ai/library/stratos-admin:latest
     restart: unless-stopped
     depends_on:
       - api
