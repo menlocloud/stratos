@@ -1,23 +1,26 @@
 import { useMemo } from "react"
 import { Link } from "react-router-dom"
+import type { ColumnDef } from "@tanstack/react-table"
 import { Cell, Pie, PieChart } from "recharts"
 import {
   ArrowUpRight, BookOpen, CalendarClock, Receipt, Server, UserPlus, Wallet,
   type LucideIcon,
 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
+import { DataTable, MoneyCell } from "@/components/data-table"
 import { StatCard } from "@/components/stat-card"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useBillingSummary, useCostInfo, useFeatures, useProject, useProjectId, useUIMenu } from "@/lib/hooks"
 import { fmtMoney, timeAgo } from "@/lib/format"
+import type { CostInfo } from "@/lib/types"
 
 // Stable slot assignment: sort categories so a service keeps its color across
 // months/filters; >7 categories fold into "Other".
 const MAX_SLICES = 7
+type TopResourcePrice = NonNullable<CostInfo["topResourcePrices"]>[number]
 
 function serviceLabel(key: string): string {
   const label = key.toLowerCase().replace(/_/g, " ")
@@ -79,6 +82,57 @@ export function DashboardPage() {
 
   const currency = (summary?.currency as string) ?? "USD"
   const projectCost = cost?.projects?.[pid] ?? cost
+
+  const topResourceColumns = useMemo<ColumnDef<TopResourcePrice>[]>(
+    () => [
+      {
+        id: "resource",
+        accessorFn: (row) => row.resource?.name ?? row.resource?.id ?? "",
+        header: "Resource",
+        enableSorting: false,
+        cell: ({ row }) => {
+          const resource = row.original.resource
+          const label = resource?.name ?? resource?.id ?? "—"
+          return resource?.type === "SERVER" && resource.id ? (
+            <Link
+              className="font-medium hover:underline"
+              to={`/p/${pid}/servers/${resource.id}`}
+            >
+              {label}
+            </Link>
+          ) : (
+            <span className="font-medium">{label}</span>
+          )
+        },
+      },
+      {
+        id: "type",
+        accessorFn: (row) => row.resource?.type ?? "",
+        header: "Type",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <Badge variant="secondary">{serviceLabel(row.original.resource?.type ?? "—")}</Badge>
+        ),
+      },
+      {
+        id: "created",
+        accessorFn: (row) => row.resource?.createdAt ?? "",
+        header: "Created",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">{timeAgo(row.original.resource?.createdAt)}</span>
+        ),
+      },
+      {
+        id: "cost",
+        accessorFn: (row) => row.currentCost ?? row.price ?? 0,
+        header: () => <div className="text-right">Cost</div>,
+        enableSorting: false,
+        cell: ({ getValue }) => <MoneyCell value={getValue<number>()} currency={currency} />,
+      },
+    ],
+    [currency, pid],
+  )
 
   const byService = useMemo(() => {
     const entries = Object.entries(projectCost?.currentMonthCostsByType ?? {}).sort(([a], [b]) =>
@@ -169,8 +223,8 @@ export function DashboardPage() {
         </div>
       )}
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        <Card>
+      <div className="mt-6 grid gap-4 xl:grid-cols-2">
+        <Card className="min-w-0">
           <CardHeader className="border-b">
             <CardTitle className="text-base">Cost by service</CardTitle>
             <p className="text-sm text-muted-foreground">This month, rated so far.</p>
@@ -234,46 +288,25 @@ export function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="min-w-0">
           <CardHeader className="border-b">
             <CardTitle className="text-base">Top resources</CardTitle>
             <p className="text-sm text-muted-foreground">What's driving this month's spend.</p>
           </CardHeader>
-          <CardContent className="p-0">
-            {projectCost?.topResourcePrices?.length ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Resource</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead className="text-right">Cost</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {projectCost.topResourcePrices.map((r, i) => (
-                    <TableRow key={i}>
-                      <TableCell className="font-medium">
-                        {r.resource?.type === "SERVER" && r.resource?.id ? (
-                          <Link className="inline-block py-1 hover:underline" to={`/p/${pid}/servers/${r.resource.id}`}>
-                            {r.resource?.name ?? r.resource?.id}
-                          </Link>
-                        ) : (
-                          (r.resource?.name ?? r.resource?.id ?? "—")
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">{serviceLabel(r.resource?.type ?? "—")}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{timeAgo(r.resource?.createdAt)}</TableCell>
-                      <TableCell className="text-right font-mono tabular-nums">{fmtMoney(r.currentCost ?? r.price, currency)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <p className="py-6 text-center text-sm text-muted-foreground">Nothing billed yet.</p>
-            )}
+          <CardContent className="min-w-0">
+            <DataTable
+              columns={topResourceColumns}
+              data={projectCost?.topResourcePrices}
+              isLoading={costLoading}
+              empty="Nothing billed yet."
+              pageSize={5}
+              skeletonRows={5}
+              getRowId={(row) =>
+                `${row.resource?.type ?? "resource"}:${
+                  row.resource?.id ?? row.resource?.name ?? row.currentCost ?? row.price ?? "unknown"
+                }`
+              }
+            />
           </CardContent>
         </Card>
       </div>
