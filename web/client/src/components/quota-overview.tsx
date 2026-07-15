@@ -10,11 +10,12 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
 import type { CloudScope } from "@/lib/api"
-import type { ProjectQuotaUsage, QuotaMetric } from "@/lib/types"
+import type { GpuCapacityUsage, ProjectQuotaUsage, QuotaMetric } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 type QuotaOverviewProps = {
   data?: ProjectQuotaUsage
+  gpuCapacity?: GpuCapacityUsage
   scope?: CloudScope
   scopeOptions?: Array<{ key: string; label: string; scope: CloudScope }>
   selectedScopeKey?: string
@@ -158,7 +159,12 @@ function MetricTile({ label, metric, icon: Icon, format = formatCount, details =
   )
 }
 
-function gpuMetrics(data?: ProjectQuotaUsage): Array<{
+// gpuMetrics builds the per-model GPU tiles. When the operator enabled GPU capacity for the
+// project (gpuCapacity.visible), the tiles list the FULL region GPU catalog — every model the
+// region offers, not only the ones this project already uses — and a model with no project limit
+// shows the region's free/total capacity instead of a bare "Unlimited". A model WITH a project
+// limit keeps its project quota bar (and notes region availability).
+function gpuMetrics(data?: ProjectQuotaUsage, gpuCapacity?: GpuCapacityUsage): Array<{
   key: string
   label: string
   metric: QuotaMetric
@@ -167,40 +173,72 @@ function gpuMetrics(data?: ProjectQuotaUsage): Array<{
   const limits = data?.gpu?.limits ?? {}
   const usage = data?.gpu?.usage ?? {}
   const usageAvailable = data?.gpu?.usageAvailable !== false
-  const metric = (model: string, limit: number): QuotaMetric => ({
-    used: usageAvailable ? Number(usage[model] ?? 0) : Number.NaN,
-    reserved: 0,
-    limit: Number(limit),
-  })
+  const projectUsed = (model: string) => (usageAvailable ? Number(usage[model] ?? 0) : Number.NaN)
+
+  const capacityVisible = gpuCapacity?.visible === true
+  const capacityByModel = new Map<string, { available: number; total: number }>()
+  for (const entry of gpuCapacity?.capacity ?? []) {
+    capacityByModel.set(entry.model, { available: entry.available, total: entry.total })
+  }
+
   const explicit = new Set(Object.keys(limits).filter((model) => model !== "*"))
   const hasFallback = Object.prototype.hasOwnProperty.call(limits, "*")
   const fallbackLimit = Number(limits["*"])
+
   const models = [...new Set([
+    ...(capacityVisible ? [...capacityByModel.keys()] : []),
     ...explicit,
     ...Object.keys(usage).filter((model) => model !== "*"),
   ])].sort((a, b) => a.localeCompare(b))
+
   const rows = models.map((model) => {
     const hasExact = explicit.has(model)
-    const limit = hasExact ? Number(limits[model]) : hasFallback ? fallbackLimit : -1
+    const capacity = capacityVisible ? capacityByModel.get(model) : undefined
+
+    // A model with a project limit (exact or the "*" fallback) keeps its project quota bar.
+    if (hasExact || hasFallback) {
+      const limit = hasExact ? Number(limits[model]) : fallbackLimit
+      const details = [hasExact ? "Project-wide custom quota" : "Uses the project fallback quota (*)"]
+      if (capacity) details.push(`${capacity.available} of ${capacity.total} free in region`)
+      return {
+        key: model,
+        label: `GPU / ${model}`,
+        metric: { used: projectUsed(model), reserved: 0, limit },
+        details,
+      }
+    }
+
+    // No project limit but capacity is visible → show the region's free/total for this model.
+    if (capacity) {
+      const inUse = Math.max(0, capacity.total - capacity.available)
+      const yours = projectUsed(model)
+      return {
+        key: model,
+        label: `GPU / ${model}`,
+        metric: { used: inUse, reserved: 0, limit: capacity.total },
+        details: [
+          "Region availability · no project limit",
+          Number.isFinite(yours) ? `You're using ${yours}` : "Your usage is unavailable",
+        ],
+      }
+    }
+
+    // No limit, no capacity → unlimited.
     return {
       key: model,
       label: `GPU / ${model}`,
-      metric: metric(model, limit),
-      details: [
-        hasExact
-          ? "Project-wide custom quota"
-          : hasFallback
-            ? "Uses the project fallback quota (*)"
-            : "No GPU limit configured",
-      ],
+      metric: { used: projectUsed(model), reserved: 0, limit: -1 },
+      details: ["No GPU limit configured"],
     }
   })
 
-  if (hasFallback && !models.some((model) => !explicit.has(model))) {
+  // The "*" catch-all only makes sense when we are NOT already listing the full catalog: it stands
+  // in for models the project could use under the fallback but has no row for yet.
+  if (hasFallback && !capacityVisible && !models.some((model) => !explicit.has(model))) {
     rows.push({
       key: "fallback:*",
       label: "GPU / Other models",
-      metric: metric("*", fallbackLimit),
+      metric: { used: 0, reserved: 0, limit: fallbackLimit },
       details: ["Fallback quota per unlisted GPU model (*)"],
     })
   }
@@ -210,6 +248,7 @@ function gpuMetrics(data?: ProjectQuotaUsage): Array<{
 
 export function QuotaOverview({
   data,
+  gpuCapacity,
   scope,
   scopeOptions = [],
   selectedScopeKey,
@@ -229,7 +268,7 @@ export function QuotaOverview({
         })()
       : undefined,
   ].filter((detail): detail is string => !!detail)
-  const gpu = gpuMetrics(data)
+  const gpu = gpuMetrics(data, gpuCapacity)
   const warnings = data?.warnings ?? []
 
   return (

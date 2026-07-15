@@ -20,15 +20,23 @@ for (const viewport of [
   }
 }
 
-test("dashboard shows live standard and custom GPU quota", async ({ page }) => {
+test("dashboard shows the full region GPU catalog with per-model capacity", async ({ page }) => {
+  // prj-aurora has gpuCapacityVisible enabled, so the GPU tiles list the whole region catalog
+  // (incl. models the project doesn't use) and no-limit models show region free/total.
   await page.goto(`${project}/dashboard`)
   await expect(page.getByText("Quota & usage")).toBeVisible()
   await expect(page.getByText("Instances", { exact: true })).toBeVisible()
+  // Model with a project limit keeps its quota tile + a region-availability note.
   await expect(page.getByText("GPU / nvidia-a10", { exact: true })).toBeVisible()
   await expect(page.getByText("Project-wide custom quota", { exact: true })).toBeVisible()
-  await expect(page.getByText("GPU / nvidia-l40s", { exact: true })).toBeVisible()
-  await expect(page.getByText("No GPU limit configured", { exact: true })).toBeVisible()
-  await expect(page.getByLabel("GPU / nvidia-l40s: 2 used, unlimited")).toBeVisible()
+  await expect(page.getByText("3 of 4 free in region", { exact: true })).toBeVisible()
+  // A region model the project does NOT use is still listed (full catalog).
+  await expect(page.getByText("GPU / nvidia-a100-80gb", { exact: true })).toBeVisible()
+  await expect(page.getByText("Region availability").first()).toBeVisible()
+  // A no-limit model shows region free/total (24 total, sold out) instead of "Unlimited".
+  const l40s = page.getByRole("meter", { name: "GPU / nvidia-l40s quota" })
+  await expect(l40s).toHaveAttribute("aria-valuemax", "24")
+  await expect(l40s).toHaveAttribute("aria-valuetext", "24 used of 24")
 })
 
 test("dashboard applies wildcard GPU quota only when no exact model limit exists", async ({ page }) => {
