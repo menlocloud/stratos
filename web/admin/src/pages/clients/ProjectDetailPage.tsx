@@ -266,36 +266,56 @@ export default function ProjectDetailPage() {
       }
     }
 
-    const models = [...new Set([...exactModels, ...Object.keys(normalizedGPUUsage)])]
+    // Region GPU capacity (placement gpu-info), aggregated per canonical model across the
+    // service's regions — so the rows can list the full region catalog and a model with no
+    // project limit shows the region's free/total instead of a bare "Unlimited".
+    const capacityByModel = new Map<string, { total: number; inUse: number }>()
+    for (const region of gpuInfo.data?.data ?? []) {
+      for (const gpu of region.gpus ?? []) {
+        const model = normalizeGPUModel(gpu.name)
+        if (!model) continue
+        const previous = capacityByModel.get(model) ?? { total: 0, inUse: 0 }
+        capacityByModel.set(model, { total: previous.total + gpu.total, inUse: previous.inUse + gpu.inUse })
+      }
+    }
+
+    const models = [...new Set([...capacityByModel.keys(), ...exactModels, ...Object.keys(normalizedGPUUsage)])]
       .sort((a, b) => a.localeCompare(b))
     const rows = models.map((model) => {
       const hasExact = exactModels.has(model)
       const invalid = hasExact ? !exactLimits.has(model) : fallbackConfigured && fallbackLimit === undefined
+      const cap = capacityByModel.get(model)
+      const capacity = cap ? { total: cap.total, available: Math.max(0, cap.total - cap.inUse) } : undefined
       return {
         model,
         used: normalizedGPUUsage[model] ?? 0,
         limit: hasExact ? exactLimits.get(model) : fallbackLimit,
         invalid,
+        capacity,
         source: invalid
           ? "Invalid draft"
           : hasExact
             ? "Exact model limit"
             : fallbackLimit !== undefined
               ? "Fallback limit (*)"
-              : "Unlimited",
+              : capacity
+                ? "Region availability · no limit"
+                : "Unlimited",
       }
     })
-    if (fallbackConfigured && !models.some((model) => !exactModels.has(model))) {
+    // The "*" catch-all only makes sense when NOT already listing the full region catalog.
+    if (fallbackConfigured && capacityByModel.size === 0 && !models.some((model) => !exactModels.has(model))) {
       rows.push({
         model: "*",
         used: 0,
         limit: fallbackLimit,
         invalid: fallbackLimit === undefined,
+        capacity: undefined,
         source: fallbackLimit === undefined ? "Invalid draft" : "Per unlisted model",
       })
     }
     return rows
-  }, [normalizedGPUUsage, quotaRows])
+  }, [normalizedGPUUsage, quotaRows, gpuInfo.data])
 
   const gpuUsageAvailable = gpuUsage.data?.usageAvailable === true
   const totalGPUUsed = Object.values(normalizedGPUUsage).reduce((total, used) => total + used, 0)
@@ -989,9 +1009,13 @@ export default function ProjectDetailPage() {
                                 </p>
                               </div>
                               <div>
-                                <p className="text-xs text-muted-foreground">Limit</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {row.limit === undefined && row.capacity ? "Region free" : "Limit"}
+                                </p>
                                 <p className="mt-1 font-mono font-semibold tabular-nums">
-                                  {row.invalid ? "Invalid draft" : row.limit ?? "Unlimited"}
+                                  {row.invalid
+                                    ? "Invalid draft"
+                                    : row.limit ?? (row.capacity ? `${row.capacity.available} / ${row.capacity.total}` : "Unlimited")}
                                 </p>
                               </div>
                             </div>
