@@ -233,11 +233,12 @@ export const osImages: Doc[] = [
     region: "eu-central-1",
     regionDisplayName: "EU Central (Frankfurt)",
     images: [
-      { id: "img-0001", name: "ubuntu-24.04-lts", status: "ACTIVE" },
-      { id: "img-0002", name: "ubuntu-22.04-lts", status: "ACTIVE" },
-      { id: "img-0003", name: "debian-13", status: "ACTIVE" },
-      { id: "img-0004", name: "rocky-10", status: "ACTIVE" },
-      { id: "img-0005", name: "docker-host-24.04", status: "ACTIVE" },
+      { id: "img-0001", name: "ubuntu-24.04-lts", status: "ACTIVE", visibility: "public" },
+      { id: "img-0002", name: "ubuntu-22.04-lts", status: "ACTIVE", visibility: "public" },
+      { id: "img-0003", name: "debian-13", status: "ACTIVE", visibility: "public" },
+      { id: "img-0004", name: "rocky-10", status: "ACTIVE", visibility: "public" },
+      // private on purpose — exercises the "not public" binding warning.
+      { id: "img-0005", name: "docker-host-24.04", status: "ACTIVE", visibility: "private" },
     ],
   },
   {
@@ -246,8 +247,8 @@ export const osImages: Doc[] = [
     region: "eu-west-1",
     regionDisplayName: "EU West (Amsterdam)",
     images: [
-      { id: "img-0011", name: "ubuntu-24.04-lts", status: "ACTIVE" },
-      { id: "img-0012", name: "debian-13", status: "ACTIVE" },
+      { id: "img-0011", name: "ubuntu-24.04-lts", status: "ACTIVE", visibility: "public" },
+      { id: "img-0012", name: "debian-13", status: "ACTIVE", visibility: "public" },
     ],
   },
 ]

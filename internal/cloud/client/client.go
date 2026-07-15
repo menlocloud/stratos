@@ -212,11 +212,14 @@ func (c *Client) GetFlavor(ctx context.Context, id string) (map[string]any, erro
 	}, nil
 }
 
-// Image is the facade view of a Glance image.
+// Image is the facade view of a Glance image. Visibility lets the admin
+// image-group editor warn about bindings tenants cannot see (only public
+// images appear in the client's PUBLIC_IMAGES list).
 type Image struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Visibility string `json:"visibility"`
 }
 
 // ListImages returns the project's Glance images (read-only).
@@ -235,7 +238,7 @@ func (c *Client) ListImages(ctx context.Context) ([]Image, error) {
 	}
 	out := make([]Image, 0, len(is))
 	for _, im := range is {
-		out = append(out, Image{ID: im.ID, Name: im.Name, Status: string(im.Status)})
+		out = append(out, Image{ID: im.ID, Name: im.Name, Status: string(im.Status), Visibility: string(im.Visibility)})
 	}
 	return out, nil
 }
