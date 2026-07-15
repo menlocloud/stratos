@@ -45,6 +45,16 @@ services:
       STRATOS_SELF_UI_BASE_URL: http://localhost:8082
       STRATOS_SELF_ADMIN_BASE_URL: http://localhost:8083
       STRATOS_JOBS_DEBUG_TRIGGERS: "true"
+      # OIDC realms the API validates tokens against — same issuer/client vars the
+      # SPAs read (below), so one .env drives login + API. Empty issuer ⇒ realm off ⇒
+      # its tokens 401. Issuer = browser-facing Keycloak URL, reachable from here.
+      AUTH_MAIN_OAUTH2_ISSUER_URI: ${STRATOS_OAUTH2_ISSUER:-}
+      AUTH_MAIN_OAUTH2_CLIENT_ID: ${STRATOS_OAUTH2_CLIENT_ID:-stratos-ui}
+      AUTH_ADMIN_OAUTH2_ISSUER_URI: ${STRATOS_ADMIN_OAUTH2_ISSUER:-}
+      AUTH_ADMIN_OAUTH2_CLIENT_ID: ${STRATOS_ADMIN_OAUTH2_CLIENT_ID:-stratos-admin}
+      # admin-api shares the operator (master) realm; defaults to the admin issuer.
+      AUTH_ADMIN_API_OAUTH2_ISSUER_URI: ${STRATOS_ADMIN_API_OAUTH2_ISSUER:-${STRATOS_ADMIN_OAUTH2_ISSUER:-}}
+      AUTH_ADMIN_API_OAUTH2_CLIENT_ID: ${STRATOS_ADMIN_API_OAUTH2_CLIENT_ID:-stratos-admin-api}
       # OpenStack (optional; the cloud client stays down without these).
       OS_AUTH_URL: ${OS_AUTH_URL:-}
       OS_REGION_NAME: ${OS_REGION_NAME:-}
