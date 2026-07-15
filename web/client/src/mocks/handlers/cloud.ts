@@ -27,6 +27,17 @@ on("GET /project/:pid/quota-usage", ({ params, opts }) => {
     : quotaUsage
   return { data: { ...projectQuota, region: opts.cloud?.region ?? projectQuota.region } }
 })
+on("GET /project/:pid/gpu-capacity", ({ opts }) => ({
+  data: {
+    visible: true,
+    region: opts.cloud?.region ?? "RegionOne",
+    capacity: [
+      { model: "nvidia-a100-80gb", available: 7, total: 16 },
+      { model: "nvidia-l40s", available: 0, total: 24 },
+    ],
+    warnings: [],
+  },
+}))
 
 on("POST /project/:pid/resource", ({ query }) => {
   const type = query.get("type")

@@ -16,6 +16,7 @@ export const projects: Project[] = [
     memberships: [{ sub: mockProfile.sub, roles: ["OWNER"] }],
     services: [{ serviceId: "svc-openstack-1" }, { serviceId: "svc-ceph-1" }],
     publicNetworksVisible: true,
+    gpuCapacityVisible: true,
   },
   {
     id: "prj-staging",

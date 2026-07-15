@@ -8,6 +8,7 @@ import {
 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, MoneyCell } from "@/components/data-table"
+import { GpuCapacityPanel } from "@/components/gpu-capacity-panel"
 import { QuotaOverview } from "@/components/quota-overview"
 import { StatCard } from "@/components/stat-card"
 import { Badge } from "@/components/ui/badge"
@@ -15,8 +16,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
-  useBillingSummary, useCostInfo, useFeatures, useLocations, useProject, useProjectId, useProjectQuota,
-  useUIMenu,
+  useBillingSummary, useCostInfo, useFeatures, useLocations, useProject, useProjectGpuCapacity,
+  useProjectId, useProjectQuota, useUIMenu,
 } from "@/lib/hooks"
 import { fmtMoney, timeAgo } from "@/lib/format"
 import type { CostInfo } from "@/lib/types"
@@ -106,6 +107,7 @@ export function DashboardPage() {
     quotaScopeOptions.find((option) => option.key === quotaScopeKey) ?? quotaScopeOptions[0]
   const quotaScope = selectedQuotaScope?.scope
   const quota = useProjectQuota(pid, quotaScope)
+  const gpuCapacity = useProjectGpuCapacity(pid, quotaScope, project?.gpuCapacityVisible === true)
   const { data: cost, isLoading: costLoading } = useCostInfo(pid)
   const { data: summary } = useBillingSummary(pid)
 
@@ -263,6 +265,12 @@ export function DashboardPage() {
           error={quota.error}
         />
       </div>
+
+      {project?.gpuCapacityVisible ? (
+        <div className="mt-6">
+          <GpuCapacityPanel data={gpuCapacity.data} isLoading={locationsLoading || gpuCapacity.isLoading} />
+        </div>
+      ) : null}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-2">
         <Card className="min-w-0">

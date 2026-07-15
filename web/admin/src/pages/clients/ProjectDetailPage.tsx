@@ -55,6 +55,8 @@ type ProjectDoc = {
   publicNetworkIds?: string[] | null
   // false/absent = the client can't choose an external network (server auto-picks); true = client picks.
   publicNetworksVisible?: boolean
+  // false/absent = the client dashboard does not show the region GPU capacity; true = it does.
+  gpuCapacityVisible?: boolean
   // Admin-managed per-project quota; gpu = {model alias (or "*") → device limit}.
   quota?: { gpu?: Record<string, number> }
   createdAt?: string
@@ -233,6 +235,10 @@ export default function ProjectDetailPage() {
     }
     return result
   }, [rawGPUUsage])
+  const [gpuCapVisible, setGpuCapVisible] = useState(false)
+  useEffect(() => {
+    setGpuCapVisible(project?.gpuCapacityVisible === true)
+  }, [project?.gpuCapacityVisible])
   const gpuModelOptions = [
     "*",
     ...new Set([
@@ -426,6 +432,21 @@ export default function ProjectDetailPage() {
       invalidateProject()
     },
     onError: (e: Error) => toast.error(e.message),
+  })
+
+  // PUT /admin/project/{id}/gpu-capacity-visible — toggles whether the client dashboard shows the
+  // region GPU capacity for this project. Saved immediately on toggle.
+  const saveGpuCapVisible = useMutation({
+    mutationFn: (visible: boolean) =>
+      apiFetch(`${projectPath}/gpu-capacity-visible`, { method: "PUT", body: { gpuCapacityVisible: visible } }),
+    onSuccess: () => {
+      toast.success("GPU capacity visibility updated")
+      invalidateProject()
+    },
+    onError: (e: Error) => {
+      setGpuCapVisible((v) => !v) // revert optimistic toggle
+      toast.error(e.message)
+    },
   })
 
   // POST /admin/projects/manage {userId, projectId, role} (projectmanager.go). The membership is
@@ -874,6 +895,24 @@ export default function ProjectDetailPage() {
                 </Button>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+                  <div>
+                    <p className="text-sm font-medium">Show GPU capacity to this project</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      When on, the client dashboard shows the region's available / total GPUs per model. Off by default.
+                    </p>
+                  </div>
+                  <Switch
+                    aria-label="Show GPU capacity to this project"
+                    checked={gpuCapVisible}
+                    disabled={saveGpuCapVisible.isPending}
+                    onCheckedChange={(v) => {
+                      const visible = v === true
+                      setGpuCapVisible(visible)
+                      saveGpuCapVisible.mutate(visible)
+                    }}
+                  />
+                </div>
                 <p className="text-sm text-muted-foreground">
                   Per-model GPU device limits, enforced when servers are created or resized through
                   Stratos. No entry = unlimited; "*" applies to any model without its own row.

@@ -27,6 +27,9 @@ type ProjectView struct {
 	// PublicNetworksVisible mirrors the project flag so the client UI knows whether to show the
 	// external-network picker (true) or leave it to the server's auto-pick (false/default).
 	PublicNetworksVisible bool `json:"publicNetworksVisible"`
+	// GpuCapacityVisible mirrors the project flag so the client dashboard only fetches/shows the
+	// region GPU-capacity panel when the operator enabled it (false/default = hidden).
+	GpuCapacityVisible bool `json:"gpuCapacityVisible"`
 }
 
 // MarshalJSON omits null fields: null billingProfileId is OMITTED, but the
@@ -51,10 +54,11 @@ func (v ProjectView) MarshalJSON() ([]byte, error) {
 		CreatedAt             *time.Time      `json:"createdAt,omitempty"`
 		ResourcesCount        []ResourceCount `json:"resourcesCount"`
 		PublicNetworksVisible bool            `json:"publicNetworksVisible"`
+		GpuCapacityVisible    bool            `json:"gpuCapacityVisible"`
 	}{
 		ID: v.ID, Name: v.Name, Status: v.Status, BillingProfileID: v.BillingProfileID,
 		OrganizationID: v.OrganizationID, Memberships: ms, CreatedAt: v.CreatedAt, ResourcesCount: rc,
-		PublicNetworksVisible: v.PublicNetworksVisible,
+		PublicNetworksVisible: v.PublicNetworksVisible, GpuCapacityVisible: v.GpuCapacityVisible,
 	})
 }
 

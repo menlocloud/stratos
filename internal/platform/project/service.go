@@ -493,5 +493,6 @@ func toView(p *Project) ProjectView {
 		ResourcesCount:   []ResourceCount{},
 
 		PublicNetworksVisible: p.PublicNetworksVisible,
+		GpuCapacityVisible:    p.GpuCapacityVisible,
 	}
 }
