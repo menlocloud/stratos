@@ -26,6 +26,23 @@ test("dashboard shows live standard and custom GPU quota", async ({ page }) => {
   await expect(page.getByText("Instances", { exact: true })).toBeVisible()
   await expect(page.getByText("GPU / nvidia-a10", { exact: true })).toBeVisible()
   await expect(page.getByText("Project-wide custom quota", { exact: true })).toBeVisible()
+  await expect(page.getByText("GPU / nvidia-l40s", { exact: true })).toBeVisible()
+  await expect(page.getByText("No GPU limit configured", { exact: true })).toBeVisible()
+  await expect(page.getByLabel("GPU / nvidia-l40s: 2 used, unlimited")).toBeVisible()
+})
+
+test("dashboard applies wildcard GPU quota only when no exact model limit exists", async ({ page }) => {
+  await page.goto("/p/prj-staging/dashboard")
+
+  const exact = page.getByRole("meter", { name: "GPU / nvidia-a10 quota" })
+  await expect(exact).toHaveAttribute("aria-valuemax", "1")
+  await expect(exact).toHaveAttribute("aria-valuetext", "1 used of 1")
+
+  const fallback = page.getByRole("meter", { name: "GPU / nvidia-l40s quota" })
+  await expect(fallback).toHaveAttribute("aria-valuemax", "3")
+  await expect(fallback).toHaveAttribute("aria-valuetext", "2 used of 3")
+  await expect(page.getByText("Uses the project fallback quota (*)", { exact: true })).toBeVisible()
+  await expect(page.getByText("GPU / Other models", { exact: true })).toHaveCount(0)
 })
 
 test("dashboard switches quota scope for multi-region projects", async ({ page }) => {

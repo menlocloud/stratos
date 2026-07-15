@@ -432,7 +432,8 @@ type Server struct {
 	VCPUs            int
 	Disk             int // GB
 	// FlavorExtraSpecs feeds GPU rating (pci_passthrough:alias) — the sync cache MUST
-	// carry it or GPU servers silently bill zero (rules filter on gpu_model).
+	// carry it or GPU servers silently bill zero (rules filter on gpu_model). nil means
+	// resolution failed; an empty non-nil map means a resolved CPU-only flavor.
 	FlavorExtraSpecs map[string]string
 	Metadata         map[string]string
 	Addresses        map[string]any // nova server addresses (per-network) → the cache's IP column
@@ -485,9 +486,6 @@ func (c *Client) ListServers(ctx context.Context) ([]Server, error) {
 				srv.FlavorName, srv.RAM, srv.VCPUs, srv.Disk = f.Name, f.RAM, f.VCPUs, f.Disk
 				srv.FlavorExtraSpecs = f.ExtraSpecs
 			}
-		}
-		if srv.FlavorExtraSpecs == nil {
-			srv.FlavorExtraSpecs = map[string]string{}
 		}
 		out = append(out, srv)
 	}

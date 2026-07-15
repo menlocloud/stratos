@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Building2, CreditCard, Pause, Play, Plus, RefreshCw, Server, Trash2, Users } from "lucide-react"
+import { Building2, CircuitBoard, CreditCard, Pause, Play, Plus, RefreshCw, Server, Trash2, Users } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
@@ -63,6 +63,12 @@ type ProjectDoc = {
 // GET /admin/service/{id}/gpu-info (cloudadmin.go gpuInfo) — per-region GPU capacity.
 type GpuRegionCapacity = { region: string; gpus: Array<{ name: string; total: number; inUse: number }> }
 
+// GET /admin/project/{id}/gpu-usage — the cache snapshot used by the GPU quota gate.
+type GPUUsageResponse = {
+  usage: Record<string, number>
+  usageAvailable: boolean
+}
+
 // GET /admin/cloud-resource/public-networks/{externalServiceId} (cloudadmin.go publicNetworks) —
 // the provider's router:external networks.
 type PublicNetwork = {
@@ -117,6 +123,17 @@ function dataField(cr: CloudResource, key: "name" | "status"): string | undefine
   return undefined
 }
 
+function normalizeGPUModel(value: string): string {
+  const trimmed = value.trim()
+  return trimmed === "*" ? "*" : trimmed.toLowerCase().replaceAll("_", "-")
+}
+
+function parseGPUQuotaLimit(value: string): number | undefined {
+  if (!/^\d+$/.test(value.trim())) return undefined
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) ? parsed : undefined
+}
+
 function Field({ label, value, mono }: { label: string; value?: React.ReactNode; mono?: boolean }) {
   return (
     <div>
@@ -146,6 +163,7 @@ export default function ProjectDetailPage() {
   const counts = useAdminGet<Record<string, number>>(`${projectPath}/resources/counts`, !!id)
   const members = useAdminList<MemberUser>(`${projectPath}/members`, !!id)
   const resources = useAdminList<CloudResource>(`/admin/cloud-resource/project/${id}`, !!id)
+  const gpuUsage = useAdminGet<GPUUsageResponse>(`${projectPath}/gpu-usage`, !!id && tab === "quota")
 
   const [statusConfirm, setStatusConfirm] = useState<"ENABLED" | "DISABLED" | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -184,19 +202,104 @@ export default function ProjectDetailPage() {
 
   const enabled = (project?.status ?? "").toUpperCase() === "ENABLED"
 
-  // GPU quota tab state: rows derive from project.quota.gpu; the model picker offers the
-  // provider's live GPU models (placement gpu-info) plus the "*" wildcard.
-  const gpuInfo = useAdminList<GpuRegionCapacity>(`/admin/service/${externalServiceId}/gpu-info`, !!externalServiceId)
+  // GPU quota tab state: rows derive from project.quota.gpu; Placement capacity is offered
+  // as a convenience only, while the free-text input accepts the actual Nova flavor alias.
+  const gpuInfo = useAdminList<GpuRegionCapacity>(
+    `/admin/service/${externalServiceId}/gpu-info`,
+    !!externalServiceId && tab === "quota",
+  )
   const [quotaRows, setQuotaRows] = useState<Array<{ model: string; limit: string }>>([])
   const [quotaModel, setQuotaModel] = useState("")
   const [quotaLimit, setQuotaLimit] = useState("")
   useEffect(() => {
-    setQuotaRows(Object.entries(project?.quota?.gpu ?? {}).map(([model, limit]) => ({ model, limit: String(limit) })))
+    const canonical = new Map<string, { limit: string; source: string; exact: boolean }>()
+    for (const [model, limit] of Object.entries(project?.quota?.gpu ?? {})) {
+      const normalized = normalizeGPUModel(model)
+      const source = model.trim()
+      const exact = source === normalized
+      const previous = canonical.get(normalized)
+      if (normalized && (!previous || exact || (!previous.exact && source < previous.source))) {
+        canonical.set(normalized, { limit: String(limit), source, exact })
+      }
+    }
+    setQuotaRows([...canonical].map(([model, value]) => ({ model, limit: value.limit })))
   }, [project?.quota])
+  const rawGPUUsage = gpuUsage.data?.usage
+  const normalizedGPUUsage = useMemo(() => {
+    const result: Record<string, number> = {}
+    for (const [model, used] of Object.entries(rawGPUUsage ?? {})) {
+      const normalized = normalizeGPUModel(model)
+      if (normalized && Number.isFinite(used) && used >= 0) result[normalized] = used
+    }
+    return result
+  }, [rawGPUUsage])
   const gpuModelOptions = [
     "*",
-    ...new Set((gpuInfo.data?.data ?? []).flatMap((r) => r.gpus.map((g) => g.name))),
-  ].filter((m) => !quotaRows.some((row) => row.model === m))
+    ...new Set([
+      ...(gpuInfo.data?.data ?? []).flatMap((r) => r.gpus.map((g) => normalizeGPUModel(g.name))),
+      ...Object.keys(normalizedGPUUsage),
+    ]),
+  ]
+    .filter((model) => model && !quotaRows.some((row) => normalizeGPUModel(row.model) === model))
+    .sort((a, b) => (a === "*" ? -1 : b === "*" ? 1 : a.localeCompare(b)))
+
+  const gpuStatusRows = useMemo(() => {
+    const exactModels = new Set<string>()
+    const exactLimits = new Map<string, number>()
+    let fallbackConfigured = false
+    let fallbackLimit: number | undefined
+    for (const row of quotaRows) {
+      const model = normalizeGPUModel(row.model)
+      const limit = parseGPUQuotaLimit(row.limit)
+      if (model === "*") {
+        fallbackConfigured = true
+        fallbackLimit = limit
+      } else if (model) {
+        exactModels.add(model)
+        if (limit !== undefined) exactLimits.set(model, limit)
+      }
+    }
+
+    const models = [...new Set([...exactModels, ...Object.keys(normalizedGPUUsage)])]
+      .sort((a, b) => a.localeCompare(b))
+    const rows = models.map((model) => {
+      const hasExact = exactModels.has(model)
+      const invalid = hasExact ? !exactLimits.has(model) : fallbackConfigured && fallbackLimit === undefined
+      return {
+        model,
+        used: normalizedGPUUsage[model] ?? 0,
+        limit: hasExact ? exactLimits.get(model) : fallbackLimit,
+        invalid,
+        source: invalid
+          ? "Invalid draft"
+          : hasExact
+            ? "Exact model limit"
+            : fallbackLimit !== undefined
+              ? "Fallback limit (*)"
+              : "Unlimited",
+      }
+    })
+    if (fallbackConfigured && !models.some((model) => !exactModels.has(model))) {
+      rows.push({
+        model: "*",
+        used: 0,
+        limit: fallbackLimit,
+        invalid: fallbackLimit === undefined,
+        source: fallbackLimit === undefined ? "Invalid draft" : "Per unlisted model",
+      })
+    }
+    return rows
+  }, [normalizedGPUUsage, quotaRows])
+
+  const gpuUsageAvailable = gpuUsage.data?.usageAvailable === true
+  const totalGPUUsed = Object.values(normalizedGPUUsage).reduce((total, used) => total + used, 0)
+  const normalizedQuotaModel = normalizeGPUModel(quotaModel)
+  const newQuotaLimit = parseGPUQuotaLimit(quotaLimit)
+  const duplicateQuotaModel = quotaRows.some((row) => normalizeGPUModel(row.model) === normalizedQuotaModel)
+  const canAddQuota = !!normalizedQuotaModel && newQuotaLimit !== undefined && !duplicateQuotaModel
+  const quotaDraftValid = quotaRows.every(
+    (row) => !!normalizeGPUModel(row.model) && parseGPUQuotaLimit(row.limit) !== undefined,
+  )
 
   const invalidateProject = () => {
     qc.invalidateQueries({ queryKey: ["admin-get", projectPath] })
@@ -236,6 +339,7 @@ export default function ProjectDetailPage() {
       toast.success("Project synced")
       qc.invalidateQueries({ queryKey: ["admin-list", `/admin/cloud-resource/project/${id}`] })
       qc.invalidateQueries({ queryKey: ["admin-get", `${projectPath}/resources/counts`] })
+      qc.invalidateQueries({ queryKey: ["admin-get", `${projectPath}/gpu-usage`] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -305,9 +409,13 @@ export default function ProjectDetailPage() {
   // the server create/resize gate. An empty object clears the quota (unlimited).
   const saveQuota = useMutation({
     mutationFn: (rows: Array<{ model: string; limit: string }>) => {
-      const gpu = Object.fromEntries(
-        rows.filter((r) => r.model && r.limit.trim() !== "").map((r) => [r.model, Number(r.limit)]),
-      )
+      const gpu: Record<string, number> = {}
+      for (const row of rows) {
+        const model = normalizeGPUModel(row.model)
+        const limit = parseGPUQuotaLimit(row.limit)
+        if (!model || limit === undefined) throw new Error("GPU limits must be non-negative whole numbers")
+        gpu[model] = limit
+      }
       return apiFetch(`${projectPath}/quota`, {
         method: "PUT",
         body: Object.keys(gpu).length ? { gpu } : {},
@@ -750,8 +858,20 @@ export default function ProjectDetailPage() {
 
           <TabsContent value="quota" className="mt-4">
             <Card>
-              <CardHeader>
-                <CardTitle className="text-base">GPU quota</CardTitle>
+              <CardHeader className="flex flex-row items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-semibold">GPU quota</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">Project-wide usage snapshot and limits.</p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => gpuUsage.refetch()}
+                  disabled={gpuUsage.isFetching}
+                >
+                  <RefreshCw className={gpuUsage.isFetching ? "size-4 animate-spin" : "size-4"} />
+                  Refresh usage
+                </Button>
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-sm text-muted-foreground">
@@ -759,6 +879,106 @@ export default function ProjectDetailPage() {
                   Stratos. No entry = unlimited; "*" applies to any model without its own row.
                   Horizon-direct usage on imported projects bypasses this gate.
                 </p>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl border bg-muted/20 p-4">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <CircuitBoard className="size-4" aria-hidden="true" /> GPU devices in use
+                    </div>
+                    <p className="mt-2 font-mono text-2xl font-semibold tabular-nums">
+                      <span data-testid="gpu-used-total">
+                        {gpuUsage.isLoading ? "…" : gpuUsageAvailable ? totalGPUUsed : "—"}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="rounded-xl border bg-muted/20 p-4">
+                    <p className="text-sm text-muted-foreground">Models in use</p>
+                    <p className="mt-2 font-mono text-2xl font-semibold tabular-nums">
+                      {gpuUsage.isLoading
+                        ? "…"
+                        : gpuUsageAvailable
+                          ? Object.values(normalizedGPUUsage).filter((used) => used > 0).length
+                          : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border bg-muted/20 p-4">
+                    <p className="text-sm text-muted-foreground">Configured limits</p>
+                    <p className="mt-2 font-mono text-2xl font-semibold tabular-nums">{quotaRows.length}</p>
+                  </div>
+                </div>
+
+                {gpuUsage.error ? (
+                  <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" role="alert">
+                    Could not load GPU usage: {gpuUsage.error instanceof Error ? gpuUsage.error.message : "Unknown error"}
+                  </p>
+                ) : !gpuUsage.isLoading && gpuUsage.data && !gpuUsageAvailable ? (
+                  <p className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground" role="status">
+                    GPU usage is currently unavailable. Try syncing the project; configured limits remain in place.
+                  </p>
+                ) : null}
+
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium">Usage by model</h3>
+                  {gpuUsage.isLoading ? (
+                    <Skeleton className="h-24 w-full" />
+                  ) : gpuStatusRows.length === 0 ? (
+                    <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                      No GPU usage or limits for this project yet.
+                    </p>
+                  ) : (
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {gpuStatusRows.map((row) => {
+                        const used = gpuUsageAvailable && row.model !== "*" ? row.used : undefined
+                        const remaining = row.limit === undefined || used === undefined
+                          ? undefined
+                          : Math.max(row.limit - used, 0)
+                        const exhausted = row.limit !== undefined && used !== undefined && used >= row.limit
+                        return (
+                          <div
+                            key={row.model}
+                            data-testid={`gpu-status-${row.model}`}
+                            className="min-w-0 rounded-xl border p-4"
+                          >
+                            <p className="break-words font-mono text-xs font-medium">
+                              {row.model === "*" ? "Other GPU models (*)" : row.model}
+                            </p>
+                            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Used</p>
+                                <p className="mt-1 font-mono font-semibold tabular-nums">
+                                  {!gpuUsageAvailable ? "Unavailable" : used ?? "—"}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Limit</p>
+                                <p className="mt-1 font-mono font-semibold tabular-nums">
+                                  {row.invalid ? "Invalid draft" : row.limit ?? "Unlimited"}
+                                </p>
+                              </div>
+                            </div>
+                            <p className={exhausted ? "mt-3 text-xs text-destructive" : "mt-3 text-xs text-muted-foreground"}>
+                              {row.invalid
+                                ? "Enter a non-negative whole number before saving."
+                                : remaining === undefined
+                                ? row.source
+                                : exhausted
+                                  ? `${used! - row.limit! > 0 ? `${used! - row.limit!} over quota` : "Quota exhausted"} · ${row.source}`
+                                  : `${remaining} remaining · ${row.source}`}
+                            </p>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t pt-4">
+                  <h3 className="text-sm font-medium">Configure limits</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Use the alias from the Nova flavor&apos;s <code>pci_passthrough:alias</code> extra spec. Aliases are saved
+                    in lowercase with dashes; capacity suggestions from Placement may use different names.
+                  </p>
+                </div>
                 {quotaRows.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No GPU limits configured.</p>
                 ) : (
@@ -778,13 +998,21 @@ export default function ProjectDetailPage() {
                             <Input
                               type="number"
                               min={0}
+                              step={1}
                               className="w-24"
                               aria-label={`Limit for ${row.model}`}
+                              aria-invalid={parseGPUQuotaLimit(row.limit) === undefined}
+                              aria-describedby={parseGPUQuotaLimit(row.limit) === undefined ? `gpu-limit-error-${i}` : undefined}
                               value={row.limit}
                               onChange={(e) =>
                                 setQuotaRows((rows) => rows.map((r, idx) => (idx === i ? { ...r, limit: e.target.value } : r)))
                               }
                             />
+                            {parseGPUQuotaLimit(row.limit) === undefined ? (
+                              <p id={`gpu-limit-error-${i}`} className="mt-1 text-xs text-destructive">
+                                Whole number required.
+                              </p>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-right">
                             <Button
@@ -802,26 +1030,26 @@ export default function ProjectDetailPage() {
                   </Table>
                 )}
                 <div className="flex flex-wrap items-end gap-3">
-                  <div className="space-y-1.5">
+                  <div className="min-w-56 flex-1 space-y-1.5 sm:max-w-80">
                     <p className="text-eyebrow">GPU model</p>
-                    <Select value={quotaModel} onValueChange={setQuotaModel}>
-                      <SelectTrigger className="w-56" aria-label="GPU model">
-                        <SelectValue placeholder="Select model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {gpuModelOptions.map((m) => (
-                          <SelectItem key={m} value={m}>
-                            {m === "*" ? "* (any model)" : m}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Input
+                      list="project-gpu-model-options"
+                      aria-label="GPU model"
+                      placeholder="e.g. nvidia-a100-80gb or *"
+                      value={quotaModel}
+                      onChange={(e) => setQuotaModel(e.target.value)}
+                      onBlur={() => setQuotaModel((model) => normalizeGPUModel(model))}
+                    />
+                    <datalist id="project-gpu-model-options">
+                      {gpuModelOptions.map((model) => <option key={model} value={model} />)}
+                    </datalist>
                   </div>
                   <div className="space-y-1.5">
                     <p className="text-eyebrow">Limit</p>
                     <Input
                       type="number"
                       min={0}
+                      step={1}
                       className="w-24"
                       aria-label="Limit"
                       value={quotaLimit}
@@ -830,19 +1058,28 @@ export default function ProjectDetailPage() {
                   </div>
                   <Button
                     variant="outline"
-                    disabled={!quotaModel || quotaLimit.trim() === ""}
+                    disabled={!canAddQuota}
                     onClick={() => {
-                      setQuotaRows((rows) => [...rows, { model: quotaModel, limit: quotaLimit }])
+                      if (!canAddQuota || newQuotaLimit === undefined) return
+                      setQuotaRows((rows) => [...rows, { model: normalizedQuotaModel, limit: String(newQuotaLimit) }])
                       setQuotaModel("")
                       setQuotaLimit("")
                     }}
                   >
                     Add limit
                   </Button>
-                  <Button onClick={() => saveQuota.mutate(quotaRows)} disabled={saveQuota.isPending}>
+                  <Button
+                    onClick={() => saveQuota.mutate(quotaRows)}
+                    disabled={saveQuota.isPending || !quotaDraftValid}
+                  >
                     {saveQuota.isPending ? "Saving…" : "Save quota"}
                   </Button>
                 </div>
+                {duplicateQuotaModel && normalizedQuotaModel ? (
+                  <p className="text-xs text-destructive" role="alert">This GPU model already has a limit.</p>
+                ) : quotaLimit.trim() && newQuotaLimit === undefined ? (
+                  <p className="text-xs text-destructive" role="alert">Limit must be a non-negative whole number.</p>
+                ) : null}
               </CardContent>
             </Card>
           </TabsContent>

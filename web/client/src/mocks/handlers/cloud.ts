@@ -14,9 +14,19 @@ const ok = (result: unknown = null) => ({ data: { result } })
 
 on("GET /project/:pid/resource-types", () => ({ data: locations }))
 on("GET /project/:pid/public-networks", () => ({ data: publicNetworks }))
-on("GET /project/:pid/quota-usage", ({ opts }) => ({
-  data: { ...quotaUsage, region: opts.cloud?.region ?? quotaUsage.region },
-}))
+on("GET /project/:pid/quota-usage", ({ params, opts }) => {
+  const projectQuota = params.pid === "prj-staging"
+    ? {
+        ...quotaUsage,
+        gpu: {
+          limits: { "nvidia-a10": 1, "*": 3 },
+          usage: { "nvidia-a10": 1, "nvidia-l40s": 2 },
+          usageAvailable: true,
+        },
+      }
+    : quotaUsage
+  return { data: { ...projectQuota, region: opts.cloud?.region ?? projectQuota.region } }
+})
 
 on("POST /project/:pid/resource", ({ query }) => {
   const type = query.get("type")

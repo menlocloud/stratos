@@ -425,7 +425,39 @@ func (c *Client) GetServer(ctx context.Context, id string) (map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
-	return serverToMap(s), nil
+	srv := serverToMap(s)
+	c.enrichServerFlavorSpecs(ctx, srv)
+	return srv, nil
+}
+
+// enrichServerFlavorSpecs fills a refetched server's flavor with its full specs
+// (extra_specs incl. pci_passthrough:alias) when nova returned only {id,links}.
+// GetServer reads at the default microversion, which omits the embedded flavor
+// specs, so without this a notification-refetched server would cache a flavor
+// with no extra_specs — making billing rate its GPUs as zero and the GPU-usage
+// snapshot read "incomplete" until the next full sync overwrites the row.
+// Best-effort: a flavor already carrying extra_specs, or one with no resolvable
+// id, is left untouched (the create/refresh enrich paths key idempotence the
+// same way).
+func (c *Client) enrichServerFlavorSpecs(ctx context.Context, srv map[string]any) {
+	flavor, ok := srv["flavor"].(map[string]any)
+	if !ok || flavor == nil {
+		return
+	}
+	if _, resolved := flavor["extra_specs"]; resolved {
+		return
+	}
+	id, _ := flavor["id"].(string)
+	if id == "" {
+		return
+	}
+	specs, err := c.GetFlavor(ctx, id)
+	if err != nil {
+		return
+	}
+	for key, value := range specs {
+		flavor[key] = value
+	}
 }
 
 // DeleteServer deletes a Nova server.

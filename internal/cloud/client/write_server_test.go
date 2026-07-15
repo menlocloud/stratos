@@ -73,6 +73,54 @@ func TestCreateServerUsesCuratedVolumeBlockDevices(t *testing.T) {
 	}
 }
 
+func TestGetServerEnrichesFlavorExtraSpecs(t *testing.T) {
+	// The default microversion returns flavor:{id,links} with no extra_specs; GetServer
+	// must resolve them by id so notification-refetched GPU servers still rate/report GPUs.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/servers/srv-1":
+			fmt.Fprint(w, `{"server":{"id":"srv-1","name":"gpu","status":"ACTIVE","flavor":{"id":"flv-1","links":[]},"image":{"id":"img-1"}}}`)
+		case r.URL.Path == "/flavors/flv-1":
+			if got := r.Header.Get("X-OpenStack-Nova-API-Version"); got != flavorMicroversion {
+				t.Fatalf("flavor GET microversion = %q, want %q", got, flavorMicroversion)
+			}
+			fmt.Fprint(w, `{"flavor":{"id":"flv-1","name":"g1.a100","ram":8192,"vcpus":4,"disk":40,"extra_specs":{"pci_passthrough:alias":"nvidia-a100-80gb:1"}}}`)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := &gophercloud.ProviderClient{
+		EndpointLocator: func(gophercloud.EndpointOpts) (string, error) { return server.URL + "/", nil },
+		HTTPClient:      *server.Client(),
+	}
+	provider.UseTokenLock()
+	provider.SetToken("test-token")
+
+	srv, err := (&Client{provider: provider, region: "RegionOne"}).GetServer(context.Background(), "srv-1")
+	if err != nil {
+		t.Fatalf("GetServer() error = %v", err)
+	}
+	flavor, ok := srv["flavor"].(map[string]any)
+	if !ok {
+		t.Fatalf("flavor missing/wrong shape: %#v", srv["flavor"])
+	}
+	// GetFlavor returns extra_specs as map[string]string; the cache consumers
+	// (cloud.GPUFromFlavor) tolerate both that and the map[string]any round-trip shape.
+	alias := ""
+	switch specs := flavor["extra_specs"].(type) {
+	case map[string]string:
+		alias = specs["pci_passthrough:alias"]
+	case map[string]any:
+		alias, _ = specs["pci_passthrough:alias"].(string)
+	}
+	if alias != "nvidia-a100-80gb:1" {
+		t.Fatalf("flavor extra_specs not enriched: %#v", flavor["extra_specs"])
+	}
+}
+
 func TestServerToMapReAddsImageKey(t *testing.T) {
 	// gophercloud tags Server.Image `json:"-"`, so a plain toMap drops the key
 	// and every re-fetched server would read as image-backed.

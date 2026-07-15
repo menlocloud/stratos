@@ -10,11 +10,14 @@ package admin
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/pgdoc"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/pkg/httpx"
@@ -32,10 +35,12 @@ func (h *Handler) projectSetQuota(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.BadRequest("Invalid request body"))
 		return
 	}
-	if err := validateProjectQuota(body); err != nil {
-		httpx.WriteError(w, err)
+	normalized, validationErr := normalizeProjectQuota(body)
+	if validationErr != nil {
+		httpx.WriteError(w, validationErr)
 		return
 	}
+	body = normalized
 	doc, ok := h.findProjectOr404(w, r, id)
 	if !ok {
 		return
@@ -53,22 +58,77 @@ func (h *Handler) projectSetQuota(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, shapeDoc(doc))
 }
 
+type projectGPUUsageResponse struct {
+	Usage          map[string]int `json:"usage"`
+	UsageAvailable bool           `json:"usageAvailable"`
+}
+
+// projectGPUUsage returns the project-global GPU usage snapshot used by the
+// Stratos quota gate. It is intentionally an admin route: an operator viewing a
+// project does not need to also be one of that project's members.
+func (h *Handler) projectGPUUsage(w http.ResponseWriter, r *http.Request) {
+	if !h.require(w, r, projectReadPerm) {
+		return
+	}
+	projectID := chi.URLParam(r, "id")
+	if _, ok := h.findProjectOr404(w, r, projectID); !ok {
+		return
+	}
+	response := projectGPUUsageResponse{Usage: map[string]int{}}
+	if h.cloud == nil {
+		httpx.OK(w, response)
+		return
+	}
+	usage, err := h.cloud.GPUUsageByProject(r.Context(), projectID)
+	response.Usage = usage
+	response.UsageAvailable = err == nil
+	if err != nil {
+		slog.Warn("admin project GPU usage unavailable", "project", projectID, "err", err)
+	}
+	httpx.OK(w, response)
+}
+
 // validateProjectQuota checks the quota shape: quota.gpu (when present) must be an object of
 // non-negative integer limits keyed by GPU model alias (or "*").
 func validateProjectQuota(body pgdoc.M) *httpx.HTTPError {
+	_, err := normalizeProjectQuota(body)
+	return err
+}
+
+// normalizeProjectQuota validates the quota document and canonicalizes model
+// aliases at the write boundary so admin/API/MCP callers all match flavor aliases.
+func normalizeProjectQuota(body pgdoc.M) (pgdoc.M, *httpx.HTTPError) {
+	normalizedBody := maps.Clone(body)
 	gpuRaw, ok := body["gpu"]
 	if !ok {
-		return nil
+		return normalizedBody, nil
 	}
 	gpu, ok := gpuRaw.(map[string]any)
 	if !ok {
-		return httpx.BadRequest("quota.gpu must be an object of {model: limit}")
+		return nil, httpx.BadRequest("quota.gpu must be an object of {model: limit}")
 	}
+	normalizedGPU := make(map[string]any, len(gpu))
+	sources := make(map[string]string, len(gpu))
 	for k, v := range gpu {
+		trimmed := strings.TrimSpace(k)
+		if trimmed == "" {
+			return nil, httpx.BadRequest("quota.gpu model must not be empty")
+		}
+		canonical := cloud.NormalizeGPUAlias(trimmed)
+		if trimmed == "*" {
+			canonical = "*"
+		}
+		if previous, exists := sources[canonical]; exists {
+			return nil, httpx.BadRequest(fmt.Sprintf(
+				"quota.gpu models %q and %q resolve to the same alias %q", previous, k, canonical))
+		}
 		f, ok := v.(float64) // JSON numbers decode to float64
 		if !ok || f < 0 || f != float64(int64(f)) {
-			return httpx.BadRequest(fmt.Sprintf("quota.gpu[%s] must be a non-negative integer", k))
+			return nil, httpx.BadRequest(fmt.Sprintf("quota.gpu[%s] must be a non-negative integer", k))
 		}
+		normalizedGPU[canonical] = v
+		sources[canonical] = k
 	}
-	return nil
+	normalizedBody["gpu"] = normalizedGPU
+	return normalizedBody, nil
 }

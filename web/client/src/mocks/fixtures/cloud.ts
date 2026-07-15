@@ -63,7 +63,7 @@ export const quotaUsage = {
   },
   gpu: {
     limits: { "nvidia-a10": 1 },
-    usage: { "nvidia-a10": 1 },
+    usage: { "nvidia-a10": 1, "nvidia-l40s": 2 },
     usageAvailable: true,
   },
   warnings: [],

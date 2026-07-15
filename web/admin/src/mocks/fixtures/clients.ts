@@ -112,7 +112,7 @@ export const projects: Doc[] = [
     services: [{ serviceId: "svc-openstack-01", externalProjectId: "8c1f6a2d94e34b7c9f1d3e5a7b2c4d6e" }],
     publicNetworkIds: null,
     publicNetworksVisible: true,
-    quota: { gpu: { "NVIDIA-A100-80GB": 4 } },
+    quota: { gpu: { "nvidia-a100-80gb": 4 } },
     createdAt: "2025-11-03T09:25:00Z",
   },
   {
@@ -125,6 +125,7 @@ export const projects: Doc[] = [
     services: [{ serviceId: "svc-openstack-01", externalProjectId: "51b2e9c07aa14f0d8be6c3d2a1f09e88" }],
     publicNetworkIds: ["net-ext-01"],
     publicNetworksVisible: false,
+    quota: { gpu: { "nvidia-l40s": 2 } },
     createdAt: "2026-02-11T13:40:00Z",
   },
   {
@@ -400,7 +401,18 @@ export const cloudResources: Doc[] = [
     region: "eu-central-1",
     projectId: "prj-0001",
     project: { id: "prj-0001", name: "acme-production" },
-    data: { server: { name: "prod-gpu-train-01", status: "ACTIVE", flavor: "g1.a100.1", addresses: ["10.0.12.17"] } },
+    data: {
+      server: {
+        name: "prod-gpu-train-01",
+        status: "ACTIVE",
+        flavor: {
+          id: "flv-gpu-a100-1",
+          name: "g1.a100.1",
+          extra_specs: { "pci_passthrough:alias": "nvidia-a100-80gb:1" },
+        },
+        addresses: ["10.0.12.17"],
+      },
+    },
     info: { createdAt: "2026-05-19T08:00:00Z" },
     createdAt: "2026-05-19T08:00:00Z",
   },
