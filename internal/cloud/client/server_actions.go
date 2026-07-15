@@ -15,16 +15,22 @@ import (
 
 // RebuildServer rebuilds a nova server onto an image. imageRef is
 // the glance image id; name optional (keeps current when blank); adminPass optional.
-func (c *Client) RebuildServer(ctx context.Context, id, imageRef, name, adminPass string) (map[string]any, error) {
+func (c *Client) RebuildServer(ctx context.Context, id, imageRef, name, adminPass string, volumeBacked ...bool) (map[string]any, error) {
 	cc, err := c.compute()
 	if err != nil {
 		return nil, err
+	}
+	// Nova added rebuild support for volume-backed servers in microversion 2.93.
+	// Keep the legacy default for image-backed servers so older clouds retain
+	// their existing behavior.
+	if len(volumeBacked) > 0 && volumeBacked[0] {
+		cc.Microversion = "2.93"
 	}
 	srv, err := servers.Rebuild(ctx, cc, id, servers.RebuildOpts{ImageRef: imageRef, Name: name, AdminPass: adminPass}).Extract()
 	if err != nil {
 		return nil, err
 	}
-	return toMap(srv), nil
+	return serverToMap(srv), nil
 }
 
 // SetServerPassword changes a nova server's admin password (nova changeAdminPassword).
@@ -38,10 +44,14 @@ func (c *Client) SetServerPassword(ctx context.Context, id, password string) err
 
 // RescueServer puts a nova server into RESCUE mode, returning the
 // generated admin password. rescueImageRef optional (default rescue image when blank).
-func (c *Client) RescueServer(ctx context.Context, id, rescueImageRef string) (string, error) {
+func (c *Client) RescueServer(ctx context.Context, id, rescueImageRef string, volumeBacked ...bool) (string, error) {
 	cc, err := c.compute()
 	if err != nil {
 		return "", err
+	}
+	// Nova added rescue support for volume-backed servers in microversion 2.87.
+	if len(volumeBacked) > 0 && volumeBacked[0] {
+		cc.Microversion = "2.87"
 	}
 	return servers.Rescue(ctx, cc, id, servers.RescueOpts{RescueImageRef: rescueImageRef}).Extract()
 }

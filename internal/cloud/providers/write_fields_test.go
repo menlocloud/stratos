@@ -28,7 +28,7 @@ func TestHostRoutesParse(t *testing.T) {
 func TestIfaceFixedIPs(t *testing.T) {
 	in := []any{
 		map[string]any{"uuid": "net-1", "fixedIp": "10.0.0.10"},
-		map[string]any{"uuid": "net-2"},               // no fixedIp → omitted
+		map[string]any{"uuid": "net-2"},                  // no fixedIp → omitted
 		map[string]any{"uuid": "", "fixedIp": "1.2.3.4"}, // no uuid → omitted
 	}
 	got := ifaceFixedIPs(in)
@@ -61,5 +61,75 @@ func TestMboolPtr(t *testing.T) {
 	}
 	if p := mboolPtr(map[string]any{"x": true}, "x"); p == nil || *p != true {
 		t.Errorf("present true → &true, got %v", p)
+	}
+}
+
+func TestCreateServerVolumesParseLifecyclePolicy(t *testing.T) {
+	root, err := createServerVolume(map[string]any{"sizeGiB": float64(80), "type": "ceph-ssd1"}, true, "root")
+	if err != nil {
+		t.Fatalf("createServerVolume() error = %v", err)
+	}
+	if root.Size != 80 || root.VolumeType != "ceph-ssd1" || !root.DeleteOnTermination || root.Tag != "root" {
+		t.Fatalf("root volume = %#v", root)
+	}
+	data, err := createServerDataVolumes([]any{
+		map[string]any{"sizeGiB": float64(100), "type": "ceph-ssd1"},
+		map[string]any{"sizeGiB": float64(200), "type": "archive"},
+	})
+	if err != nil {
+		t.Fatalf("createServerDataVolumes() error = %v", err)
+	}
+	if len(data) != 2 || data[0].DeleteOnTermination || data[0].Tag != "data-1" || data[1].Tag != "data-2" {
+		t.Fatalf("data volumes = %#v", data)
+	}
+}
+
+func TestCreateServerVolumesRejectInvalidInput(t *testing.T) {
+	for _, input := range []map[string]any{
+		{"sizeGiB": float64(0), "type": "ssd"},
+		{"sizeGiB": 10.5, "type": "ssd"},
+		{"sizeGiB": float64(10), "type": ""},
+	} {
+		if _, err := createServerVolume(input, true, "root"); err == nil {
+			t.Fatalf("createServerVolume(%#v) unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestVolumeAttachmentHelpersSupportCinderShape(t *testing.T) {
+	data := map[string]any{"volume": map[string]any{
+		"bootable":    "true",
+		"attachments": []any{map[string]any{"server_id": "server-1", "attachment_id": "attach-1"}},
+	}}
+	if !volumeIsBootable(data) {
+		t.Fatal("string bootable flag must be recognized")
+	}
+	attachments := volumeAttachments(data)
+	if len(attachments) != 1 || attServerID(attachments[0]) != "server-1" {
+		t.Fatalf("volumeAttachments() = %#v", attachments)
+	}
+	updated := withoutAttachment(data, "server-1")
+	if nested := volumeAttachments(updated); len(nested) != 0 {
+		t.Fatalf("attachment was not removed: %#v", nested)
+	}
+}
+
+func TestReplaceServerDataPreservesVolumeBackedMetadata(t *testing.T) {
+	existing := map[string]any{
+		"volumeBacked": true,
+		"rootVolume":   map[string]any{"sizeGiB": 40, "type": "ssd"},
+		"dataVolumes":  []any{map[string]any{"sizeGiB": 100, "type": "ssd"}},
+		"flavorName":   "m1.medium",
+		"server":       map[string]any{"name": "old"},
+	}
+	updated := replaceServerData(existing, map[string]any{"name": "renamed"})
+	if updated["volumeBacked"] != true || updated["rootVolume"] == nil || updated["dataVolumes"] == nil {
+		t.Fatalf("volume-backed metadata was lost: %#v", updated)
+	}
+	if updated["flavorName"] != "m1.medium" {
+		t.Fatalf("flavorName was lost: %#v", updated)
+	}
+	if updated["server"].(map[string]any)["name"] != "renamed" {
+		t.Fatalf("server was not replaced: %#v", updated)
 	}
 }

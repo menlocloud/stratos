@@ -13,6 +13,13 @@ export type FlavorQuotaRequest = {
   }
 }
 
+export type VolumeQuotaRequest = {
+  sizeGiB: number
+  type?: string
+  /** How the violation message names this volume (e.g. "Root volume", "Data volume 1"). */
+  label?: string
+}
+
 function finiteNonNegative(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0
 }
@@ -126,29 +133,53 @@ export function volumeCreateQuotaViolations(
   requestedGiB: number,
   volumeType?: string,
 ): QuotaViolation[] {
-  if (!quota?.storage || !Number.isFinite(requestedGiB) || requestedGiB <= 0) return []
+  return volumeBatchQuotaViolations(quota, [{ sizeGiB: requestedGiB, type: volumeType, label: "Volume size" }])
+}
+
+export function volumeBatchQuotaViolations(
+  quota: ProjectQuotaUsage | undefined,
+  requests: VolumeQuotaRequest[],
+): QuotaViolation[] {
+  if (!quota?.storage) return []
+  const valid = requests.filter((request) => Number.isFinite(request.sizeGiB) && request.sizeGiB > 0)
+  if (valid.length === 0) return []
+
+  const totalGiB = valid.reduce((total, request) => total + request.sizeGiB, 0)
 
   const violations = [
-    metricViolation(quota.storage.volumes, 1, "volumes", "Volumes"),
-    metricViolation(quota.storage.gigabytes, requestedGiB, "gigabytes", "Block storage", formatGiB),
+    metricViolation(quota.storage.volumes, valid.length, "volumes", "Volumes"),
+    metricViolation(quota.storage.gigabytes, totalGiB, "gigabytes", "Block storage", formatGiB),
   ].filter((item): item is QuotaViolation => !!item)
 
-  const normalizedType = volumeType?.trim()
-  const typedQuota = normalizedType ? quota.storage.volumeTypes?.[normalizedType] : undefined
-  if (typedQuota && normalizedType) {
+  const byType = new Map<string, { count: number; sizeGiB: number }>()
+  for (const request of valid) {
+    const normalizedType = request.type?.trim()
+    if (!normalizedType) continue
+    const current = byType.get(normalizedType) ?? { count: 0, sizeGiB: 0 }
+    current.count += 1
+    current.sizeGiB += request.sizeGiB
+    byType.set(normalizedType, current)
+  }
+  for (const [normalizedType, requested] of byType) {
+    const typedQuota = quota.storage.volumeTypes?.[normalizedType]
+    if (!typedQuota) continue
     const typeLabel = `Volume type ${normalizedType}`
     const typedViolations = [
-      metricViolation(typedQuota.volumes, 1, "volumes", `${typeLabel} volumes`),
-      metricViolation(typedQuota.gigabytes, requestedGiB, "gigabytes", `${typeLabel} storage`, formatGiB),
+      metricViolation(typedQuota.volumes, requested.count, "volumes", `${typeLabel} volumes`),
+      metricViolation(typedQuota.gigabytes, requested.sizeGiB, "gigabytes", `${typeLabel} storage`, formatGiB),
     ].filter((item): item is QuotaViolation => !!item)
     violations.push(...typedViolations)
   }
 
   const perVolume = quota.storage.perVolumeGigabytes
-  if (perVolume && perVolume.limit >= 0 && requestedGiB > perVolume.limit) {
-    violations.push({
-      resource: "per-volume",
-      message: `Volume size: ${requestedGiB} GiB requested exceeds the ${perVolume.limit} GiB per-volume limit.`,
+  if (perVolume && perVolume.limit >= 0) {
+    valid.forEach((request, index) => {
+      if (request.sizeGiB > perVolume.limit) {
+        violations.push({
+          resource: "per-volume",
+          message: `${request.label ?? `Volume ${index + 1}`}: ${request.sizeGiB} GiB requested exceeds the ${perVolume.limit} GiB per-volume limit.`,
+        })
+      }
     })
   }
   return violations

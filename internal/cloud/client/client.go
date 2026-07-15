@@ -148,6 +148,8 @@ type Flavor struct {
 	VCPUs      int               `json:"vcpus"`
 	RAM        int               `json:"ram"`
 	Disk       int               `json:"disk"`
+	Ephemeral  int               `json:"ephemeral"`
+	Swap       int               `json:"swap"`
 	ExtraSpecs map[string]string `json:"extra_specs"`
 }
 
@@ -176,7 +178,10 @@ func (c *Client) ListFlavors(ctx context.Context) ([]Flavor, error) {
 		if es == nil {
 			es = map[string]string{}
 		}
-		out = append(out, Flavor{ID: f.ID, Name: f.Name, VCPUs: f.VCPUs, RAM: f.RAM, Disk: f.Disk, ExtraSpecs: es})
+		out = append(out, Flavor{
+			ID: f.ID, Name: f.Name, VCPUs: f.VCPUs, RAM: f.RAM, Disk: f.Disk,
+			Ephemeral: f.Ephemeral, Swap: f.Swap, ExtraSpecs: es,
+		})
 	}
 	return out, nil
 }
@@ -202,7 +207,8 @@ func (c *Client) GetFlavor(ctx context.Context, id string) (map[string]any, erro
 	}
 	return map[string]any{
 		"id": f.ID, "name": f.Name, "originalName": f.Name, "original_name": f.Name,
-		"ram": f.RAM, "vcpus": f.VCPUs, "disk": f.Disk, "extra_specs": es,
+		"ram": f.RAM, "vcpus": f.VCPUs, "disk": f.Disk, "ephemeral": f.Ephemeral, "swap": f.Swap,
+		"extra_specs": es,
 	}, nil
 }
 
@@ -293,7 +299,8 @@ func imageToMap(im *images.Image) map[string]any {
 		"id": im.ID, "name": im.Name, "status": string(im.Status),
 		"owner": im.Owner, "created_at": created, "createdAt": created,
 		"updated_at": updated, "updatedAt": updated,
-		"size": im.SizeBytes, "min_disk": im.MinDiskGigabytes, "min_ram": im.MinRAMMegabytes,
+		"size": im.SizeBytes, "virtual_size": im.VirtualSize, "virtualSize": im.VirtualSize,
+		"min_disk": im.MinDiskGigabytes, "min_ram": im.MinRAMMegabytes,
 		"minDisk": im.MinDiskGigabytes, "minRam": im.MinRAMMegabytes,
 		"visibility": string(im.Visibility),
 	}

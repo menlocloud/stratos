@@ -218,6 +218,9 @@ func instanceValuesFromServer(cr *cloud.CloudResource) map[string]any {
 		"instance_type": strAny(cr.Data["flavorName"]),
 		"vcpus":         fl["vcpus"], "ram_mb": fl["ram"], "root_disk_gb": fl["disk"],
 	}
+	if cloud.ServerIsVolumeBacked(cr.Data) {
+		vals["root_disk_gb"] = 0
+	}
 	if name, ok := fl["name"].(string); ok && vals["instance_type"] == "" {
 		vals["instance_type"] = name
 	}

@@ -15,6 +15,13 @@ import (
 // structs hide the SDK; the CloudResource sync providers consume these.
 
 // Volume is the slice of a Cinder volume the cache/billing needs.
+type VolumeAttachment struct {
+	AttachmentID string
+	Device       string
+	ServerID     string
+	VolumeID     string
+}
+
 type Volume struct {
 	ID               string
 	Name             string
@@ -22,7 +29,8 @@ type Volume struct {
 	Status           string
 	VolumeType       string
 	AvailabilityZone string
-	Bootable         string    // cinder returns "true"/"false" as a string
+	Bootable         string // cinder returns "true"/"false" as a string
+	Attachments      []VolumeAttachment
 	CreatedAt        time.Time // cinder's real created_at → billing accrual start (not the sync time)
 }
 
@@ -42,10 +50,19 @@ func (c *Client) ListVolumes(ctx context.Context) ([]Volume, error) {
 	}
 	out := make([]Volume, 0, len(vs))
 	for _, v := range vs {
+		attachments := make([]VolumeAttachment, 0, len(v.Attachments))
+		for _, attachment := range v.Attachments {
+			attachments = append(attachments, VolumeAttachment{
+				AttachmentID: attachment.AttachmentID,
+				Device:       attachment.Device,
+				ServerID:     attachment.ServerID,
+				VolumeID:     attachment.VolumeID,
+			})
+		}
 		out = append(out, Volume{
 			ID: v.ID, Name: v.Name, Size: v.Size, Status: v.Status,
 			VolumeType: v.VolumeType, AvailabilityZone: v.AvailabilityZone, Bootable: v.Bootable,
-			CreatedAt: v.CreatedAt,
+			Attachments: attachments, CreatedAt: v.CreatedAt,
 		})
 	}
 	return out, nil

@@ -24,3 +24,14 @@ func TestDeletionOrder(t *testing.T) {
 	lt(cloud.TypeServer, cloud.TypeSecurityGroup) // leaf types (SG/keypair/image) go last
 	lt(cloud.TypeRouter, cloud.TypeSecurityGroup)
 }
+
+func TestSortCloudResourcesForDeletionPutsServerBeforeBootVolume(t *testing.T) {
+	resources := []cloud.CloudResource{
+		{ExternalID: "root-volume", Type: cloud.TypeVolume},
+		{ExternalID: "server", Type: cloud.TypeServer},
+	}
+	SortCloudResourcesForDeletion(resources)
+	if resources[0].Type != cloud.TypeServer || resources[1].Type != cloud.TypeVolume {
+		t.Fatalf("deletion order = %s, %s; want SERVER before VOLUME", resources[0].Type, resources[1].Type)
+	}
+}

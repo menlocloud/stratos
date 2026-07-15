@@ -64,19 +64,26 @@ test("volume dialog checks the selected Cinder volume-type quota", async ({ page
   const dialog = page.getByRole("dialog")
   await dialog.getByLabel("Name").fill("typed-quota-test")
   await dialog.getByLabel("Size (GB)").fill("20")
-  await dialog.getByLabel(/Volume type/).fill("high-iops")
+  await dialog.getByLabel("Storage type").click()
+  await page.getByRole("option", { name: "High IOPS SSD" }).click()
 
   await expect(dialog.getByText("This volume exceeds the project quota")).toBeVisible()
   await expect(dialog.getByText(/Volume type high-iops storage/)).toBeVisible()
   await expect(dialog.getByRole("button", { name: "Create volume" })).toBeDisabled()
 })
 
-test("volume dialog allows a blank type (Cinder default) when within quota", async ({ page }) => {
+test("volume dialog requires an enabled storage type before creating", async ({ page }) => {
   await page.goto(`${project}/volumes`)
   await page.getByRole("button", { name: "Create volume" }).first().click()
   const dialog = page.getByRole("dialog")
-  await dialog.getByLabel("Name").fill("default-type-quota-test")
+  await dialog.getByLabel("Name").fill("typed-required-test")
   await dialog.getByLabel("Size (GB)").fill("10")
+
+  // Two enabled types in the mock catalog → nothing is auto-selected and the
+  // create button stays disabled until the user picks one.
+  await expect(dialog.getByRole("button", { name: "Create volume" })).toBeDisabled()
+  await dialog.getByLabel("Storage type").click()
+  await page.getByRole("option", { name: "SSD", exact: true }).click()
 
   await expect(dialog.getByText("This volume fits the current quota snapshot.")).toBeVisible()
   await expect(dialog.getByRole("button", { name: "Create volume" })).toBeEnabled()

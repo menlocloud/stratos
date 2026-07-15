@@ -2,6 +2,8 @@ package project
 
 import "testing"
 
+import "github.com/menlocloud/stratos/internal/cloud"
+
 func TestTimeUnitSizeInMonth(t *testing.T) {
 	// No config → per-unit defaults.
 	defaults := map[string]int{"minute": 43200, "hour": 720, "month": 1, "day": 1}
@@ -22,5 +24,18 @@ func TestTimeUnitSizeInMonth(t *testing.T) {
 	// a unit NOT in the override map falls back to its default.
 	if got := timeUnitSizeInMonth("month", limits); got != 1 {
 		t.Errorf("month (not overridden) = %d, want 1", got)
+	}
+}
+
+func TestInstanceValuesFromVolumeBackedServerDoesNotPriceFlavorDisk(t *testing.T) {
+	cr := &cloud.CloudResource{Data: map[string]any{
+		"volumeBacked": true,
+		"server": map[string]any{
+			"flavor": map[string]any{"name": "m1.medium", "disk": 80, "ram": 4096, "vcpus": 2},
+		},
+	}}
+	values := instanceValuesFromServer(cr)
+	if values == nil || values["root_disk_gb"] != 0 {
+		t.Fatalf("root_disk_gb = %#v, want 0 for volume-backed pricing", values)
 	}
 }

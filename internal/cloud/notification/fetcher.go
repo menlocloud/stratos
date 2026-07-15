@@ -83,7 +83,11 @@ func FetchByType(ctx context.Context, cc *client.Client, resourceType, externalI
 		return nil, false, nil
 	}
 	if key := dataKeyByType[resourceType]; key != "" {
-		return map[string]any{key: obj}, true, nil
+		data := map[string]any{key: obj}
+		if (resourceType == cloud.TypeServer || resourceType == cloud.TypeBaremetalServer) && cloud.ServerIsVolumeBacked(data) {
+			data["volumeBacked"] = true
+		}
+		return data, true, nil
 	}
 	return obj, true, nil
 }

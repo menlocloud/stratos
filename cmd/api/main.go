@@ -1120,10 +1120,33 @@ func (d projectCloudDeleter) DeleteProjectResources(ctx context.Context, project
 	if err != nil {
 		return err
 	}
-	for i := range resources {
-		if err := ws.Delete(ctx, resources[i].ServiceID, resources[i].ExternalID); err != nil {
-			return err
+	project.SortCloudResourcesForDeletion(resources)
+	remaining := resources
+	var lastErr error
+	for sweep := 0; sweep < 3 && len(remaining) > 0; sweep++ {
+		if sweep > 0 {
+			// Nova server deletion is asynchronous: the boot volume of a
+			// volume-backed server stays in-use until delete_on_termination
+			// finishes (routinely 10-30s). Back-to-back sweeps would burn all
+			// retries inside that window and fail the deletion — which the
+			// deletion job then treats as canceled (project flips back ENABLED).
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(20 * time.Second):
+			}
 		}
+		stillLeft := make([]cloud.CloudResource, 0, len(remaining))
+		for i := range remaining {
+			if err := ws.Delete(ctx, remaining[i].ServiceID, remaining[i].ExternalID); err != nil {
+				lastErr = err
+				stillLeft = append(stillLeft, remaining[i])
+			}
+		}
+		remaining = stillLeft
+	}
+	if len(remaining) > 0 {
+		return fmt.Errorf("scheduled project deletion left %d resource(s): %w", len(remaining), lastErr)
 	}
 	return nil
 }

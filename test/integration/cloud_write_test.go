@@ -149,10 +149,14 @@ func TestCloudWriteDispatch(t *testing.T) {
 		t.Fatal("network not cached")
 	}
 
-	// SERVER → cache holds data.server.
+	// SERVER → cache holds data.server. Servers are volume-backed: rootVolume is
+	// mandatory at the WriteService layer (the HTTP handler defaults it).
 	cr, err = svc.Create(ctx, "svc1", "RegionOne", "proj1", "user1", providers.CreateRequest{
 		Type: cloud.TypeServer,
-		Data: map[string]any{"name": "vm-a", "flavorId": "f1", "imageId": "i1", "networkIds": []any{"net-1"}},
+		Data: map[string]any{
+			"name": "vm-a", "flavorId": "f1", "imageId": "i1", "networkIds": []any{"net-1"},
+			"rootVolume": map[string]any{"sizeGiB": float64(20), "type": "ssd"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("create server: %v", err)
@@ -246,7 +250,10 @@ func TestCloudWriteActionsAndTypes(t *testing.T) {
 	}
 
 	// server REBOOT (no cache change, just the cloud call).
-	srv := mk(cloud.TypeServer, map[string]any{"name": "s", "flavorId": "f1", "imageId": "i1"})
+	srv := mk(cloud.TypeServer, map[string]any{
+		"name": "s", "flavorId": "f1", "imageId": "i1",
+		"rootVolume": map[string]any{"sizeGiB": float64(20), "type": "ssd"},
+	})
 	if _, err := svc.Action(ctx, "svc1", "proj1", srv.ExternalID, "REBOOT_SOFT", nil); err != nil {
 		t.Fatalf("reboot: %v", err)
 	}

@@ -120,7 +120,10 @@ export const availabilityZones = [
   { name: "az-2", displayName: "Zone 2", available: true },
 ]
 
-export const volumeTypes = ["standard", "high-iops"]
+export const volumeTypes = [
+  { id: "standard", name: "standard", displayName: "SSD" },
+  { id: "high-iops", name: "high-iops", displayName: "High IOPS SSD" },
+]
 
 function server(name: string, status: string, flavor: any, addr: string) {
   return res(

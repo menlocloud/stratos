@@ -54,6 +54,15 @@ func deletionOrder(t string) int {
 	}
 }
 
+// SortCloudResourcesForDeletion orders dependents before their dependencies.
+// It is exported so every project-deletion path, including the scheduled job
+// wired in cmd/api, applies the same server-before-boot-volume policy.
+func SortCloudResourcesForDeletion(resources []cloud.CloudResource) {
+	sort.SliceStable(resources, func(i, j int) bool {
+		return deletionOrder(resources[i].Type) < deletionOrder(resources[j].Type)
+	})
+}
+
 // teardownSweeps is how many dependency-ordered passes the cascade makes: a resource that fails
 // because a blocker still exists (e.g. a network with a lingering port) can succeed on a later pass
 // once the blocker is deleted.
@@ -73,12 +82,20 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 	if err != nil {
 		return err
 	}
-	sort.SliceStable(resources, func(i, j int) bool {
-		return deletionOrder(resources[i].Type) < deletionOrder(resources[j].Type)
-	})
+	SortCloudResourcesForDeletion(resources)
 
 	remaining := resources
 	for sweep := 0; sweep < teardownSweeps && len(remaining) > 0; sweep++ {
+		if sweep > 0 {
+			// A volume-backed server's boot volume stays in-use until Nova's
+			// asynchronous delete_on_termination completes (routinely 10-30s);
+			// back-to-back sweeps would burn every retry inside that window.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(20 * time.Second):
+			}
+		}
 		var stillLeft []cloud.CloudResource
 		for i := range remaining {
 			res := &remaining[i]
