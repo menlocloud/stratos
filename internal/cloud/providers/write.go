@@ -1091,7 +1091,7 @@ func (s *WriteService) Action(ctx context.Context, serviceID, projectID, externa
 }
 
 func replaceServerData(existing map[string]any, server map[string]any) map[string]any {
-	updated := make(map[string]any, len(existing)+1)
+	updated := make(map[string]any)
 	for key, value := range existing {
 		if key != "server" {
 			updated[key] = value
