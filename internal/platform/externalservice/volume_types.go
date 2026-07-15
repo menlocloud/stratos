@@ -29,6 +29,28 @@ func (e *ExternalService) SoleRegion() string {
 	return ""
 }
 
+// HasRegion reports whether the provider declares the region in config.regions.
+func (e *ExternalService) HasRegion(name string) bool {
+	if e == nil || name == "" {
+		return false
+	}
+	regions, _ := e.Config["regions"].(map[string]any)
+	_, ok := regions[name]
+	return ok
+}
+
+// CatalogRegion picks the region whose curated catalog a request should see.
+// A requested region is honored only when the provider declares it (the value
+// arrives from the browser's x-region-id header — never trusted raw); anything
+// else falls back to the provider's sole region, and a multi-region provider
+// with no usable region resolves to "" so catalog lookups fail closed.
+func (e *ExternalService) CatalogRegion(requested string) string {
+	if e.HasRegion(requested) {
+		return requested
+	}
+	return e.SoleRegion()
+}
+
 // EnabledVolumeTypes returns only config.features.volumeTypes[region] entries
 // explicitly enabled by an operator. It intentionally fails closed: a missing
 // region, an absent catalog, or an all-disabled catalog exposes no storage
