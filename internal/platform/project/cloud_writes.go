@@ -373,6 +373,17 @@ func (h *Handler) regionFor(p *Project, svcID string) string {
 	return h.cloudRegion
 }
 
+// requestRegion prefers the Location picker's x-region-id header over
+// regionFor, so multi-region providers scope per-region catalogs correctly.
+// The header value is client-controlled — consumers validate it against the
+// provider's declared regions (ExternalService.CatalogRegion) before use.
+func (h *Handler) requestRegion(r *http.Request, p *Project, svcID string) string {
+	if hd := r.Header.Get("x-region-id"); hd != "" {
+		return hd
+	}
+	return h.regionFor(p, svcID)
+}
+
 // listImages live-lists the project's glance images as IMAGE CloudResources:
 // {externalId, type:IMAGE, region, serviceId, projectId, data:{image:{...}}}. The FE shows these
 // as the OS options and sends the picked externalId as the create's imageId. Empty list (not an
@@ -694,7 +705,7 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case cloud.TypeVolume:
-		if prepErr := h.prepareStandaloneVolume(r.Context(), proj, svcID, region, req.Data); prepErr != nil {
+		if prepErr := h.prepareStandaloneVolume(r.Context(), proj, svcID, h.requestRegion(r, proj, svcID), req.Data); prepErr != nil {
 			h.fail(w, prepErr)
 			return
 		}
@@ -725,7 +736,7 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Type == cloud.TypeServer {
-			if prepErr := h.prepareServerStorage(r.Context(), proj, svcID, region, req.Data); prepErr != nil {
+			if prepErr := h.prepareServerStorage(r.Context(), proj, svcID, h.requestRegion(r, proj, svcID), req.Data); prepErr != nil {
 				h.fail(w, prepErr)
 				return
 			}
@@ -940,7 +951,7 @@ func (h *Handler) cloudBulkAction(w http.ResponseWriter, r *http.Request) {
 				result = applyZoneConfig(azs, h.zoneConfig(r.Context(), svcID))
 			}
 		case "LIST_VOLUME_TYPES":
-			region := h.regionFor(proj, svcID)
+			region := h.requestRegion(r, proj, svcID)
 			volumeTypes, err := h.liveConfiguredVolumeTypes(r.Context(), cc, svcID, region)
 			if err != nil {
 				h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "Block-storage catalog is unavailable"))
@@ -1693,7 +1704,7 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 		// Volume types catalog (LIST_TYPES → cinder volume types).
 		types := []map[string]any{}
 		if cc, ok := h.tryTenantClient(r.Context(), proj, svcID); ok {
-			if list, err := h.liveConfiguredVolumeTypes(r.Context(), cc, svcID, h.regionFor(proj, svcID)); err == nil {
+			if list, err := h.liveConfiguredVolumeTypes(r.Context(), cc, svcID, h.requestRegion(r, proj, svcID)); err == nil {
 				types = list
 			}
 		}
@@ -1792,7 +1803,7 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 			req.Data = map[string]any{}
 		}
 		resolved, prepErr := h.resolveConfiguredVolumeType(
-			r.Context(), proj, svcID, h.regionFor(proj, svcID), strAny(req.Data["newType"]),
+			r.Context(), proj, svcID, h.requestRegion(r, proj, svcID), strAny(req.Data["newType"]),
 		)
 		if prepErr != nil {
 			h.fail(w, prepErr)

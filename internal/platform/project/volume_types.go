@@ -18,15 +18,20 @@ const maxCreateServerDataVolumes = 32
 
 // configuredVolumeTypes returns the operator-published catalog for a service
 // and region. Missing configuration intentionally yields an empty catalog.
+// The region goes through CatalogRegion: a browser-supplied region is honored
+// only when the provider declares it, and a blank/unknown region falls back
+// to the provider's sole region — project service rows carry no region and
+// cfg.OpenStack.Region is a dev-bootstrap value production leaves unset, so
+// regionFor legitimately resolves to "" on single-region providers.
 func (h *Handler) configuredVolumeTypes(ctx context.Context, serviceID, region string) []externalservice.VolumeTypeConfig {
-	if serviceID == "" || region == "" || h.esSvc == nil {
+	if serviceID == "" || h.esSvc == nil {
 		return []externalservice.VolumeTypeConfig{}
 	}
 	es, err := h.esSvc.Get(ctx, serviceID)
 	if err != nil || es == nil {
 		return []externalservice.VolumeTypeConfig{}
 	}
-	return es.EnabledVolumeTypes(region)
+	return es.EnabledVolumeTypes(es.CatalogRegion(region))
 }
 
 // applyVolumeTypeConfig intersects live Cinder types with the strict admin
