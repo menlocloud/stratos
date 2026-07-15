@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query"
 import { useParams } from "react-router-dom"
 import { apiFetch, apiFetchEnvelope, type CloudScope } from "./api"
 import type {
-  BillingSummary, CloudResource, CostInfo, Location, Project, ProjectQuotaUsage, ProjectService,
+  BillingSummary, CloudResource, CostInfo, GpuCapacityUsage, Location, Project, ProjectQuotaUsage,
+  ProjectService,
 } from "./types"
 
 export function useProjects() {
@@ -50,6 +51,17 @@ export function useProjectQuota(pid: string, scope: CloudScope | undefined) {
     queryFn: () =>
       apiFetch<ProjectQuotaUsage>(`/project/${pid}/quota-usage`, { cloud: scope }),
     enabled: !!pid && !!scope,
+    staleTime: 30_000,
+  })
+}
+
+// Region GPU capacity (available/total per model) — only fetched when the project has it enabled.
+export function useProjectGpuCapacity(pid: string, scope: CloudScope | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["project-gpu-capacity", pid, scope?.serviceId, scope?.region],
+    queryFn: () =>
+      apiFetch<GpuCapacityUsage>(`/project/${pid}/gpu-capacity`, { cloud: scope }),
+    enabled: enabled && !!pid && !!scope,
     staleTime: 30_000,
   })
 }

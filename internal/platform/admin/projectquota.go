@@ -88,6 +88,43 @@ func (h *Handler) projectGPUUsage(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, response)
 }
 
+// projectSetGPUCapacityVisible toggles whether the client dashboard shows the region's cluster
+// GPU capacity for this project (PUT /project/{id}/gpu-capacity-visible: {"gpuCapacityVisible":
+// bool}). Pure datastore; the client GET /project/{id}/gpu-capacity read enforces the flag.
+// ADMIN_PROJECT_UPDATE.
+func (h *Handler) projectSetGPUCapacityVisible(w http.ResponseWriter, r *http.Request) {
+	if !h.require(w, r, projectUpdatePerm) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var req struct {
+		GpuCapacityVisible *bool `json:"gpuCapacityVisible"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, httpx.BadRequest("Invalid request body"))
+		return
+	}
+	if req.GpuCapacityVisible == nil {
+		httpx.WriteError(w, httpx.BadRequest("gpuCapacityVisible is required"))
+		return
+	}
+	existing, ok := h.findProjectOr404(w, r, id)
+	if !ok {
+		return
+	}
+	before := maps.Clone(existing)
+	if _, err := h.repo.SetFields(r.Context(), projectCollection, id,
+		pgdoc.M{"gpuCapacityVisible": *req.GpuCapacityVisible}); httpx.WriteError(w, err) {
+		return
+	}
+	after, err := h.repo.FindDoc(r.Context(), projectCollection, id)
+	if httpx.WriteError(w, err) {
+		return
+	}
+	audit.RecordSnapshots(r.Context(), before, after)
+	httpx.OK(w, shapeDoc(after))
+}
+
 // validateProjectQuota checks the quota shape: quota.gpu (when present) must be an object of
 // non-negative integer limits keyed by GPU model alias (or "*").
 func validateProjectQuota(body pgdoc.M) *httpx.HTTPError {

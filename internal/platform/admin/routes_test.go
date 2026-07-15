@@ -27,3 +27,13 @@ func TestProjectGPUUsageRoute(t *testing.T) {
 		t.Fatal("GET /admin/project/{id}/gpu-usage route is not registered")
 	}
 }
+
+// A handler method that is never routed still compiles, so assert the GPU-capacity-visible toggle
+// route is actually wired (the class of bug where a handler ships completely unreachable).
+func TestProjectGPUCapacityVisibleRoute(t *testing.T) {
+	router := chi.NewRouter()
+	(&Handler{}).Routes(router)
+	if !router.Match(chi.NewRouteContext(), http.MethodPut, "/admin/project/project-1/gpu-capacity-visible") {
+		t.Fatal("PUT /admin/project/{id}/gpu-capacity-visible route is not registered")
+	}
+}

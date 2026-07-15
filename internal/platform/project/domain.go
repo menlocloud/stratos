@@ -53,6 +53,10 @@ type Project struct {
 	// and the server auto-selects an allowed external network on the user's behalf; true = the
 	// client picks explicitly.
 	PublicNetworksVisible bool `json:"publicNetworksVisible"`
+	// GpuCapacityVisible controls whether the client dashboard shows the region's cluster GPU
+	// capacity (available/total per model, from Placement). false (the default, incl. absent) =
+	// hidden; the client still sees its own GPU quota/usage regardless.
+	GpuCapacityVisible bool `json:"gpuCapacityVisible"`
 	// Quota is the admin-managed per-project quota config (stored JSON; enforced at the
 	// Stratos cloud gate, never pushed to OpenStack). Shape: {"gpu": {"<model>": n, "*": n}}.
 	Quota                  map[string]any `json:"quota,omitempty"`

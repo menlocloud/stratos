@@ -12,6 +12,17 @@ export type Project = {
   // false/absent = the client gets no external-network picker (the server auto-picks the pool for
   // floating IPs / router gateways); true = the client chooses.
   publicNetworksVisible?: boolean
+  // false/absent = the dashboard does not show the region GPU capacity; true = it does.
+  gpuCapacityVisible?: boolean
+}
+
+// GET /project/{id}/gpu-capacity — the region's cluster GPU capacity (available/total per model),
+// only populated when the operator enabled it for the project.
+export type GpuCapacityUsage = {
+  visible: boolean
+  region?: string
+  capacity: Array<{ model: string; available: number; total: number }>
+  warnings: string[]
 }
 
 export type Organization = {

@@ -202,6 +202,12 @@ on("PUT /admin/project/:id/quota", ({ params, opts }) => {
   return { data: project }
 })
 
+on("PUT /admin/project/:id/gpu-capacity-visible", ({ params, opts }) => {
+  const project = db.projects.find((p) => p.id === params.id) ?? notFound("Project")
+  project.gpuCapacityVisible = !!(opts.body as Doc)?.gpuCapacityVisible
+  return { data: project }
+})
+
 on("PUT /admin/project/:id/public-networks", ({ params, opts }) => {
   const project = db.projects.find((p) => p.id === params.id) ?? notFound("Project")
   const body = (opts.body ?? {}) as Doc
