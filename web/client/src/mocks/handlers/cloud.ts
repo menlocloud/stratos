@@ -75,6 +75,7 @@ on("POST /project/:pid/cloud/action", ({ opts }) => {
     case "LIST_FLAVORS": return ok(flavors)
     case "PUBLIC_IMAGES": return ok(publicImages)
     case "LIST_AVAILABILITY_ZONES": return ok(availabilityZones)
+    case "LIST_VOLUME_TYPES": return ok(volumeTypes)
     case "LIST_TYPES": return ok(volumeTypes)
     default:
       console.warn(`[mock] unknown collection action ${action}`)

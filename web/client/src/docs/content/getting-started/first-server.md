@@ -13,7 +13,8 @@ Projects also anchor teamwork and billing: members are added per project, and co
 A server is assembled from a few smaller pieces. You can create them as you go through the launch form, but it helps to know what they are:
 
 - **Image** — the operating system the machine boots from. Browse **Compute → Images** to see what's available.
-- **Flavor** — the size (vCPUs, RAM, root disk). You pick this in the launch form.
+- **Flavor** — the compute size (vCPUs and RAM) and a suggested root-storage size. You pick this in the launch form.
+- **Storage** — the root block-volume size and storage class. You can optionally add persistent data volumes at launch.
 - **Network** — the private network the server attaches to. If the project has none yet, create one under **Network → Networks**.
 - **Key pair** — the SSH key you'll log in with. Under **Compute → Key pairs**, upload a public key you already have or let the portal generate one and download the private half. You can't retrieve a generated private key later, so save it immediately.
 - **Security group** — the firewall around the server. A default group usually exists; open **Network → Security groups** to allow the ports you need (for example SSH on 22).
@@ -23,11 +24,12 @@ A server is assembled from a few smaller pieces. You can create them as you go t
 Go to **Compute → Servers** and click **Create server**. The launch form is a single page with numbered sections — work down it top to bottom:
 
 1. Pick a **location** (region) and **availability zone**.
-2. Choose the **image** to boot and a **flavor** for its size (vCPUs, RAM, disk).
-3. Attach it to a **network**, and under **Access** select a **key pair** for SSH login.
-4. Still under **Access**, tick a **security group** that opens the ports you'll use.
-5. Leave **Assign floating IP** on (the default) to have a public address attached automatically shortly after the server comes up.
-6. Give it a **name** and click **Create server**. Stratos provisions the machine on the underlying cloud; it moves through build states and settles on **ACTIVE** once it's up. (For what's happening behind that, see [How Provisioning Works](/docs/concepts/provisioning).)
+2. Choose the **image** to boot and a **flavor** for its compute size (vCPUs and RAM).
+3. Under **Storage**, choose the root-volume size and storage class. Add persistent data volumes if the workload needs them.
+4. Attach it to a **network**, and under **Access** select a **key pair** for SSH login.
+5. Still under **Access**, tick a **security group** that opens the ports you'll use.
+6. Leave **Assign floating IP** on (the default) to have a public address attached automatically shortly after the server comes up.
+7. Give it a **name** and click **Create server**. Stratos provisions the machine on the underlying cloud; it moves through build states and settles on **ACTIVE** once it's up. (For what's happening behind that, see [How Provisioning Works](/docs/concepts/provisioning).)
 
 ![The Create server form with an image, flavor, network and security group selected](/docs-img/create-server-form.png)
 

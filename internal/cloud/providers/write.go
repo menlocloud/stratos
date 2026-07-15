@@ -3,6 +3,8 @@ package providers
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -310,12 +312,25 @@ func (s *WriteService) Create(ctx context.Context, serviceID, region, projectID,
 		if ud := mstr(d, "userData"); ud != "" {
 			userData = []byte(ud)
 		}
-		srv, err := s.w.CreateServer(ctx, client.CreateServerOpts{
+		serverOpts := client.CreateServerOpts{
 			Name: mstr(d, "name"), FlavorID: mstr(d, "flavorId"), ImageID: mstr(d, "imageId"),
 			NetworkIDs: netIDs, FixedIPs: ifaceFixedIPs(d["networkInterfaces"]), KeyName: mstr(d, "keyName"),
 			SecurityGroups: secGroups, AvailabilityZone: az,
 			AdminPass: mstr(d, "adminPass"), UserData: userData,
-		})
+		}
+		if req.Type == cloud.TypeServer {
+			bootVolume, parseErr := createServerVolume(d["rootVolume"], true, "root")
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			dataVolumes, parseErr := createServerDataVolumes(d["dataVolumes"])
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			serverOpts.BootVolume = bootVolume
+			serverOpts.DataVolumes = dataVolumes
+		}
+		srv, err := s.w.CreateServer(ctx, serverOpts)
 		if err != nil {
 			return nil, err
 		}
@@ -344,6 +359,14 @@ func (s *WriteService) Create(ctx context.Context, serviceID, region, projectID,
 		enrichServerFlavorForCache(ctx, s.w, srv)
 		cr.ExternalID = srvID
 		cr.Data = map[string]any{"server": srv}
+		if req.Type == cloud.TypeServer {
+			// Marker only — the requested rootVolume/dataVolumes specs are NOT
+			// persisted: the periodic sync replaces Data wholesale from the live
+			// list, so anything beyond what the provider re-derives would silently
+			// vanish after the first reconcile. Volume details live on the synced
+			// VOLUME rows.
+			cr.Data["volumeBacked"] = true
+		}
 
 	case cloud.TypeVolume:
 		vol, err := s.w.CreateVolume(ctx, client.CreateVolumeOpts{
@@ -798,6 +821,15 @@ func (s *WriteService) Create(ctx context.Context, serviceID, region, projectID,
 
 	saved, err := s.repo.Insert(ctx, cr)
 	if err != nil {
+		if (req.Type == cloud.TypeServer || req.Type == cloud.TypeBaremetalServer) && cr.ExternalID != "" {
+			// Nova has already accepted the asynchronous create. Returning a 500
+			// would invite a retry that creates a duplicate VM and persistent data
+			// volumes. Treat the cloud operation as accepted and let the normal
+			// tenant sync reconcile the missing cache row.
+			slog.Error("server created but cache insert failed; awaiting reconciliation",
+				"server", cr.ExternalID, "project", projectID, "service", serviceID, "err", err)
+			return cr, nil
+		}
 		return nil, err
 	}
 	// Insert re-decodes the persisted doc (EphemeralData is dropped by the record builder) — re-attach the
@@ -859,6 +891,14 @@ func (s *WriteService) Action(ctx context.Context, serviceID, projectID, externa
 			cr.Data = withAttachment(cr.Data, att, serverID)
 			return s.repo.Insert(ctx, cr)
 		case "DETACH":
+			// Only the Nova BOOT volume of a volume-backed server is pinned; Cinder
+			// also flags image/snapshot-sourced data volumes bootable="true" and those
+			// must stay detachable. Out-of-cache servers fall through — Nova itself
+			// refuses detaching a root device volume.
+			if server, _ := s.repo.FindByServiceIDAndExternalID(ctx, serviceID, serverID); server != nil &&
+				cloud.ServerIsVolumeBacked(server.Data) && volumeIsRootOf(cr.Data, serverID) {
+				return cr, httpx.BadRequest("A server boot volume cannot be detached directly")
+			}
 			if err := s.w.DetachVolume(ctx, serverID, externalID); err != nil {
 				return nil, err
 			}
@@ -905,7 +945,7 @@ func (s *WriteService) Action(ctx context.Context, serviceID, projectID, externa
 			if err != nil {
 				return nil, err
 			}
-			cr.Data = map[string]any{"server": srv}
+			cr.Data = replaceServerData(cr.Data, srv)
 			return s.repo.Insert(ctx, cr)
 		}
 	case cloud.TypeRouter:
@@ -1050,6 +1090,20 @@ func (s *WriteService) Action(ctx context.Context, serviceID, projectID, externa
 	return nil, fmt.Errorf("unsupported action %q for type %q", action, cr.Type)
 }
 
+func replaceServerData(existing map[string]any, server map[string]any) map[string]any {
+	updated := make(map[string]any, len(existing)+1)
+	for key, value := range existing {
+		if key != "server" {
+			updated[key] = value
+		}
+	}
+	updated["server"] = server
+	if cloud.ServerIsVolumeBacked(existing) || cloud.ServerIsVolumeBacked(updated) {
+		updated["volumeBacked"] = true
+	}
+	return updated
+}
+
 // asAnySlice normalizes a value that may be []any (just-built) or a named slice type with
 // the same underlying shape (a stored-doc round-trip) — see asList.
 func asAnySlice(v any) []any {
@@ -1069,9 +1123,16 @@ func (s *WriteService) detachServerVolumes(ctx context.Context, server *cloud.Cl
 	if err != nil {
 		return
 	}
+	serverVolumeBacked := cloud.ServerIsVolumeBacked(server.Data)
 	for i := range vols {
 		v := &vols[i]
-		for _, a := range asAnySlice(v.Data["attachments"]) {
+		// Nova must own root-volume deletion so delete_on_termination=true is
+		// honored. Pre-detaching the boot volume would orphan it instead. Bootable
+		// DATA volumes (image/snapshot-sourced) still detach normally.
+		if serverVolumeBacked && (volumeIsRootOf(v.Data, server.ID) || volumeIsRootOf(v.Data, server.ExternalID)) {
+			continue
+		}
+		for _, a := range volumeAttachments(v.Data) {
 			sid := attServerID(a)
 			if sid == "" || (sid != server.ID && sid != server.ExternalID) {
 				continue
@@ -1110,15 +1171,93 @@ func withoutAttachment(data map[string]any, serverID string) map[string]any {
 		kept = append(kept, a)
 	}
 	data["attachments"] = kept
+	if volume, ok := asMap(data["volume"]); ok {
+		nested := asAnySlice(volume["attachments"])
+		nestedKept := make([]any, 0, len(nested))
+		for _, attachment := range nested {
+			if attServerID(attachment) != serverID {
+				nestedKept = append(nestedKept, attachment)
+			}
+		}
+		volume["attachments"] = nestedKept
+		data["volume"] = volume
+	}
 	return data
+}
+
+func volumeAttachments(data map[string]any) []any {
+	if data == nil {
+		return nil
+	}
+	if attachments := asAnySlice(data["attachments"]); len(attachments) > 0 {
+		return attachments
+	}
+	if volume, ok := asMap(data["volume"]); ok {
+		return asAnySlice(volume["attachments"])
+	}
+	return nil
+}
+
+func volumeIsBootable(data map[string]any) bool {
+	if data == nil {
+		return false
+	}
+	var value any = data["bootable"]
+	if volume, ok := asMap(data["volume"]); ok {
+		if nested, present := volume["bootable"]; present {
+			value = nested
+		}
+	}
+	switch value := value.(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(strings.TrimSpace(value), "true")
+	default:
+		return false
+	}
+}
+
+// attDevice reads an attachment element's device path across both the cache
+// shape ("device") and cinder's raw shape.
+func attDevice(a any) string {
+	if m, ok := asMap(a); ok {
+		device, _ := m["device"].(string)
+		return device
+	}
+	return ""
+}
+
+// volumeIsRootOf reports whether the volume is the Nova BOOT volume of the
+// given server. Cinder's bootable flag alone is not enough: volumes created
+// from an image or a snapshot are also bootable="true" yet remain ordinary,
+// detachable data disks. The root is the bootable volume attached on the
+// server's first disk (/dev/vda, /dev/sda, /dev/xvda — Nova assigns …a to the
+// boot device); an attachment with no recorded device is treated as root to
+// stay on the safe side.
+func volumeIsRootOf(data map[string]any, serverID string) bool {
+	if serverID == "" || !volumeIsBootable(data) {
+		return false
+	}
+	for _, a := range volumeAttachments(data) {
+		if attServerID(a) != serverID {
+			continue
+		}
+		device := attDevice(a)
+		return device == "" || strings.HasSuffix(device, "da")
+	}
+	return false
 }
 
 // attServerID reads an attachment element's serverId whatever map shape it decoded as
 // (see asMap).
 func attServerID(a any) string {
 	if m, ok := asMap(a); ok {
-		s, _ := m["serverId"].(string)
-		return s
+		if serverID, _ := m["serverId"].(string); serverID != "" {
+			return serverID
+		}
+		serverID, _ := m["server_id"].(string)
+		return serverID
 	}
 	return ""
 }
@@ -1162,7 +1301,16 @@ func (s *WriteService) deleteCloudObject(ctx context.Context, cr *cloud.CloudRes
 		s.detachServerVolumes(ctx, cr) // detach attached volumes first (best-effort)
 		err = s.w.DeleteServer(ctx, externalID)
 	case cloud.TypeVolume:
+		if s.novaRootVolumeDeletionInProgress(ctx, cr) {
+			// Nova accepted deletion of the owning server and the Cinder volume is
+			// already gone/deleting via delete_on_termination. Archive the stale
+			// cache row without issuing a competing Cinder delete.
+			return nil
+		}
 		err = s.w.DeleteVolume(ctx, externalID)
+		if client.IsNotFound(err) {
+			err = nil
+		}
 	case cloud.TypePort:
 		err = s.w.DeletePort(ctx, externalID)
 	case cloud.TypeFloatingIP:
@@ -1223,6 +1371,74 @@ func (s *WriteService) deleteCloudObject(ctx context.Context, cr *cloud.CloudRes
 		return fmt.Errorf("unsupported delete type %q", cr.Type)
 	}
 	return err
+}
+
+type volumeReader interface {
+	GetVolume(context.Context, string) (map[string]any, error)
+}
+
+// novaRootVolumeDeletionInProgress recognizes the stale cache row left briefly
+// after a server delete. The server row has already been archived and Nova owns
+// root cleanup through delete_on_termination=true.
+func (s *WriteService) novaRootVolumeDeletionInProgress(ctx context.Context, volume *cloud.CloudResource) bool {
+	if volume == nil || !volumeIsBootable(volume.Data) {
+		return false
+	}
+	attachments := volumeAttachments(volume.Data)
+	if len(attachments) == 0 {
+		return false
+	}
+	for _, attachment := range attachments {
+		serverID := attServerID(attachment)
+		if serverID == "" {
+			return false
+		}
+		// A bootable DATA volume (device != …a) is never cleaned by
+		// delete_on_termination — deleting it must go to Cinder normally.
+		if device := attDevice(attachment); device != "" && !strings.HasSuffix(device, "da") {
+			return false
+		}
+		server, err := s.repo.FindByServiceIDAndExternalID(ctx, volume.ServiceID, serverID)
+		if err != nil || server != nil {
+			return false
+		}
+	}
+	reader, ok := s.w.(volumeReader)
+	if !ok {
+		return false
+	}
+	// Nova server deletion and Cinder delete_on_termination are asynchronous.
+	// Give the root a short window to disappear before the surrounding
+	// dependency-ordered teardown sweep decides it must retry later. Only a
+	// TERMINAL state archives the cache row: "deleting" can still fail back to
+	// error_deleting/available, and archiving on it would leak the volume
+	// invisibly once the project/tenant is gone (no sync ever re-lists it).
+	for attempt := 0; attempt < 7; attempt++ {
+		live, err := reader.GetVolume(ctx, volume.ExternalID)
+		if client.IsNotFound(err) {
+			return true
+		}
+		if err != nil || live == nil {
+			return false
+		}
+		switch status := strings.ToLower(strings.TrimSpace(mstr(live, "status"))); status {
+		case "deleted":
+			return true
+		case "in-use", "detaching", "deleting":
+			// still owned by the async Nova/Cinder teardown — keep waiting
+		default:
+			return false
+		}
+		if attempt == 6 {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return false
 }
 
 // resolveExtID maps a Stratos CloudResource CACHE id to its OpenStack externalId, REQUIRING the
@@ -1348,6 +1564,62 @@ func mint(m map[string]any, k string) int {
 		return int(v)
 	}
 	return 0
+}
+
+func wholePositiveInt(v any) (int, bool) {
+	switch value := v.(type) {
+	case int:
+		return value, value > 0
+	case int64:
+		if value <= 0 || uint64(value) > uint64(^uint(0)>>1) {
+			return 0, false
+		}
+		return int(value), true
+	case float64:
+		if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value > float64(^uint(0)>>1) {
+			return 0, false
+		}
+		return int(value), true
+	default:
+		return 0, false
+	}
+}
+
+func createServerVolume(v any, deleteOnTermination bool, tag string) (*client.CreateServerVolumeOpts, error) {
+	row, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("rootVolume is required for server create")
+	}
+	size, ok := wholePositiveInt(row["sizeGiB"])
+	if !ok {
+		return nil, fmt.Errorf("rootVolume.sizeGiB must be a positive whole number")
+	}
+	volumeType := strings.TrimSpace(mstr(row, "type"))
+	if volumeType == "" {
+		return nil, fmt.Errorf("rootVolume.type is required")
+	}
+	return &client.CreateServerVolumeOpts{
+		Size: size, VolumeType: volumeType, DeleteOnTermination: deleteOnTermination, Tag: tag,
+	}, nil
+}
+
+func createServerDataVolumes(v any) ([]client.CreateServerVolumeOpts, error) {
+	if v == nil {
+		return []client.CreateServerVolumeOpts{}, nil
+	}
+	rows, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("dataVolumes must be an array")
+	}
+	out := make([]client.CreateServerVolumeOpts, 0, len(rows))
+	for index, raw := range rows {
+		volume, err := createServerVolume(raw, false, fmt.Sprintf("data-%d", index+1))
+		if err != nil {
+			return nil, fmt.Errorf("data volume %d: %w", index+1, err)
+		}
+		out = append(out, *volume)
+	}
+	return out, nil
 }
 
 // containerSecretRefs builds the Barbican container secret-ref list from the FE's

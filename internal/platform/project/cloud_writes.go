@@ -503,7 +503,11 @@ func refreshResource(ctx context.Context, cc *client.Client, cr *cloud.CloudReso
 			enrichServerFlavor(ctx, cc, srv)
 			// DataServer carries instanceMetadata = server.getMetadata() (CloudResourceVPSProvider);
 			// the FE metadata panel reads server.data.instanceMetadata, not data.server.metadata.
-			cr.Data = map[string]any{"server": srv, "instanceMetadata": serverMetadataMap(srv)}
+			updatedData := map[string]any{"server": srv, "instanceMetadata": serverMetadataMap(srv)}
+			if serverIsVolumeBacked(cr) {
+				updatedData["volumeBacked"] = true
+			}
+			cr.Data = updatedData
 			return true
 		}
 	case cloud.TypeNetwork:
@@ -648,6 +652,9 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, httpx.BadRequest("invalid request body"))
 		return
 	}
+	if req.Data == nil {
+		req.Data = map[string]any{}
+	}
 	// Public-network allow-list enforcement (project.publicNetworkIds, admin-managed): any
 	// external-network target — a FIP pool, a router gateway, or the server auto-FIP leg — must
 	// be enabled for the project (nil allow-list = all allowed; see publicnetworks.go).
@@ -686,6 +693,11 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, httpx.BadRequest("External network is not enabled for this project"))
 			return
 		}
+	case cloud.TypeVolume:
+		if prepErr := h.prepareStandaloneVolume(r.Context(), proj, svcID, region, req.Data); prepErr != nil {
+			h.fail(w, prepErr)
+			return
+		}
 	case cloud.TypeServer, cloud.TypeBaremetalServer:
 		// Curated-but-all-disabled zones: the AZ list is empty, so the client would submit no
 		// availabilityZoneName and let the cloud pick a disabled default — block instead.
@@ -711,6 +723,12 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 		if err := h.enforceGPUQuota(r.Context(), proj, svcID, strAny(req.Data["flavorId"]), nil); err != nil {
 			h.fail(w, err)
 			return
+		}
+		if req.Type == cloud.TypeServer {
+			if prepErr := h.prepareServerStorage(r.Context(), proj, svcID, region, req.Data); prepErr != nil {
+				h.fail(w, prepErr)
+				return
+			}
 		}
 	}
 	uid := u.ID
@@ -873,7 +891,12 @@ func (h *Handler) cloudBulkAction(w http.ResponseWriter, r *http.Request) {
 	}
 	svcID := h.resolveServiceID(r, proj)
 	var result any = []any{}
-	if cc, ok := h.tryTenantClient(r.Context(), proj, svcID); ok {
+	cc, clientReady := h.tryTenantClient(r.Context(), proj, svcID)
+	if req.Action == "LIST_VOLUME_TYPES" && !clientReady {
+		h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "Block-storage catalog is unavailable"))
+		return
+	}
+	if clientReady {
 		switch req.Action {
 		case "PUBLIC_IMAGES":
 			if imgs, err := cc.ListImagesFull(r.Context()); err == nil {
@@ -916,6 +939,14 @@ func (h *Handler) cloudBulkAction(w http.ResponseWriter, r *http.Request) {
 			if azs, err := cc.ListAvailabilityZones(r.Context()); err == nil {
 				result = applyZoneConfig(azs, h.zoneConfig(r.Context(), svcID))
 			}
+		case "LIST_VOLUME_TYPES":
+			region := h.regionFor(proj, svcID)
+			volumeTypes, err := h.liveConfiguredVolumeTypes(r.Context(), cc, svcID, region)
+			if err != nil {
+				h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "Block-storage catalog is unavailable"))
+				return
+			}
+			result = volumeTypes
 		case "LIST_FLAVORS":
 			// the create-server Hardware table — live nova flavors (LIST_FLAVORS →
 			// fetch flavors, mapped to a provider resource). The FE matches a curated
@@ -928,10 +959,16 @@ func (h *Handler) cloudBulkAction(w http.ResponseWriter, r *http.Request) {
 				}
 				out := make([]map[string]any, 0, len(fs))
 				for _, f := range fs {
+					// ephemeral/swap flavors stay listed — the RESIZE picker for
+					// pre-existing image-backed servers still needs them. The create
+					// wizard filters them client-side on the ephemeral/swap fields,
+					// and the server-side create/resize guards reject them for
+					// volume-backed servers.
 					out = append(out, map[string]any{
 						"externalId": f.ID, "serviceId": svcID, "region": region, "type": cloud.TypeServer,
 						"data": map[string]any{
-							"id": f.ID, "name": f.Name, "vcpus": f.VCPUs, "ram": f.RAM, "disk": f.Disk,
+							"id": f.ID, "name": f.Name, "vcpus": f.VCPUs, "ram": f.RAM,
+							"disk": f.Disk, "ephemeral": f.Ephemeral, "swap": f.Swap,
 							"extra_specs": f.ExtraSpecs,
 						},
 					})
@@ -1593,13 +1630,20 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		imageRef := firstStr(req.Data, "imageId", "imageRef", "image")
-		srv, err := cc.RebuildServer(r.Context(), externalID, imageRef, strAny(req.Data["name"]), strAny(req.Data["adminPass"]))
+		volumeBacked := serverIsVolumeBacked(cr)
+		srv, err := cc.RebuildServer(
+			r.Context(), externalID, imageRef, strAny(req.Data["name"]), strAny(req.Data["adminPass"]), volumeBacked,
+		)
 		if err != nil {
 			h.fail(w, err)
 			return
 		}
 		if cr != nil {
-			cr.Data = map[string]any{"server": srv, "instanceMetadata": serverMetadataMap(srv)}
+			updatedData := map[string]any{"server": srv, "instanceMetadata": serverMetadataMap(srv)}
+			if volumeBacked {
+				updatedData["volumeBacked"] = true
+			}
+			cr.Data = updatedData
 			_, _ = h.cloud.Insert(r.Context(), cr) // best-effort cache refresh
 		}
 		httpx.OK(w, map[string]any{"result": map[string]any{"server": srv}})
@@ -1624,7 +1668,9 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 			httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud client not ready")
 			return
 		}
-		pw, err := cc.RescueServer(r.Context(), externalID, strAny(req.Data["rescueImageRef"]))
+		pw, err := cc.RescueServer(
+			r.Context(), externalID, strAny(req.Data["rescueImageRef"]), serverIsVolumeBacked(cr),
+		)
 		if err != nil {
 			h.fail(w, err)
 			return
@@ -1647,7 +1693,7 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 		// Volume types catalog (LIST_TYPES → cinder volume types).
 		types := []map[string]any{}
 		if cc, ok := h.tryTenantClient(r.Context(), proj, svcID); ok {
-			if list, err := cc.ListVolumeTypes(r.Context()); err == nil {
+			if list, err := h.liveConfiguredVolumeTypes(r.Context(), cc, svcID, h.regionFor(proj, svcID)); err == nil {
 				types = list
 			}
 		}
@@ -1709,6 +1755,27 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, err)
 			return
 		}
+		if serverIsVolumeBacked(cr) {
+			cc, ok := h.tryTenantClient(r.Context(), proj, svcID)
+			if !ok {
+				h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "Cloud client is not ready"))
+				return
+			}
+			flavor, err := cc.GetFlavor(r.Context(), strAny(req.Data["flavorId"]))
+			if err != nil && !client.IsNotFound(err) {
+				// transient Nova/Keystone failure — not the caller's fault
+				h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "Cloud is temporarily unavailable"))
+				return
+			}
+			if err != nil || flavor == nil {
+				h.fail(w, httpx.BadRequest("Selected flavor is unavailable"))
+				return
+			}
+			if flavorHasLocalStorage(flavor) {
+				h.fail(w, httpx.BadRequest("Selected flavor includes local ephemeral or swap storage and is not available for volume-backed servers"))
+				return
+			}
+		}
 	}
 
 	// Public-network allow-list on router gateway attach: ADD_EXTERNAL_GATEWAY forwards the
@@ -1719,6 +1786,19 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, httpx.BadRequest("External network is not enabled for this project"))
 			return
 		}
+	}
+	if cr != nil && cr.Type == cloud.TypeVolume && action == "RETYPE" {
+		if req.Data == nil {
+			req.Data = map[string]any{}
+		}
+		resolved, prepErr := h.resolveConfiguredVolumeType(
+			r.Context(), proj, svcID, h.regionFor(proj, svcID), strAny(req.Data["newType"]),
+		)
+		if prepErr != nil {
+			h.fail(w, prepErr)
+			return
+		}
+		req.Data["newType"] = resolved
 	}
 
 	// Mutating actions → WriteService (resolves by externalId, now correct). The FE's

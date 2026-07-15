@@ -54,7 +54,8 @@ func (p *ServerProvider) List(ctx context.Context) ([]cloud.CloudResource, error
 			Region:     p.region,
 			ProjectID:  p.projectID,
 			Data: map[string]any{
-				"flavorName": s.FlavorName,
+				"flavorName":   s.FlavorName,
+				"volumeBacked": s.ImageID == "",
 				"server": map[string]any{
 					"name":             s.Name,
 					"host":             s.Host,

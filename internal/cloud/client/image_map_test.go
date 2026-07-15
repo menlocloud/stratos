@@ -19,3 +19,10 @@ func TestImageToMapTimesAreStrings(t *testing.T) {
 		}
 	}
 }
+
+func TestImageToMapIncludesVirtualSize(t *testing.T) {
+	m := imageToMap(&images.Image{ID: "img-1", SizeBytes: 2 << 30, VirtualSize: 20 << 30})
+	if m["virtual_size"] != int64(20<<30) || m["virtualSize"] != int64(20<<30) {
+		t.Fatalf("virtual size aliases = %#v / %#v", m["virtual_size"], m["virtualSize"])
+	}
+}

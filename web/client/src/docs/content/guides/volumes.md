@@ -4,9 +4,9 @@ Block storage gives your servers persistent disks that outlive any single boot. 
 
 ## Volumes
 
-A **volume** (under **Storage → Volumes**) is a block device you attach to a server, where it appears as an extra disk. Volumes are independent of the server's lifecycle: detach one from a machine you're deleting and reattach it elsewhere, and its data comes along.
+A **volume** (under **Storage → Volumes**) is a block device you attach to a server. Every newly created server also boots from a root block volume. That root volume is deleted with its server, while additional data volumes are independent of the server lifecycle and can be reattached elsewhere.
 
-Create one with **Create volume** — give it a name and a size in GB (leave the volume type blank to use the project default). It starts out empty.
+Create a standalone data volume with **Create volume** — give it a name, a size in GB, and a storage class. Only classes enabled by the operator for the selected region are available. If there is only one class, it is selected automatically. The volume starts out empty.
 
 ![Creating a block volume](/docs-img/create-volume.png)
 

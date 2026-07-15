@@ -42,6 +42,10 @@ function attachments(r: CloudResource): Array<{ serverId: string; device?: strin
 function attachedCount(r: CloudResource): number {
   return attachments(r).length
 }
+function isBootVolume(r: CloudResource): boolean {
+  const value = vol(r).bootable ?? r.data?.bootable
+  return value === true || (typeof value === "string" && value.toLowerCase() === "true")
+}
 
 export default function VolumesPage() {
   const pid = useProjectId()
@@ -65,14 +69,7 @@ export default function VolumesPage() {
   const [migrationPolicy, setMigrationPolicy] = useState<"never" | "on-demand">("never")
 
   const requestedSize = Number(form.size)
-  // Cinder reports per-type quota rows for every type in the deployment (including
-  // __DEFAULT__), so a blank type stays valid — Cinder applies default_volume_type and
-  // the aggregate volumes/gigabytes pre-check still covers the request. The per-type
-  // pre-check only engages when the entered type matches a reported quota row.
-  const quotaVolumeTypes = Object.keys(projectQuota.data?.storage?.volumeTypes ?? {}).sort((a, b) =>
-    a.localeCompare(b),
-  )
-  const createQuotaViolations = volumeCreateQuotaViolations(projectQuota.data, requestedSize, form.type)
+  // Aggregate and per-type Cinder quota checks use the selected admin-published type.
   const quotaCheckPending = createOpen && projectQuota.isLoading
   const storageQuotaUnavailable =
     createOpen && !projectQuota.isLoading && (!!projectQuota.error || !projectQuota.data?.storage)
@@ -84,18 +81,34 @@ export default function VolumesPage() {
     return (s?.data?.server?.name as string) || s?.name || extId
   }
 
-  // Volume types via the per-resource LIST_TYPES action (Go cloud_writes.go → cinder volume types).
+  // Volume types are the strict live/admin intersection returned by LIST_VOLUME_TYPES.
   const volumeTypes = useQuery({
-    queryKey: ["volume-types", pid, retypeTarget?.id],
+    queryKey: ["volume-types", pid, scope?.serviceId, scope?.region],
     queryFn: async () => {
       const res = await apiFetch<{ result?: Array<Record<string, any>> }>(
-        `/project/${pid}/cloud/${retypeTarget!.id}/action`,
-        { method: "POST", cloud: scope, body: { action: "LIST_TYPES" } }
+        `/project/${pid}/cloud/action`,
+        { method: "POST", cloud: scope, body: { action: "LIST_VOLUME_TYPES" } }
       )
       return res.result ?? []
     },
-    enabled: !!retypeTarget && !!scope,
+    enabled: !!scope && (createOpen || !!retypeTarget),
   })
+  const soleVolumeType = volumeTypes.data?.length === 1 ? volumeTypes.data[0] : undefined
+  const availableVolumeTypeNames = useMemo(
+    () => new Set((volumeTypes.data ?? []).map((type) => String(type.name))),
+    [volumeTypes.data],
+  )
+  const resolveVolumeType = (type: string) =>
+    String(soleVolumeType?.name ?? "") || (availableVolumeTypeNames.has(type) ? type : "")
+  const selectedCreateVolumeType = resolveVolumeType(form.type)
+  const selectedRetypeVolumeType = resolveVolumeType(newType)
+  const currentRetypeVolumeType = retypeTarget ? String(vol(retypeTarget).volume_type ?? "") : ""
+  const retypeUnchanged = !!selectedRetypeVolumeType && selectedRetypeVolumeType === currentRetypeVolumeType
+  const createQuotaViolations = volumeCreateQuotaViolations(
+    projectQuota.data,
+    requestedSize,
+    selectedCreateVolumeType,
+  )
 
   const attach = useMutation({
     // Go VOLUME ATTACH reads data.serverId as the nova server UUID (NOT the cache id — it is
@@ -135,7 +148,7 @@ export default function VolumesPage() {
       apiFetch(`/project/${pid}/cloud/${r.id}/action`, {
         method: "POST",
         cloud: scope,
-        body: { action: "RETYPE", data: { newType, migrationPolicy } },
+        body: { action: "RETYPE", data: { newType: selectedRetypeVolumeType, migrationPolicy } },
       }),
     onSuccess: () => {
       toast.success("Retype requested")
@@ -148,9 +161,12 @@ export default function VolumesPage() {
 
   const create = useMutation({
     mutationFn: async () => {
+      if (!Number.isInteger(requestedSize) || requestedSize <= 0) {
+        throw new Error("Volume size must be a positive whole number.")
+      }
       const latestQuota = await projectQuota.refetch()
-      const selectedVolumeType = form.type.trim()
-      const latestViolations = volumeCreateQuotaViolations(latestQuota.data, requestedSize, form.type)
+      const selectedVolumeType = selectedCreateVolumeType.trim()
+      const latestViolations = volumeCreateQuotaViolations(latestQuota.data, requestedSize, selectedVolumeType)
       if (latestViolations.length > 0) {
         throw new Error(latestViolations.map((violation) => violation.message).join(" "))
       }
@@ -162,7 +178,7 @@ export default function VolumesPage() {
           data: {
             name: form.name,
             size: Number(form.size),
-            ...(selectedVolumeType ? { type: selectedVolumeType } : {}),
+            type: selectedVolumeType,
             ...(form.availabilityZone ? { availabilityZone: form.availabilityZone } : {}),
           },
         },
@@ -280,7 +296,7 @@ export default function VolumesPage() {
                       Attach to server
                     </DropdownMenuItem>
                   )}
-                  {attachedCount(r) > 0 && (
+                  {attachedCount(r) > 0 && !isBootVolume(r) && (
                     <DropdownMenuItem onClick={() => setDetachTarget(r)}>Detach</DropdownMenuItem>
                   )}
                   <DropdownMenuItem
@@ -300,9 +316,11 @@ export default function VolumesPage() {
                   >
                     Change type
                   </DropdownMenuItem>
-                  <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(r)}>
-                    Delete
-                  </DropdownMenuItem>
+                  {!(attachedCount(r) > 0 && isBootVolume(r)) && (
+                    <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(r)}>
+                      Delete
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -356,7 +374,7 @@ export default function VolumesPage() {
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create volume</DialogTitle>
             <DialogDescription>A new block-storage volume in this project's region.</DialogDescription>
@@ -372,18 +390,51 @@ export default function VolumesPage() {
                 id="vol-size"
                 type="number"
                 min={1}
+                step={1}
                 value={form.size}
                 onChange={(e) => setForm({ ...form, size: e.target.value })}
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="vol-type">Volume type (optional)</Label>
-              <Input id="vol-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} />
-              {quotaVolumeTypes.length > 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  Known types: {quotaVolumeTypes.join(", ")}. Leave blank to use the default type.
-                </p>
-              ) : null}
+              <Label>Storage type</Label>
+              {volumeTypes.isLoading ? (
+                <p className="text-sm text-muted-foreground">Loading enabled storage types…</p>
+              ) : volumeTypes.isError ? (
+                <Alert variant="destructive">
+                  <CircleAlert />
+                  <AlertTitle>Storage types could not be loaded</AlertTitle>
+                  <AlertDescription className="flex flex-wrap items-center gap-3">
+                    The block-storage catalog is temporarily unavailable.
+                    <Button type="button" variant="outline" size="sm" onClick={() => void volumeTypes.refetch()}>
+                      Try again
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              ) : !volumeTypes.data?.length ? (
+                <Alert variant="destructive">
+                  <CircleAlert />
+                  <AlertTitle>No storage type is enabled</AlertTitle>
+                  <AlertDescription>An administrator must enable a volume type for this region.</AlertDescription>
+                </Alert>
+              ) : soleVolumeType ? (
+                <div className="flex h-9 items-center gap-2 rounded-md border bg-muted/30 px-3 text-sm">
+                  <HardDrive className="size-4 text-muted-foreground" />
+                  <span>{String(soleVolumeType.displayName ?? soleVolumeType.name)}</span>
+                </div>
+              ) : (
+                <Select value={selectedCreateVolumeType} onValueChange={(type) => setForm({ ...form, type })}>
+                  <SelectTrigger className="w-full" aria-label="Storage type">
+                    <SelectValue placeholder="Select a storage type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {volumeTypes.data.map((type) => (
+                      <SelectItem key={String(type.name)} value={String(type.name)}>
+                        {String(type.displayName ?? type.name)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="vol-az">Availability zone (optional)</Label>
@@ -428,7 +479,11 @@ export default function VolumesPage() {
               disabled={
                 !form.name ||
                 !scope ||
+                volumeTypes.isLoading ||
+                volumeTypes.isError ||
+                !selectedCreateVolumeType ||
                 !Number.isFinite(requestedSize) ||
+                !Number.isInteger(requestedSize) ||
                 requestedSize <= 0 ||
                 quotaCheckPending ||
                 createQuotaViolations.length > 0 ||
@@ -554,26 +609,47 @@ export default function VolumesPage() {
           <div className="grid gap-4">
             <div className="grid gap-2">
               <Label>New type</Label>
-              {volumeTypes.data?.length ? (
-                <Select value={newType} onValueChange={setNewType}>
+              {volumeTypes.isLoading ? (
+                <p className="text-sm text-muted-foreground">Loading enabled storage types…</p>
+              ) : volumeTypes.isError ? (
+                <Alert variant="destructive">
+                  <CircleAlert />
+                  <AlertTitle>Storage types could not be loaded</AlertTitle>
+                  <AlertDescription className="flex flex-wrap items-center gap-3">
+                    The block-storage catalog is temporarily unavailable.
+                    <Button type="button" variant="outline" size="sm" onClick={() => void volumeTypes.refetch()}>
+                      Try again
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              ) : !volumeTypes.data?.length ? (
+                <Alert variant="destructive">
+                  <CircleAlert />
+                  <AlertTitle>No storage type is enabled</AlertTitle>
+                  <AlertDescription>An administrator must enable a volume type for this region.</AlertDescription>
+                </Alert>
+              ) : soleVolumeType ? (
+                <div className="flex h-9 items-center gap-2 rounded-md border bg-muted/30 px-3 text-sm">
+                  <HardDrive className="size-4 text-muted-foreground" />
+                  <span>{String(soleVolumeType.displayName ?? soleVolumeType.name)}</span>
+                </div>
+              ) : (
+                <Select value={selectedRetypeVolumeType} onValueChange={setNewType}>
                   <SelectTrigger>
                     <SelectValue placeholder={volumeTypes.isLoading ? "Loading types…" : "Select a type"} />
                   </SelectTrigger>
                   <SelectContent>
                     {volumeTypes.data.map((t) => (
                       <SelectItem key={String(t.id ?? t.name)} value={String(t.name ?? t.id)}>
-                        {String(t.name ?? t.id)}
+                        {String(t.displayName ?? t.name ?? t.id)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-              ) : (
-                <Input
-                  placeholder={volumeTypes.isLoading ? "Loading types…" : "Volume type name"}
-                  value={newType}
-                  onChange={(e) => setNewType(e.target.value)}
-                />
               )}
+              {retypeUnchanged ? (
+                <p className="text-xs text-muted-foreground">Choose a different enabled type to retype this volume.</p>
+              ) : null}
             </div>
             <div className="grid gap-2">
               <Label>Migration policy</Label>
@@ -594,7 +670,13 @@ export default function VolumesPage() {
             </Button>
             <Button
               onClick={() => retypeTarget && retype.mutate(retypeTarget)}
-              disabled={!newType || retype.isPending}
+              disabled={
+                !selectedRetypeVolumeType ||
+                retypeUnchanged ||
+                volumeTypes.isLoading ||
+                volumeTypes.isError ||
+                retype.isPending
+              }
             >
               {retype.isPending ? "Requesting…" : "Change type"}
             </Button>

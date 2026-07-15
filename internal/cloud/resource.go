@@ -6,7 +6,10 @@
 // internal/cloud/client) land in later phases.
 package cloud
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // CloudResourceType values — the full set (40 values, in
 // declaration order). `type` is the SOLE discriminator for the free-form `data` payload.
@@ -83,4 +86,36 @@ type CloudResource struct {
 	CreatedAt     *time.Time     `json:"createdAt,omitempty"`
 	UpdatedAt     *time.Time     `json:"updatedAt,omitempty"`
 	Info          *Info          `json:"info,omitempty"`
+}
+
+// ServerIsVolumeBacked recognizes both the platform marker and Nova's live
+// representation of a boot-from-volume server (an empty image reference).
+// Deriving it from live data keeps billing and lifecycle guards correct when a
+// notification or action replaces the free-form cache payload.
+func ServerIsVolumeBacked(data map[string]any) bool {
+	if data == nil {
+		return false
+	}
+	if marked, _ := data["volumeBacked"].(bool); marked {
+		return true
+	}
+	server, ok := data["server"].(map[string]any)
+	if !ok || server == nil {
+		return false
+	}
+	image, present := server["image"]
+	if !present {
+		return false
+	}
+	switch image := image.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(image) == ""
+	case map[string]any:
+		id, _ := image["id"].(string)
+		return strings.TrimSpace(id) == ""
+	default:
+		return false
+	}
 }

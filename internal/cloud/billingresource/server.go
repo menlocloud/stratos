@@ -61,11 +61,17 @@ func (p *ServerProvider) instanceBR(cr *cloud.CloudResource, notEligible bool) *
 		return nil
 	}
 	flavor, _ := mapAt(server, "flavor")
+	rootDisk := flavor["disk"]
+	if cloud.ServerIsVolumeBacked(cr.Data) {
+		// A volume-backed server does not consume the flavor's local root disk.
+		// Its Cinder root volume is synced and rated as a VOLUME resource instead.
+		rootDisk = 0
+	}
 	values := map[string]any{
 		"instance_type":     str(cr.Data["flavorName"]),
 		"ram_mb":            flavor["ram"],
 		"vcpus":             flavor["vcpus"],
-		"root_disk_gb":      flavor["disk"],
+		"root_disk_gb":      rootDisk,
 		"display_name":      server["name"],
 		"host":              server["host"],
 		"status":            server["status"],

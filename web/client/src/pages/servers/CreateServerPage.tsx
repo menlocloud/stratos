@@ -1,13 +1,13 @@
-// Create-server wizard: Location → Availability zone → Image → Flavor → Network → Public IP → Access → Name.
+// Create-server wizard: Location → Availability zone → Image → Flavor → Storage → Network → Public IP → Access → Name.
 // API contract verified against internal/cloud/providers/write.go (TypeServer branch):
 // data reads name / imageId / flavorId / networkInterfaces:[{uuid, fixedIp?}] / availabilityZoneName /
-// keyName / adminPass / userData / securityGroupNames / assignFloatingIp / floatingNetworkId.
-// (No boot-volume keys in the Go create — not offered.)
+// keyName / adminPass / userData / securityGroupNames / assignFloatingIp / floatingNetworkId /
+// rootVolume:{sizeGiB,type} / dataVolumes:[{sizeGiB,type}].
 import { useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { Check, CircleAlert, Server } from "lucide-react"
+import { Check, CircleAlert, HardDrive, Plus, Server, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -28,7 +28,7 @@ import {
   usePublicNetworks,
 } from "@/lib/hooks"
 import type { FlavorCategory, ImageGrouping } from "@/lib/hooks"
-import { gpuFromFlavor, serverQuotaViolations } from "@/lib/quota"
+import { gpuFromFlavor, serverQuotaViolations, volumeBatchQuotaViolations } from "@/lib/quota"
 import type { CloudResource, Location } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { isPrivateNetwork } from "../network/NetworksPage"
@@ -96,11 +96,29 @@ type Flavor = {
     vcpus?: number
     ram?: number
     disk?: number
+    ephemeral?: number
+    swap?: number
     extra_specs?: Record<string, unknown>
   }
 }
 
+type VolumeType = { id?: string; name: string; displayName?: string }
+type DataVolumeDraft = { id: number; sizeGiB: number; type: string }
+
 const gb = (bytes?: number) => (bytes ? (bytes / 1073741824).toFixed(2) : "0.00")
+
+function imageMinimumDisk(image?: GlanceImage): number {
+  if (!image) return 1
+  const declared = Number(image.min_disk ?? image.minDisk ?? 0)
+  const imageBytes = Math.max(Number(image.size ?? 0), Number(image.virtual_size ?? image.virtualSize ?? 0))
+  const imageGiB = Number.isFinite(imageBytes) && imageBytes > 0 ? Math.ceil(imageBytes / 1073741824) : 0
+  return Math.max(1, Number.isFinite(declared) ? declared : 0, imageGiB)
+}
+
+function rootDefaultDisk(flavor?: Flavor, image?: GlanceImage): number {
+  const flavorDisk = Number(flavor?.data?.disk ?? 0)
+  return Math.max(imageMinimumDisk(image), Number.isFinite(flavorDisk) ? flavorDisk : 0)
+}
 
 // cloudInitUser builds a #cloud-config that creates a sudo login user with a password and enables
 // password SSH — the reliable way to do username+password login across images. JSON.stringify quotes
@@ -158,12 +176,20 @@ export default function CreateServerPage() {
   const azs = useBulkAction<Az>(pid, scope, "LIST_AVAILABILITY_ZONES")
   const images = useBulkAction<GlanceImage>(pid, scope, "PUBLIC_IMAGES")
   const flavors = useBulkAction<Flavor>(pid, scope, "LIST_FLAVORS")
+  const volumeTypes = useBulkAction<VolumeType>(pid, scope, "LIST_VOLUME_TYPES")
   const projectQuota = useProjectQuota(pid, scope)
   // Curated catalog: show only the flavors/images the admin grouped into categories (grouped by
   // category), not the raw live cloud lists. Falls back to showing everything if nothing matches.
   const flavorCats = useFlavorCategories()
   const imageGroups = useImageGroups()
-  const flavorSections = useMemo(() => buildFlavorSections(flavors.data ?? [], flavorCats.data ?? []), [flavors.data, flavorCats.data])
+  // Volume-backed servers cannot use flavors with local ephemeral/swap disk (the backend
+  // rejects them at create) — hide them from the wizard only; the shared LIST_FLAVORS
+  // list keeps them for the RESIZE picker of pre-existing image-backed servers.
+  const bootableFlavors = useMemo(
+    () => (flavors.data ?? []).filter((f) => !(f.data?.ephemeral ?? 0) && !(f.data?.swap ?? 0)),
+    [flavors.data],
+  )
+  const flavorSections = useMemo(() => buildFlavorSections(bootableFlavors, flavorCats.data ?? []), [bootableFlavors, flavorCats.data])
   const imageSections = useMemo(() => buildImageSections(images.data ?? [], imageGroups.data), [images.data, imageGroups.data])
   const networks = useQuery({
     queryKey: ["cloud", pid, "NETWORK", scope?.serviceId, scope?.region],
@@ -192,6 +218,10 @@ export default function CreateServerPage() {
   const [azName, setAzName] = useState<string>()
   const [imageId, setImageId] = useState<string>()
   const [flavorId, setFlavorId] = useState<string>() // = flavor externalId
+  const [rootSizeGiB, setRootSizeGiB] = useState(1)
+  const [rootSizeTouched, setRootSizeTouched] = useState(false)
+  const [rootVolumeType, setRootVolumeType] = useState("")
+  const [dataVolumes, setDataVolumes] = useState<DataVolumeDraft[]>([])
   const [netIds, setNetIds] = useState<string[]>([])
   const [fixedIps, setFixedIps] = useState<Record<string, string>>({}) // networkExtId → requested fixed IP
   const [assignFip, setAssignFip] = useState(true)
@@ -204,9 +234,38 @@ export default function CreateServerPage() {
   const [sgNames, setSgNames] = useState<string[]>([])
   const [name, setName] = useState("")
 
-  const selectedFlavor = flavors.data?.find((flavor) => flavor.externalId === flavorId)
-  const quotaViolations = serverQuotaViolations(projectQuota.data, selectedFlavor)
-  const quotaCheckPending = !!flavorId && projectQuota.isLoading
+  const selectedImage = images.data?.find((image) => String(image.id) === imageId)
+  const selectedFlavor = bootableFlavors.find((flavor) => flavor.externalId === flavorId)
+  const minimumRootSizeGiB = imageMinimumDisk(selectedImage)
+  const availableVolumeTypes = useMemo(() => volumeTypes.data ?? [], [volumeTypes.data])
+  const soleVolumeType = availableVolumeTypes.length === 1 ? availableVolumeTypes[0] : undefined
+  const availableVolumeTypeNames = useMemo(
+    () => new Set(availableVolumeTypes.map((type) => type.name)),
+    [availableVolumeTypes],
+  )
+  const resolveVolumeType = (type: string) =>
+    soleVolumeType?.name || (availableVolumeTypeNames.has(type) ? type : "")
+  const selectedRootVolumeType = resolveVolumeType(rootVolumeType)
+  const resolvedDataVolumes = dataVolumes.map((volume) => ({
+    ...volume,
+    type: resolveVolumeType(volume.type),
+  }))
+  const computeQuotaViolations = serverQuotaViolations(projectQuota.data, selectedFlavor)
+  const volumeRequests = selectedFlavor && selectedImage
+    ? [
+        { sizeGiB: rootSizeGiB, type: selectedRootVolumeType, label: "Root volume" },
+        ...resolvedDataVolumes.map((volume, index) => ({
+          sizeGiB: volume.sizeGiB,
+          type: volume.type,
+          label: `Data volume ${index + 1}`,
+        })),
+      ]
+    : []
+  const storageQuotaViolations = volumeBatchQuotaViolations(projectQuota.data, volumeRequests)
+  const quotaViolations = [...computeQuotaViolations, ...storageQuotaViolations]
+  const computeQuotaCheckPending = !!flavorId && projectQuota.isLoading
+  const storageQuotaCheckPending = !!flavorId && (projectQuota.isLoading || volumeTypes.isLoading)
+  const quotaCheckPending = computeQuotaCheckPending || storageQuotaCheckPending
   const selectedGpu = gpuFromFlavor(selectedFlavor?.data?.extra_specs)
   const quotaUnavailable =
     !!flavorId &&
@@ -214,6 +273,15 @@ export default function CreateServerPage() {
     (!!projectQuota.error ||
       !projectQuota.data?.compute ||
       (!!selectedGpu && projectQuota.data.gpu.usageAvailable === false))
+  const storageQuotaUnavailable =
+    !!flavorId && !projectQuota.isLoading && (!!projectQuota.error || !projectQuota.data?.storage)
+  const rootSizeValid = Number.isInteger(rootSizeGiB) && rootSizeGiB >= minimumRootSizeGiB
+  const dataVolumesValid = resolvedDataVolumes.every(
+    (volume) =>
+      Number.isInteger(volume.sizeGiB) &&
+      volume.sizeGiB > 0 &&
+      !!volume.type,
+  )
 
   const keypairName = (r: CloudResource) => (r.data?.keypair?.name as string) ?? r.name ?? ""
   const sgName = (r: CloudResource) => (r.data?.securityGroup?.name as string) ?? r.name ?? ""
@@ -229,7 +297,10 @@ export default function CreateServerPage() {
       // Refresh immediately before submit as well as checking on flavor change.
       // This narrows the race window; OpenStack/the GPU backend remain the final authority.
       const latestQuota = await projectQuota.refetch()
-      const latestViolations = serverQuotaViolations(latestQuota.data, selectedFlavor)
+      const latestViolations = [
+        ...serverQuotaViolations(latestQuota.data, selectedFlavor),
+        ...volumeBatchQuotaViolations(latestQuota.data, volumeRequests),
+      ]
       if (latestViolations.length > 0) {
         throw new Error(latestViolations.map((violation) => violation.message).join(" "))
       }
@@ -248,6 +319,11 @@ export default function CreateServerPage() {
             name: name.trim(),
             imageId,
             flavorId,
+            rootVolume: { sizeGiB: rootSizeGiB, type: selectedRootVolumeType },
+            dataVolumes: resolvedDataVolumes.map((volume) => ({
+              sizeGiB: volume.sizeGiB,
+              type: volume.type,
+            })),
             ...(az ? { availabilityZoneName: az } : {}),
             networkInterfaces: netIds.map((uuid) =>
               fixedIps[uuid]?.trim() ? { uuid, fixedIp: fixedIps[uuid].trim() } : { uuid },
@@ -265,6 +341,7 @@ export default function CreateServerPage() {
     onSuccess: () => {
       toast.success(`Server "${name.trim()}" is being created`)
       void qc.invalidateQueries({ queryKey: ["cloud", pid, "SERVER"] })
+      void qc.invalidateQueries({ queryKey: ["cloud", pid, "VOLUME"] })
       void qc.invalidateQueries({ queryKey: ["project-quota", pid] })
       navigate(`/p/${pid}/servers`)
     },
@@ -272,7 +349,9 @@ export default function CreateServerPage() {
   })
 
   const ready =
-    !!scope && !!imageId && !!selectedFlavor && netIds.length > 0 && !!name.trim() &&
+    !!scope && !!imageId && !!selectedFlavor && availableVolumeTypes.length > 0 &&
+    !!selectedRootVolumeType && rootSizeValid && dataVolumesValid &&
+    netIds.length > 0 && !!name.trim() &&
     (!wantFip || !netsVisible || !!fipNet)
 
   // What still blocks Create — shown next to the disabled button so nobody
@@ -280,6 +359,10 @@ export default function CreateServerPage() {
   const missing = [
     !imageId && "an image",
     !selectedFlavor && "a flavor",
+    availableVolumeTypes.length === 0 && "an enabled storage type",
+    !selectedRootVolumeType && "a boot storage type",
+    !rootSizeValid && `a root volume of at least ${minimumRootSizeGiB} GiB`,
+    !dataVolumesValid && "valid data volume settings",
     netIds.length === 0 && "a network",
     wantFip && netsVisible && !fipNet && "a public network",
     !name.trim() && "a name",
@@ -335,6 +418,10 @@ export default function CreateServerPage() {
                       setAzName(undefined)
                       setImageId(undefined)
                       setFlavorId(undefined)
+                      setRootSizeGiB(1)
+                      setRootSizeTouched(false)
+                      setRootVolumeType("")
+                      setDataVolumes([])
                       setNetIds([])
                       setFixedIps({})
                       setFipNetId(undefined)
@@ -397,7 +484,16 @@ export default function CreateServerPage() {
                             type="button"
                             aria-pressed={selected}
                             className={optionCardClass(selected)}
-                            onClick={() => setImageId(String(im.id))}
+                            onClick={() => {
+                              setImageId(String(im.id))
+                              if (selectedFlavor) {
+                                setRootSizeGiB((current) =>
+                                  rootSizeTouched
+                                    ? Math.max(current, imageMinimumDisk(im))
+                                    : rootDefaultDisk(selectedFlavor, im),
+                                )
+                              }
+                            }}
                           >
                             <div className="flex items-start justify-between gap-2">
                               <span className="text-sm font-medium">{String(im.name ?? im.id)}</span>
@@ -443,7 +539,14 @@ export default function CreateServerPage() {
                               optionCardClass(selected),
                               flavorQuotaViolations.length > 0 && "border-destructive/50",
                             )}
-                            onClick={() => setFlavorId(f.externalId)}
+                            onClick={() => {
+                              setFlavorId(f.externalId)
+                              setRootSizeGiB((current) =>
+                                rootSizeTouched
+                                  ? Math.max(current, imageMinimumDisk(selectedImage))
+                                  : rootDefaultDisk(f, selectedImage),
+                              )
+                            }}
                           >
                             <div className="flex items-start justify-between gap-2">
                               <span className="text-sm font-medium">{f.data?.name ?? f.externalId}</span>
@@ -451,7 +554,7 @@ export default function CreateServerPage() {
                             </div>
                             <div className="mt-1 font-mono text-xs text-muted-foreground">
                               {f.data?.vcpus ?? "—"} vCPU · {f.data?.ram ? `${Math.round(f.data.ram / 1024)} GB` : "—"} RAM ·{" "}
-                              {f.data?.disk != null ? `${f.data.disk} GB` : "—"} disk
+                              {f.data?.disk != null ? `${f.data.disk} GB` : "—"} root volume
                             </div>
                             {flavorQuotaViolations.length > 0 ? (
                               <div className="mt-2 text-xs text-destructive">Exceeds project quota</div>
@@ -462,15 +565,15 @@ export default function CreateServerPage() {
                     </div>
                   </div>
                 ))}
-                {quotaCheckPending ? (
+                {computeQuotaCheckPending ? (
                   <p className="text-sm text-muted-foreground">Checking this flavor against the current quota…</p>
-                ) : quotaViolations.length > 0 ? (
+                ) : computeQuotaViolations.length > 0 ? (
                   <Alert variant="destructive">
                     <CircleAlert />
                     <AlertTitle>This flavor exceeds the project quota</AlertTitle>
                     <AlertDescription>
                       <ul className="list-disc space-y-1 pl-4">
-                        {quotaViolations.map((violation) => (
+                        {computeQuotaViolations.map((violation) => (
                           <li key={`${violation.resource}-${violation.message}`}>{violation.message}</li>
                         ))}
                       </ul>
@@ -491,7 +594,202 @@ export default function CreateServerPage() {
             )}
           </Step>
 
-          <Step n={5} title="Network">
+          <Step n={5} title="Storage">
+            {volumeTypes.isLoading ? (
+              <Skeleton className="h-32" />
+            ) : volumeTypes.isError ? (
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>Storage types could not be loaded</AlertTitle>
+                <AlertDescription className="flex flex-wrap items-center gap-3">
+                  The block-storage catalog is temporarily unavailable.
+                  <Button type="button" variant="outline" size="sm" onClick={() => void volumeTypes.refetch()}>
+                    Try again
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : availableVolumeTypes.length === 0 ? (
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>No storage type is enabled</AlertTitle>
+                <AlertDescription>
+                  An administrator must enable at least one volume type for this region before a server can be created.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <div className="grid gap-5">
+                <div className="grid gap-3 rounded-lg border p-4">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <HardDrive className="size-4" /> Boot volume
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      The operating system boots from persistent block storage. It is deleted with the server.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="root-volume-size">Size (GiB)</Label>
+                      <Input
+                        id="root-volume-size"
+                        type="number"
+                        min={minimumRootSizeGiB}
+                        step={1}
+                        value={rootSizeGiB}
+                        disabled={!selectedFlavor || !selectedImage}
+                        onChange={(event) => {
+                          setRootSizeTouched(true)
+                          setRootSizeGiB(Number(event.target.value))
+                        }}
+                      />
+                      <p className={cn("text-xs text-muted-foreground", !rootSizeValid && "text-destructive")}>
+                        Defaults from the flavor; minimum {minimumRootSizeGiB} GiB for the selected image.
+                      </p>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Storage type</Label>
+                      {soleVolumeType ? (
+                        <div className="flex h-9 items-center gap-2 rounded-md border bg-muted/30 px-3 text-sm">
+                          <HardDrive className="size-4 text-muted-foreground" />
+                          <span>{soleVolumeType.displayName || soleVolumeType.name}</span>
+                        </div>
+                      ) : (
+                        <Select value={selectedRootVolumeType} onValueChange={setRootVolumeType}>
+                          <SelectTrigger className="w-full" aria-label="Boot volume storage type">
+                            <SelectValue placeholder="Select a storage type" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableVolumeTypes.map((type) => (
+                              <SelectItem key={type.name} value={type.name}>
+                                {type.displayName || type.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">Additional data volumes</div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Optional blank volumes are attached at boot and preserved when the server is deleted.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={dataVolumes.length >= 32}
+                      onClick={() =>
+                        setDataVolumes((volumes) => [
+                          ...volumes,
+                          {
+                            id: Date.now() + volumes.length,
+                            sizeGiB: 10,
+                            type: soleVolumeType?.name || "",
+                          },
+                        ])
+                      }
+                    >
+                      <Plus className="size-4" /> Add data volume
+                    </Button>
+                  </div>
+                  {dataVolumes.map((volume, index) => (
+                    <div
+                      key={volume.id}
+                      className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end"
+                    >
+                      <div className="grid gap-2">
+                        <Label htmlFor={`data-volume-size-${volume.id}`}>Data volume {index + 1} size (GiB)</Label>
+                        <Input
+                          id={`data-volume-size-${volume.id}`}
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={volume.sizeGiB}
+                          onChange={(event) =>
+                            setDataVolumes((volumes) =>
+                              volumes.map((item) =>
+                                item.id === volume.id ? { ...item, sizeGiB: Number(event.target.value) } : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label>Storage type</Label>
+                        {soleVolumeType ? (
+                          <div className="flex h-9 items-center gap-2 rounded-md border bg-muted/30 px-3 text-sm">
+                            <HardDrive className="size-4 text-muted-foreground" />
+                            <span>{soleVolumeType.displayName || soleVolumeType.name}</span>
+                          </div>
+                        ) : (
+                          <Select
+                            value={resolveVolumeType(volume.type)}
+                            onValueChange={(value) =>
+                              setDataVolumes((volumes) =>
+                                volumes.map((item) => (item.id === volume.id ? { ...item, type: value } : item)),
+                              )
+                            }
+                          >
+                            <SelectTrigger className="w-full" aria-label={`Data volume ${index + 1} storage type`}>
+                              <SelectValue placeholder="Select a storage type" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {availableVolumeTypes.map((type) => (
+                                <SelectItem key={type.name} value={type.name}>
+                                  {type.displayName || type.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Remove data volume ${index + 1}`}
+                        onClick={() => setDataVolumes((volumes) => volumes.filter((item) => item.id !== volume.id))}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+
+                {storageQuotaCheckPending ? (
+                  <p className="text-sm text-muted-foreground">Checking the current storage quota…</p>
+                ) : storageQuotaViolations.length > 0 ? (
+                  <Alert variant="destructive">
+                    <CircleAlert />
+                    <AlertTitle>This storage selection exceeds the project quota</AlertTitle>
+                    <AlertDescription>
+                      <ul className="list-disc space-y-1 pl-4">
+                        {storageQuotaViolations.map((violation) => (
+                          <li key={`${violation.resource}-${violation.message}`}>{violation.message}</li>
+                        ))}
+                      </ul>
+                    </AlertDescription>
+                  </Alert>
+                ) : storageQuotaUnavailable ? (
+                  <Alert>
+                    <CircleAlert />
+                    <AlertTitle>Live storage quota is unavailable</AlertTitle>
+                    <AlertDescription>The API and OpenStack will still validate this request.</AlertDescription>
+                  </Alert>
+                ) : selectedFlavor && selectedImage && projectQuota.data ? (
+                  <p className="text-sm text-muted-foreground">This storage selection fits the current quota snapshot.</p>
+                ) : null}
+              </div>
+            )}
+          </Step>
+
+          <Step n={6} title="Network">
             {networks.isLoading ? (
               <Skeleton className="h-16" />
             ) : !networkRows.length ? (
@@ -537,7 +835,7 @@ export default function CreateServerPage() {
             )}
           </Step>
 
-          <Step n={6} title="Public IP">
+          <Step n={7} title="Public IP">
             {pubNets.isLoading ? (
               <Skeleton className="h-9 w-48" />
             ) : (
@@ -584,7 +882,7 @@ export default function CreateServerPage() {
             )}
           </Step>
 
-          <Step n={7} title="Access (optional)">
+          <Step n={8} title="Access (optional)">
             <div className="grid gap-4">
               <div className="grid max-w-md gap-2">
                 <Label>Login method</Label>
@@ -717,7 +1015,7 @@ export default function CreateServerPage() {
             </div>
           </Step>
 
-          <Step n={8} title="Name">
+          <Step n={9} title="Name">
             <div className="grid max-w-md gap-2">
               <Label htmlFor="server-name">Server name</Label>
               <Input

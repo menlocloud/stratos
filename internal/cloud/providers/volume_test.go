@@ -30,3 +30,22 @@ func TestVolumesToResources_CarriesRealCreatedAt(t *testing.T) {
 		t.Errorf("v-2 Info should be nil for zero CreatedAt, got %#v", got[1].Info)
 	}
 }
+
+func TestVolumesToResourcesPreservesAttachments(t *testing.T) {
+	got := volumesToResources([]client.Volume{{
+		ID: "root-1", Bootable: "true",
+		Attachments: []client.VolumeAttachment{{
+			AttachmentID: "attach-1", ServerID: "server-1", VolumeID: "root-1", Device: "/dev/vda",
+		}},
+	}}, "RegionOne", "project-1")
+	if len(got) != 1 {
+		t.Fatalf("want one volume, got %d", len(got))
+	}
+	attachments := asAnySlice(got[0].Data["attachments"])
+	if len(attachments) != 1 || attServerID(attachments[0]) != "server-1" {
+		t.Fatalf("attachments = %#v", attachments)
+	}
+	if !volumeIsBootable(got[0].Data) {
+		t.Fatal("bootable root volume was not preserved")
+	}
+}

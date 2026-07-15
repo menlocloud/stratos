@@ -6,7 +6,7 @@ Everything here lives under the **Compute** group in the sidebar.
 
 ## Launching and sizing
 
-Create a server from **Compute → Servers**. Each machine is built from an **image** (the operating system to boot), a **flavor** (its vCPU / RAM / disk size), a **network** to attach to, a **key pair** for SSH login, and one or more **security groups** for firewalling. Pick a flavor that matches the workload — you can't resize a running machine as casually as you launch it, so err toward what you actually need. The launch form also carries an **Assign floating IP** option, on by default — leave it on and a public IP is attached automatically shortly after the server becomes active.
+Create a server from **Compute → Servers**. Each machine is built from an **image** (the operating system to boot), a **flavor** (its vCPU, RAM, and suggested root-storage size), a **root volume**, a **network** to attach to, a **key pair** for SSH login, and one or more **security groups** for firewalling. Pick a flavor that matches the workload, then choose the root-volume size and one of the storage classes published by the operator. The image boots from this block volume; the root volume is deleted with the server. You can also add data volumes during launch. Data volumes are preserved when the server is deleted so they can be attached elsewhere. The launch form also carries an **Assign floating IP** option, on by default — leave it on and a public IP is attached automatically shortly after the server becomes active.
 
 ## Power actions
 

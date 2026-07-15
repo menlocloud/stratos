@@ -47,6 +47,24 @@ func toMap(v any) map[string]any {
 	return m
 }
 
+// serverToMap converts a nova server to the free-form cache shape. gophercloud
+// tags Server.Image `json:"-"` (Nova sends "" or {id}), so toMap drops it —
+// re-add it: cloud.ServerIsVolumeBacked derives boot-from-volume from an empty
+// image reference, and losing the key would misread every re-fetched server as
+// image-backed (billing + rebuild/rescue microversion selection).
+func serverToMap(s *servers.Server) map[string]any {
+	m := toMap(s)
+	if m == nil {
+		return nil
+	}
+	if s.Image == nil {
+		m["image"] = ""
+	} else {
+		m["image"] = s.Image
+	}
+	return m
+}
+
 func (c *Client) net() (*gophercloud.ServiceClient, error) {
 	return openstack.NewNetworkV2(c.provider, c.endpointOpts())
 }
@@ -301,11 +319,29 @@ func (c *Client) blockStorage() (*gophercloud.ServiceClient, error) {
 	return openstack.NewBlockStorageV3(c.provider, c.endpointOpts())
 }
 
+// CreateServerVolumeOpts describes a Cinder volume Nova creates and attaches as
+// part of the server request. The root volume is image-backed; additional data
+// volumes are blank. DeleteOnTermination is a server-side product policy rather
+// than a value accepted directly from the browser.
+type CreateServerVolumeOpts struct {
+	Size                int
+	VolumeType          string
+	DeleteOnTermination bool
+	Tag                 string
+}
+
+// serverBlockDeviceMicroversion is the first Nova microversion that accepts
+// volume_type in block_device_mapping_v2. Storage types are admin-curated, so
+// every volume-backed server request uses this version explicitly.
+const serverBlockDeviceMicroversion = "2.67"
+
 // CreateServerOpts mirrors the CreateInstanceRequest essentials. NetworkIDs attach the VM to those networks.
 type CreateServerOpts struct {
 	Name             string
 	FlavorID         string
 	ImageID          string
+	BootVolume       *CreateServerVolumeOpts
+	DataVolumes      []CreateServerVolumeOpts
 	NetworkIDs       []string
 	FixedIPs         map[string]string // networkID → requested fixed IP on that network (optional)
 	KeyName          string
@@ -326,10 +362,40 @@ func (c *Client) CreateServer(ctx context.Context, o CreateServerOpts) (map[stri
 	for _, id := range o.NetworkIDs {
 		nets = append(nets, servers.Network{UUID: id, FixedIP: o.FixedIPs[id]})
 	}
+	imageRef := o.ImageID
+	var blockDevices []servers.BlockDevice
+	if o.BootVolume != nil {
+		// A boot-from-volume request must not also set imageRef: the image is the
+		// source of the root block device instead.
+		cc.Microversion = serverBlockDeviceMicroversion
+		imageRef = ""
+		blockDevices = append(blockDevices, servers.BlockDevice{
+			SourceType:          servers.SourceImage,
+			UUID:                o.ImageID,
+			BootIndex:           0,
+			DeleteOnTermination: o.BootVolume.DeleteOnTermination,
+			DestinationType:     servers.DestinationVolume,
+			VolumeSize:          o.BootVolume.Size,
+			VolumeType:          o.BootVolume.VolumeType,
+			Tag:                 o.BootVolume.Tag,
+		})
+		for _, volume := range o.DataVolumes {
+			blockDevices = append(blockDevices, servers.BlockDevice{
+				SourceType:          servers.SourceBlank,
+				BootIndex:           -1,
+				DeleteOnTermination: volume.DeleteOnTermination,
+				DestinationType:     servers.DestinationVolume,
+				VolumeSize:          volume.Size,
+				VolumeType:          volume.VolumeType,
+				Tag:                 volume.Tag,
+			})
+		}
+	}
 	opts := servers.CreateOpts{
 		Name:             o.Name,
 		FlavorRef:        o.FlavorID,
-		ImageRef:         o.ImageID,
+		ImageRef:         imageRef,
+		BlockDevice:      blockDevices,
 		Networks:         nets,
 		SecurityGroups:   o.SecurityGroups,
 		UserData:         o.UserData,
@@ -346,7 +412,7 @@ func (c *Client) CreateServer(ctx context.Context, o CreateServerOpts) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	return toMap(s), nil
+	return serverToMap(s), nil
 }
 
 // GetServer re-reads one server as a free-form map.
@@ -359,7 +425,7 @@ func (c *Client) GetServer(ctx context.Context, id string) (map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
-	return toMap(s), nil
+	return serverToMap(s), nil
 }
 
 // DeleteServer deletes a Nova server.
@@ -544,7 +610,7 @@ func (c *Client) RenameServer(ctx context.Context, id, name string) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	return toMap(s), nil
+	return serverToMap(s), nil
 }
 
 // CreateServerImage snapshots a running server into a Glance image (nova createImage).

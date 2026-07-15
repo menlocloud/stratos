@@ -36,14 +36,24 @@ func (p *VolumeProvider) List(ctx context.Context) ([]cloud.CloudResource, error
 func volumesToResources(vols []client.Volume, region, projectID string) []cloud.CloudResource {
 	out := make([]cloud.CloudResource, 0, len(vols))
 	for _, v := range vols {
+		attachments := make([]any, 0, len(v.Attachments))
+		for _, attachment := range v.Attachments {
+			attachments = append(attachments, map[string]any{
+				"attachmentId": attachment.AttachmentID,
+				"device":       attachment.Device,
+				"serverId":     attachment.ServerID,
+				"volumeId":     attachment.VolumeID,
+			})
+		}
 		cr := cloud.CloudResource{
 			Type:       cloud.TypeVolume,
 			ExternalID: v.ID,
 			Region:     region,
 			ProjectID:  projectID,
-			Data: map[string]any{"volume": map[string]any{
+			Data: map[string]any{"attachments": attachments, "volume": map[string]any{
 				"id": v.ID, "name": v.Name, "size": v.Size, "status": v.Status,
-				"volume_type": v.VolumeType, "availability_zone": v.AvailabilityZone, "bootable": v.Bootable,
+				"volume_type": v.VolumeType, "availability_zone": v.AvailabilityZone,
+				"bootable": v.Bootable, "attachments": attachments,
 			}},
 		}
 		if !v.CreatedAt.IsZero() {
