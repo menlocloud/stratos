@@ -172,13 +172,33 @@ on("GET /admin/project/:id/resources/counts", ({ params }) => {
   return { data: counts }
 })
 
+on("GET /admin/project/:id/gpu-usage", ({ params }) => ({
+  data: {
+    usage:
+      params.id === "prj-0001"
+        ? { "nvidia-a100-80gb": 1 }
+        : params.id === "prj-0002"
+          ? { "nvidia-l40s": 1 }
+          : {},
+    usageAvailable: params.id !== "prj-0002",
+  },
+}))
+
 on("GET /admin/project/:id/members", ({ params }) => ({ data: db.projectMembers[params.id] ?? [] }))
 
 on("POST /admin/project/:id/sync", () => ({ data: { ok: true } }))
 
 on("PUT /admin/project/:id/quota", ({ params, opts }) => {
   const project = db.projects.find((p) => p.id === params.id) ?? notFound("Project")
-  project.quota = (opts.body ?? {}) as Doc
+  const quota = (opts.body ?? {}) as Doc
+  const gpu = quota.gpu as Doc | undefined
+  for (const [model, limit] of Object.entries(gpu ?? {})) {
+    const canonical = model.trim() === "*" ? "*" : model.trim().toLowerCase().replaceAll("_", "-")
+    if (model !== canonical || !Number.isSafeInteger(limit) || Number(limit) < 0) {
+      throw new ApiError(400, 400, "GPU quota keys must be canonical and limits must be non-negative integers.")
+    }
+  }
+  project.quota = quota
   return { data: project }
 })
 

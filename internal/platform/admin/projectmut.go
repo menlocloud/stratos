@@ -63,6 +63,7 @@ func (h *Handler) routeProjectMut(r chi.Router) {
 	r.Get("/project/unassociated-os-projects", h.projectUnassociatedOsProjects)
 	r.Get("/project/{id}/members", h.projectMembers)
 	r.Get("/project/{id}/resources/counts", h.projectResourceCounts)
+	r.Get("/project/{id}/gpu-usage", h.projectGPUUsage)
 	r.Get("/project/{id}/external-service/{externalServiceId}", h.projectAddExternalService)
 	r.Post("/project/{id}/sync", h.projectSync)
 	r.Put("/project/{id}", h.projectUpdate)

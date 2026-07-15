@@ -74,7 +74,8 @@ func (p *ServerProvider) List(ctx context.Context) ([]cloud.CloudResource, error
 						"vcpus":         s.VCPUs,
 						"disk":          s.Disk,
 						// extra_specs feeds GPU rating (gpu_model/gpu_count) — without it a
-						// GPU server bills zero. Always present (possibly empty).
+						// GPU server bills zero. nil preserves a failed lookup; an empty map
+						// is a resolved CPU-only flavor.
 						"extra_specs": s.FlavorExtraSpecs,
 					},
 					"image": map[string]any{"id": s.ImageID},

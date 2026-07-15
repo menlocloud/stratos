@@ -14,9 +14,9 @@ import (
 // model = first alias, count = total across entries.
 // Fallback: `resources:VGPU` = "<count>" → model "vgpu".
 //
-// The alias is normalized (lowercase, "_"→"-") to match the placement-trait vocabulary
-// (CUSTOM_PCI_NVIDIA_A6000 → "nvidia-a6000") shared by gpu-info capacity and project GPU
-// quota, so pricing rules, capacity and quota all key on one model name.
+// The Nova alias is normalized (lowercase, "_"→"-") so pricing, usage and project quota
+// use one stable key. Placement trait suffixes are normalized the same way for suggestions,
+// but operators must still configure the actual Nova alias when the two names differ.
 func GPUFromFlavor(specs any) (model string, count int) {
 	var extraSpecs map[string]any
 	switch m := specs.(type) {

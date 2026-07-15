@@ -158,7 +158,12 @@ function MetricTile({ label, metric, icon: Icon, format = formatCount, details =
   )
 }
 
-function gpuMetrics(data?: ProjectQuotaUsage): Array<{ key: string; label: string; metric: QuotaMetric }> {
+function gpuMetrics(data?: ProjectQuotaUsage): Array<{
+  key: string
+  label: string
+  metric: QuotaMetric
+  details: string[]
+}> {
   const limits = data?.gpu?.limits ?? {}
   const usage = data?.gpu?.usage ?? {}
   const usageAvailable = data?.gpu?.usageAvailable !== false
@@ -168,34 +173,36 @@ function gpuMetrics(data?: ProjectQuotaUsage): Array<{ key: string; label: strin
     limit: Number(limit),
   })
   const explicit = new Set(Object.keys(limits).filter((model) => model !== "*"))
-  const rows = Object.entries(limits)
-    .filter(([model]) => model !== "*")
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([model, limit]) => ({
+  const hasFallback = Object.prototype.hasOwnProperty.call(limits, "*")
+  const fallbackLimit = Number(limits["*"])
+  const models = [...new Set([
+    ...explicit,
+    ...Object.keys(usage).filter((model) => model !== "*"),
+  ])].sort((a, b) => a.localeCompare(b))
+  const rows = models.map((model) => {
+    const hasExact = explicit.has(model)
+    const limit = hasExact ? Number(limits[model]) : hasFallback ? fallbackLimit : -1
+    return {
       key: model,
       label: `GPU / ${model}`,
       metric: metric(model, limit),
-    }))
-
-  if (Object.prototype.hasOwnProperty.call(limits, "*")) {
-    const fallbackLimit = Number(limits["*"])
-    const fallbackModels = Object.keys(usage)
-      .filter((model) => model !== "*" && !explicit.has(model))
-      .sort((a, b) => a.localeCompare(b))
-
-    if (fallbackModels.length > 0) {
-      rows.push(...fallbackModels.map((model) => ({
-        key: `fallback:${model}`,
-        label: `GPU / ${model}`,
-        metric: metric(model, fallbackLimit),
-      })))
-    } else {
-      rows.push({
-        key: "fallback:*",
-        label: "GPU / Other models",
-        metric: metric("*", fallbackLimit),
-      })
+      details: [
+        hasExact
+          ? "Project-wide custom quota"
+          : hasFallback
+            ? "Uses the project fallback quota (*)"
+            : "No GPU limit configured",
+      ],
     }
+  })
+
+  if (hasFallback && !models.some((model) => !explicit.has(model))) {
+    rows.push({
+      key: "fallback:*",
+      label: "GPU / Other models",
+      metric: metric("*", fallbackLimit),
+      details: ["Fallback quota per unlisted GPU model (*)"],
+    })
   }
 
   return rows
@@ -289,7 +296,7 @@ export function QuotaOverview({
                   label={item.label}
                   metric={item.metric}
                   icon={CircuitBoard}
-                  details={["Project-wide custom quota"]}
+                  details={item.details}
                 />
               ))}
             </div>

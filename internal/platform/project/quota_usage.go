@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
 	"github.com/menlocloud/stratos/pkg/httpx"
@@ -213,16 +214,32 @@ func quotaReaderClientConfig(es *externalservice.ExternalService, region, extern
 
 func gpuQuotaLimits(quota map[string]any) map[string]int {
 	out := map[string]int{}
+	sources := map[string]string{}
 	gpu, ok := quota["gpu"].(map[string]any)
 	if !ok {
 		return out
 	}
 	for model, raw := range gpu {
+		trimmed := strings.TrimSpace(model)
+		canonical := cloud.NormalizeGPUAlias(trimmed)
+		if trimmed == "*" {
+			canonical = "*"
+		}
+		if canonical == "" {
+			continue
+		}
 		value, ok := toDecAny(raw)
 		if !ok || value.IsNegative() || !value.Equal(value.Truncate(0)) {
 			continue
 		}
-		out[model] = int(value.IntPart())
+		previous, exists := sources[canonical]
+		canonicalSource := trimmed == canonical
+		previousCanonical := previous == canonical
+		if exists && !canonicalSource && (previousCanonical || trimmed >= previous) {
+			continue
+		}
+		out[canonical] = int(value.IntPart())
+		sources[canonical] = trimmed
 	}
 	return out
 }

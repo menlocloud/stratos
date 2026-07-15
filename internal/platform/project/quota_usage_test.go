@@ -73,6 +73,17 @@ func TestGPUQuotaLimitsAlwaysReturnsObject(t *testing.T) {
 	}
 }
 
+func TestGPUQuotaLimitsCanonicalizesLegacyAliases(t *testing.T) {
+	got := gpuQuotaLimits(map[string]any{"gpu": map[string]any{
+		"NVIDIA_A6000": float64(4),
+		"nvidia-a6000": float64(2),
+	}})
+	want := map[string]int{"nvidia-a6000": 2}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("gpuQuotaLimits() = %#v, want canonical key to win: %#v", got, want)
+	}
+}
+
 func TestQuotaRegionForRequestValidatesConfiguredRegion(t *testing.T) {
 	es := &externalservice.ExternalService{Config: map[string]any{
 		"regions": map[string]any{

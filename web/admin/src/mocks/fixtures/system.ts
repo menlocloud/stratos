@@ -80,13 +80,13 @@ export const gpuInfoByService: Record<string, Doc[]> = {
     {
       region: "eu-central-1",
       gpus: [
-        { name: "NVIDIA-A100-80GB", total: 16, inUse: 9 },
-        { name: "NVIDIA-L40S", total: 24, inUse: 6 },
+        { name: "nvidia-a100-80gb", total: 16, inUse: 9 },
+        { name: "nvidia-l40s", total: 24, inUse: 6 },
       ],
     },
     {
       region: "eu-west-1",
-      gpus: [{ name: "NVIDIA-A100-80GB", total: 8, inUse: 8 }],
+      gpus: [{ name: "nvidia-a100-80gb", total: 8, inUse: 8 }],
     },
   ],
   "svc-ceph-01": [],

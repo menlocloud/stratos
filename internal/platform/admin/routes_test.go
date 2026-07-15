@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -16,4 +17,13 @@ func TestRoutesNoPanic(t *testing.T) {
 		}
 	}()
 	(&Handler{}).Routes(chi.NewRouter())
+}
+
+func TestProjectGPUUsageRoute(t *testing.T) {
+	router := chi.NewRouter()
+	(&Handler{}).Routes(router)
+	routeContext := chi.NewRouteContext()
+	if !router.Match(routeContext, http.MethodGet, "/admin/project/project-1/gpu-usage") {
+		t.Fatal("GET /admin/project/{id}/gpu-usage route is not registered")
+	}
 }

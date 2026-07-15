@@ -26,6 +26,7 @@ export const routes: RouteEntry[] = [
   { path: "/clients/billing-profiles/bp-0001", name: "billing-profile-detail", hasTable: true, hasDialogs: true },
   { path: "/clients/projects", name: "projects", hasTable: true, hasDialogs: true },
   { path: "/clients/projects/prj-0001", name: "project-detail", hasTable: true, hasDialogs: true },
+  { path: "/clients/projects/prj-0001?tab=quota", name: "project-detail-quota", hasTable: true },
   { path: "/clients/bills", name: "bills", hasTable: true },
   { path: "/clients/transactions", name: "transactions", hasTable: true, hasDialogs: true },
   { path: "/clients/account-credits", name: "account-credits", hasTable: true, hasDialogs: true },

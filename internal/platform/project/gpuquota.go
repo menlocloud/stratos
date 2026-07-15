@@ -19,16 +19,12 @@ import (
 // gpuLimitFor resolves the project limit for a GPU model: the exact model key, else the
 // "*" wildcard, else unlimited (limited=false).
 func gpuLimitFor(quota map[string]any, model string) (limit int, limited bool) {
-	gpu, ok := quota["gpu"].(map[string]any)
-	if !ok {
-		return 0, false
+	limits := gpuQuotaLimits(quota)
+	if value, ok := limits[cloud.NormalizeGPUAlias(model)]; ok {
+		return value, true
 	}
-	for _, key := range []string{model, "*"} {
-		if v, ok := gpu[key]; ok {
-			if d, ok := toDecAny(v); ok {
-				return int(d.IntPart()), true
-			}
-		}
+	if value, ok := limits["*"]; ok {
+		return value, true
 	}
 	return 0, false
 }
@@ -38,27 +34,10 @@ func gpuLimitFor(quota map[string]any, model string) (limit int, limited bool) {
 // the repository error lets read surfaces warn instead of presenting a misleading zero; the
 // create/resize gate intentionally retains its existing fail-open behavior through gpuUsage.
 func (h *Handler) gpuUsageDetail(ctx context.Context, projectID string) (map[string]int, error) {
-	out := map[string]int{}
-	for _, resourceType := range []string{cloud.TypeServer, cloud.TypeBaremetalServer} {
-		crs, err := h.cloud.FindByProjectAndType(ctx, projectID, resourceType)
-		if err != nil {
-			return out, err
-		}
-		for i := range crs {
-			srv, ok := crs[i].Data["server"].(map[string]any)
-			if !ok {
-				continue
-			}
-			if status, _ := srv["status"].(string); status == "DELETED" {
-				continue
-			}
-			fl, _ := srv["flavor"].(map[string]any)
-			if model, n := cloud.GPUFromFlavor(fl["extra_specs"]); n > 0 {
-				out[model] += n
-			}
-		}
+	if h.cloud == nil {
+		return map[string]int{}, fmt.Errorf("GPU usage repository is unavailable")
 	}
-	return out, nil
+	return h.cloud.GPUUsageByProject(ctx, projectID)
 }
 
 func (h *Handler) gpuUsage(ctx context.Context, projectID string) map[string]int {
