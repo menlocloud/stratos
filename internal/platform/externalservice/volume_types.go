@@ -10,6 +10,25 @@ type VolumeTypeConfig struct {
 	DisplayName string `json:"displayName"`
 }
 
+// SoleRegion returns the provider's only declared region (config.regions),
+// or "" when none or several are declared. Callers use it as the fallback
+// when a request carries no region: project service rows do not record one
+// and the deploy-level default is a dev-bootstrap value that production
+// leaves unset.
+func (e *ExternalService) SoleRegion() string {
+	if e == nil {
+		return ""
+	}
+	regions, _ := e.Config["regions"].(map[string]any)
+	if len(regions) != 1 {
+		return ""
+	}
+	for name := range regions {
+		return name
+	}
+	return ""
+}
+
 // EnabledVolumeTypes returns only config.features.volumeTypes[region] entries
 // explicitly enabled by an operator. It intentionally fails closed: a missing
 // region, an absent catalog, or an all-disabled catalog exposes no storage

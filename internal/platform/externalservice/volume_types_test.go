@@ -33,3 +33,25 @@ func TestEnabledVolumeTypesIsRegionScopedAndFailClosed(t *testing.T) {
 		t.Fatalf("missing catalog must fail closed, got %#v", got)
 	}
 }
+
+func TestSoleRegion(t *testing.T) {
+	one := &ExternalService{Config: map[string]any{
+		"regions": map[string]any{"RegionOne": map[string]any{"name": "RegionOne"}},
+	}}
+	if got := one.SoleRegion(); got != "RegionOne" {
+		t.Fatalf("SoleRegion() = %q, want RegionOne", got)
+	}
+	two := &ExternalService{Config: map[string]any{
+		"regions": map[string]any{"RegionOne": map[string]any{}, "RegionTwo": map[string]any{}},
+	}}
+	if got := two.SoleRegion(); got != "" {
+		t.Fatalf("two regions must be ambiguous, got %q", got)
+	}
+	if got := (&ExternalService{}).SoleRegion(); got != "" {
+		t.Fatalf("no regions must yield empty, got %q", got)
+	}
+	var nilES *ExternalService
+	if got := nilES.SoleRegion(); got != "" {
+		t.Fatalf("nil receiver must yield empty, got %q", got)
+	}
+}
