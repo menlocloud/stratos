@@ -1,8 +1,10 @@
+<div align="center">
+
 # Stratos
 
-**Multi-tenant cloud billing and self-service portal for OpenStack.**
+**Multi-tenant cloud billing & self-service portal for OpenStack**
 
-<p align="center">
+<p>
   <img alt="GitHub commit activity" src="https://img.shields.io/github/commit-activity/m/menlocloud/stratos"/>
   <img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/menlocloud/stratos"/>
   <img alt="GitHub contributors" src="https://img.shields.io/github/contributors/menlocloud/stratos"/>
@@ -10,18 +12,26 @@
   <img alt="License: AGPL v3" src="https://img.shields.io/github/license/menlocloud/stratos"/>
 </p>
 
-<p align="center">
+<p>
   <a href="https://github.com/menlocloud/stratos/actions/workflows/test.yml"><img alt="test" src="https://github.com/menlocloud/stratos/actions/workflows/test.yml/badge.svg?branch=main"/></a>
   <a href="https://github.com/menlocloud/stratos/actions/workflows/docker.yml"><img alt="docker" src="https://github.com/menlocloud/stratos/actions/workflows/docker.yml/badge.svg?branch=main"/></a>
   <a href="https://github.com/menlocloud/stratos/actions/workflows/helm.yml"><img alt="helm" src="https://github.com/menlocloud/stratos/actions/workflows/helm.yml/badge.svg?branch=main"/></a>
 </p>
 
-<p align="center">
-  <a href="#quickstart">Getting Started</a>
+<p>
+  <a href="#-quickstart"><b>Getting Started</b></a>
   · <a href="https://github.com/menlocloud/stratos/discussions">Community</a>
   · <a href="CHANGELOG.md">Changelog</a>
   · <a href="https://github.com/menlocloud/stratos/issues">Bug reports</a>
 </p>
+
+</div>
+
+<p align="center">
+  <img src="public/assets/billing_1.png" alt="Stratos operator console — organization billing dashboard" width="860" />
+</p>
+
+<p align="center"><sub><i>The operator console — per-project and per-resource spend across the organization.</i></sub></p>
 
 Stratos turns an OpenStack cloud into a product: customers sign up, launch and
 manage compute / storage / network resources from a web console, and are billed
@@ -33,7 +43,24 @@ capabilities to AI agents.
 - **Operator console** (`web/admin`) — pricing, regions, invoicing, and account administration.
 - **API** (Go) — one backend serving three surfaces: the customer API, the SigV4-signed operator API, and an MCP endpoint.
 
-## Features
+> [!WARNING]
+> **Tested against OpenStack 2026.1.** The reference target is OpenStack 2026.1
+> deployed with kolla-ansible. Any Keystone v3 cloud should work, but other
+> releases are unverified.
+
+## Contents
+
+- [Features](#-features)
+- [Architecture at a glance](#-architecture-at-a-glance)
+- [Quickstart](#-quickstart)
+- [Repository layout](#-repository-layout)
+- [Tech stack](#-tech-stack)
+- [Documentation](#-documentation)
+- [Build & test](#-build--test)
+- [Contributing](#-contributing)
+- [License](#-license)
+
+## ✨ Features
 
 - **Self-service cloud** — provision and manage instances, volumes, networks, floating IPs, load balancers, object storage and shares against one or more OpenStack regions, plus S3 object storage on Ceph RGW (buckets, per-key access, static websites).
 - **Usage-based billing** — metered consumption rated against configurable price plans, resource types, currencies and tax rules.
@@ -44,7 +71,7 @@ capabilities to AI agents.
 - **MCP server** — a Model Context Protocol endpoint so AI agents can drive the platform with the same auth and permissions as a user or operator.
 - **Identity via OIDC** — Keycloak or any OpenID Connect provider, browser sign-in over authorization-code + PKCE.
 
-## Architecture at a glance
+## 🧭 Architecture at a glance
 
 ```mermaid
 flowchart LR
@@ -70,7 +97,7 @@ One Go process serves all three HTTP surfaces on port `8080` and runs scheduled
 jobs (billing, sync, metrics) internally; a separate management port (`8081`)
 exposes health and operational triggers.
 
-## Quickstart
+## 🚀 Quickstart
 
 ### Local (Docker Compose)
 
@@ -103,7 +130,10 @@ helm install stratos oci://ghcr.io/menlocloud/charts/stratos \
 See [`deploy/chart/README.md`](deploy/chart/README.md) for values,
 external PostgreSQL/OIDC wiring, and ingress / Gateway API exposure.
 
-## Repository layout
+## 📂 Repository layout
+
+<details>
+<summary>Expand the full path-by-path map</summary>
 
 | Path | Contents |
 |------|----------|
@@ -117,13 +147,15 @@ external PostgreSQL/OIDC wiring, and ingress / Gateway API exposure.
 | `web/admin` | Operator console (React SPA) |
 | `test/integration` | Integration tests (build tag `integration`) |
 
-## Tech stack
+</details>
+
+## 🧰 Tech stack
 
 - **Backend** — Go 1.25, [chi](https://github.com/go-chi/chi) router, PostgreSQL (jsonb document store via [pgx](https://github.com/jackc/pgx)), RabbitMQ, [gophercloud](https://github.com/gophercloud/gophercloud) for OpenStack, Stripe, the [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk), and [koanf](https://github.com/knadh/koanf) config (env + `application.yml`).
 - **Frontends** — React 19 + Vite + TypeScript, Tailwind CSS v4, shadcn/ui + Radix, TanStack Query, and `react-oidc-context` (authorization-code + PKCE).
 - **Identity** — Keycloak or any OIDC provider.
 
-## Documentation
+## 📚 Documentation
 
 **Engineering docs** (this repo, under [`docs/`](docs/) — start at the [docs index](docs/README.md)):
 
@@ -145,7 +177,10 @@ Admin API + MCP reference.
 For operations and deployment, see the [Helm chart README](deploy/chart/README.md).
 For contributing and local development, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## Build & test
+## 🧪 Build & test
+
+<details>
+<summary>Backend, frontend, and image build commands</summary>
 
 ```sh
 make build             # go build ./...
@@ -170,13 +205,15 @@ Container images (`stratos`, `stratos-web`, `stratos-admin`) and the Helm chart
 are published to `ghcr.io/menlocloud` by CI on pushes to `main` and tagged
 releases.
 
-## Contributing
+</details>
+
+## 🤝 Contributing
 
 Issues and pull requests are welcome — please read [`CONTRIBUTING.md`](CONTRIBUTING.md)
 and our [Code of Conduct](CODE_OF_CONDUCT.md). To report a security issue, see
 [`SECURITY.md`](SECURITY.md).
 
-## License
+## 📄 License
 
 Stratos is licensed under the **GNU Affero General Public License v3.0**
 (AGPL-3.0-only). See [`LICENSE`](LICENSE).
