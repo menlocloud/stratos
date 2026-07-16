@@ -4,6 +4,7 @@ import { ExternalLink, ShieldAlert } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
@@ -17,7 +18,9 @@ import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import { useS3Keys, useBucketSettings, useBucketSettingsMutation, type BucketGrant } from "@/lib/objectstore"
+import {
+  useS3Keys, useBucketSettings, useBucketSettingsMutation, type BucketGrant, type CorsRule,
+} from "@/lib/objectstore"
 
 const GiB = 1024 ** 3
 
@@ -118,6 +121,7 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
               <TabsTrigger value="website">Website</TabsTrigger>
               <TabsTrigger value="access">Access</TabsTrigger>
               <TabsTrigger value="lifecycle">Lifecycle</TabsTrigger>
+              <TabsTrigger value="cors">CORS</TabsTrigger>
               <TabsTrigger value="policy">Policy</TabsTrigger>
             </TabsList>
 
@@ -437,6 +441,65 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
               />
             </TabsContent>
 
+            {/* --- CORS --- */}
+            <TabsContent value="cors" className="grid gap-4 pt-4">
+              <p className="text-xs text-muted-foreground">
+                Allow web apps on other origins to call this bucket from the browser. Without a matching rule,
+                cross-origin downloads and uploads are blocked by the browser — direct links still work.
+              </p>
+              {s.cors.length ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Origins</TableHead>
+                      <TableHead>Methods</TableHead>
+                      <TableHead>Max age</TableHead>
+                      <TableHead className="w-24" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {s.cors.map((r, i) => (
+                      <TableRow key={i}>
+                        <TableCell>
+                          <div className="font-mono text-xs">{r.allowedOrigins.join(", ")}</div>
+                          {r.allowedHeaders?.length || r.exposeHeaders?.length ? (
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {r.allowedHeaders?.length ? `Headers: ${r.allowedHeaders.join(", ")}` : ""}
+                              {r.allowedHeaders?.length && r.exposeHeaders?.length ? " · " : ""}
+                              {r.exposeHeaders?.length ? `Expose: ${r.exposeHeaders.join(", ")}` : ""}
+                            </div>
+                          ) : null}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {r.allowedMethods.map((m) => (
+                              <Badge key={m} variant="secondary">{m}</Badge>
+                            ))}
+                          </div>
+                        </TableCell>
+                        <TableCell>{r.maxAgeSeconds ? `${r.maxAgeSeconds}s` : "—"}</TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive"
+                            onClick={() =>
+                              run("SET_CORS", { rules: s.cors.filter((_, j) => j !== i) }, "CORS rule removed")
+                            }
+                          >
+                            Remove
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <p className="text-sm text-muted-foreground">No CORS rules.</p>
+              )}
+              <CorsAdd onAdd={(rule) => run("SET_CORS", { rules: [...s.cors, rule] }, "CORS rule added")} />
+            </TabsContent>
+
             {/* --- raw policy --- */}
             <TabsContent value="policy" className="grid gap-3 pt-4">
               <p className="text-xs text-muted-foreground">
@@ -480,6 +543,97 @@ export function BucketSettingsDialog({ pid, resourceId, bucketName, open, onOpen
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+const CORS_METHODS = ["GET", "HEAD", "PUT", "POST", "DELETE"] as const
+
+// Comma-separated input → trimmed non-empty list.
+function csvList(v: string): string[] {
+  return v.split(",").map((x) => x.trim()).filter(Boolean)
+}
+
+function CorsAdd({ onAdd }: { onAdd: (r: CorsRule) => void }) {
+  const [origins, setOrigins] = useState("")
+  const [methods, setMethods] = useState<string[]>(["GET", "HEAD"])
+  const [headers, setHeaders] = useState("")
+  const [expose, setExpose] = useState("")
+  const [maxAge, setMaxAge] = useState("")
+  // maxAgeSeconds is an int32 server-side — a decimal would fail the JSON decode.
+  const maxAgeNum = Number(maxAge)
+  const maxAgeValid = maxAge.trim() === "" || (Number.isInteger(maxAgeNum) && maxAgeNum >= 0)
+  const originList = csvList(origins)
+  return (
+    <div className="grid gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Allowed origins (comma-separated)</Label>
+          <Input
+            value={origins}
+            onChange={(e) => setOrigins(e.target.value)}
+            placeholder="https://app.example.com, *"
+          />
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Methods</Label>
+          <div className="flex flex-wrap gap-3 pt-1.5">
+            {CORS_METHODS.map((m) => (
+              <label key={m} className="flex cursor-pointer items-center gap-1.5 text-sm">
+                <Checkbox
+                  checked={methods.includes(m)}
+                  onCheckedChange={(v) =>
+                    setMethods((ms) => (v === true ? [...ms, m] : ms.filter((x) => x !== m)))
+                  }
+                />
+                {m}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Allowed headers (optional)</Label>
+          <Input value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder="*" />
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Expose headers (optional)</Label>
+          <Input value={expose} onChange={(e) => setExpose(e.target.value)} placeholder="ETag, Content-Length" />
+        </div>
+      </div>
+      <div className="flex items-end gap-2">
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Max age (seconds, optional)</Label>
+          <Input
+            className="w-40"
+            type="number"
+            min={0}
+            value={maxAge}
+            onChange={(e) => setMaxAge(e.target.value)}
+            placeholder="3600"
+          />
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={originList.length === 0 || methods.length === 0 || !maxAgeValid}
+          onClick={() => {
+            onAdd({
+              allowedOrigins: originList,
+              // canonical method order regardless of click order
+              allowedMethods: CORS_METHODS.filter((m) => methods.includes(m)),
+              ...(csvList(headers).length ? { allowedHeaders: csvList(headers) } : {}),
+              ...(csvList(expose).length ? { exposeHeaders: csvList(expose) } : {}),
+              ...(maxAge.trim() ? { maxAgeSeconds: maxAgeNum } : {}),
+            })
+            setOrigins("")
+            setHeaders("")
+            setExpose("")
+            setMaxAge("")
+          }}
+        >
+          Add rule
+        </Button>
+      </div>
+    </div>
   )
 }
 
