@@ -55,6 +55,7 @@ export type CorsRule = {
   allowedMethods: string[]
   allowedOrigins: string[]
   allowedHeaders?: string[]
+  exposeHeaders?: string[]
   maxAgeSeconds?: number
 }
 
