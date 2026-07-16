@@ -1,4 +1,4 @@
-import type { ProjectQuotaUsage, QuotaMetric } from "./types"
+import type { GpuCapacityUsage, ProjectQuotaUsage, QuotaMetric } from "./types"
 
 export type QuotaViolation = {
   resource: "instances" | "cores" | "ram" | "gpu" | "volumes" | "gigabytes" | "per-volume"
@@ -126,6 +126,28 @@ export function serverQuotaViolations(
   }
 
   return violations
+}
+
+// Region GPU capacity gate. A GPU flavor whose model has no project limit still can't be created
+// when the region's cluster has no free devices — the project-quota check above never sees this, so
+// OpenStack rejects at create ("No valid host"). When capacity is visible we block it up front.
+// Capacity models are already normalized backend-side (cloud.NormalizeGPUAlias); gpuFromFlavor
+// returns a normalized model too, so they compare directly (re-normalizing is just defensive).
+export function gpuCapacityViolations(
+  capacity: GpuCapacityUsage | undefined,
+  flavor: FlavorQuotaRequest | undefined,
+): QuotaViolation[] {
+  if (!capacity?.visible || !flavor) return []
+  const gpu = gpuFromFlavor(flavor.data?.extra_specs)
+  if (!gpu) return []
+  const entry = capacity.capacity.find((c) => normalizeGPUAlias(c.model) === gpu.model)
+  if (!entry || gpu.count <= entry.available) return []
+  return [
+    {
+      resource: "gpu",
+      message: `GPU ${gpu.model}: ${gpu.count} requested exceeds the ${entry.available} of ${entry.total} available in the region.`,
+    },
+  ]
 }
 
 export function volumeCreateQuotaViolations(

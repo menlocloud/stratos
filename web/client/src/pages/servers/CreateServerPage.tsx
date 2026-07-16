@@ -24,11 +24,11 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch, type CloudScope } from "@/lib/api"
 import {
-  useFlavorCategories, useImageGroups, useLocations, useProject, useProjectId, useProjectQuota,
-  usePublicNetworks,
+  useFlavorCategories, useImageGroups, useLocations, useProject, useProjectGpuCapacity, useProjectId,
+  useProjectQuota, usePublicNetworks,
 } from "@/lib/hooks"
 import type { FlavorCategory, ImageGrouping } from "@/lib/hooks"
-import { gpuFromFlavor, serverQuotaViolations, volumeBatchQuotaViolations } from "@/lib/quota"
+import { gpuCapacityViolations, gpuFromFlavor, serverQuotaViolations, volumeBatchQuotaViolations } from "@/lib/quota"
 import type { CloudResource, Location } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { isPrivateNetwork } from "../network/NetworksPage"
@@ -178,6 +178,10 @@ export default function CreateServerPage() {
   const flavors = useBulkAction<Flavor>(pid, scope, "LIST_FLAVORS")
   const volumeTypes = useBulkAction<VolumeType>(pid, scope, "LIST_VOLUME_TYPES")
   const projectQuota = useProjectQuota(pid, scope)
+  const project = useProject(pid).project
+  // Region GPU capacity — only served when the operator enabled it; feeds the region-availability
+  // gate so a GPU flavor with no project limit can't be created into an exhausted region.
+  const gpuCapacity = useProjectGpuCapacity(pid, scope, project?.gpuCapacityVisible === true)
   // Curated catalog: show only the flavors/images the admin grouped into categories (grouped by
   // category), not the raw live cloud lists. Falls back to showing everything if nothing matches.
   const flavorCats = useFlavorCategories()
@@ -211,7 +215,7 @@ export default function CreateServerPage() {
   })
   const pubNets = usePublicNetworks(pid, scope)
   // publicNetworksVisible=false → hide the pool picker; the server auto-assigns the floating IP.
-  const netsVisible = useProject(pid).project?.publicNetworksVisible === true
+  const netsVisible = project?.publicNetworksVisible === true
   // and offer only own private networks to attach to (no shared/external infra) when hidden.
   const networkRows = netsVisible ? (networks.data ?? []) : (networks.data ?? []).filter(isPrivateNetwork)
 
@@ -250,7 +254,12 @@ export default function CreateServerPage() {
     ...volume,
     type: resolveVolumeType(volume.type),
   }))
+  const selectedGpu = gpuFromFlavor(selectedFlavor?.data?.extra_specs)
+  const gpuCapacityVisible = project?.gpuCapacityVisible === true
   const computeQuotaViolations = serverQuotaViolations(projectQuota.data, selectedFlavor)
+  const capacityViolations = gpuCapacityViolations(gpuCapacity.data, selectedFlavor)
+  // Shown together under the flavor step — both are "this flavor won't fit" reasons.
+  const flavorGateViolations = [...computeQuotaViolations, ...capacityViolations]
   const volumeRequests = selectedFlavor && selectedImage
     ? [
         { sizeGiB: rootSizeGiB, type: selectedRootVolumeType, label: "Root volume" },
@@ -262,11 +271,12 @@ export default function CreateServerPage() {
       ]
     : []
   const storageQuotaViolations = volumeBatchQuotaViolations(projectQuota.data, volumeRequests)
-  const quotaViolations = [...computeQuotaViolations, ...storageQuotaViolations]
-  const computeQuotaCheckPending = !!flavorId && projectQuota.isLoading
+  const quotaViolations = [...flavorGateViolations, ...storageQuotaViolations]
+  // A GPU flavor selected while region capacity is still loading must not slip past the gate.
+  const capacityCheckPending = !!selectedGpu && gpuCapacityVisible && gpuCapacity.isLoading
+  const computeQuotaCheckPending = (!!flavorId && projectQuota.isLoading) || capacityCheckPending
   const storageQuotaCheckPending = !!flavorId && (projectQuota.isLoading || volumeTypes.isLoading)
   const quotaCheckPending = computeQuotaCheckPending || storageQuotaCheckPending
-  const selectedGpu = gpuFromFlavor(selectedFlavor?.data?.extra_specs)
   const quotaUnavailable =
     !!flavorId &&
     !projectQuota.isLoading &&
@@ -297,9 +307,11 @@ export default function CreateServerPage() {
       // Refresh immediately before submit as well as checking on flavor change.
       // This narrows the race window; OpenStack/the GPU backend remain the final authority.
       const latestQuota = await projectQuota.refetch()
+      const latestCapacity = gpuCapacityVisible ? (await gpuCapacity.refetch()).data : gpuCapacity.data
       const latestViolations = [
         ...serverQuotaViolations(latestQuota.data, selectedFlavor),
         ...volumeBatchQuotaViolations(latestQuota.data, volumeRequests),
+        ...gpuCapacityViolations(latestCapacity, selectedFlavor),
       ]
       if (latestViolations.length > 0) {
         throw new Error(latestViolations.map((violation) => violation.message).join(" "))
@@ -529,7 +541,10 @@ export default function CreateServerPage() {
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
                       {sec.items.map((f) => {
                         const selected = flavorId === f.externalId
-                        const flavorQuotaViolations = serverQuotaViolations(projectQuota.data, f)
+                        const flavorQuotaViolations = [
+                          ...serverQuotaViolations(projectQuota.data, f),
+                          ...gpuCapacityViolations(gpuCapacity.data, f),
+                        ]
                         return (
                           <button
                             key={f.externalId}
@@ -567,13 +582,13 @@ export default function CreateServerPage() {
                 ))}
                 {computeQuotaCheckPending ? (
                   <p className="text-sm text-muted-foreground">Checking this flavor against the current quota…</p>
-                ) : computeQuotaViolations.length > 0 ? (
+                ) : flavorGateViolations.length > 0 ? (
                   <Alert variant="destructive">
                     <CircleAlert />
-                    <AlertTitle>This flavor exceeds the project quota</AlertTitle>
+                    <AlertTitle>This flavor can't be created right now</AlertTitle>
                     <AlertDescription>
                       <ul className="list-disc space-y-1 pl-4">
-                        {computeQuotaViolations.map((violation) => (
+                        {flavorGateViolations.map((violation) => (
                           <li key={`${violation.resource}-${violation.message}`}>{violation.message}</li>
                         ))}
                       </ul>
