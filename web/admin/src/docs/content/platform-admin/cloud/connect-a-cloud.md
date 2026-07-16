@@ -1,6 +1,6 @@
 # Connecting an OpenStack Cloud
 
-Stratos meters and provisions against one or more OpenStack regions. You register each set of regions as a *cloud provider* in the admin portal; from there Stratos reads the regions out of the Keystone service catalog and starts syncing the projects and resources it finds. The reference target is OpenStack 2026.1 deployed with kolla-ansible (2025.1 is also supported), but any Keystone v3 cloud will do.
+Stratos meters and provisions against one or more OpenStack regions. You register each set of regions as a *cloud provider* in the admin portal; from there Stratos reads the regions out of the Keystone service catalog and starts syncing the projects and resources it finds. The reference target is OpenStack 2026.1 deployed with kolla-ansible, but any Keystone v3 cloud will do.
 
 ## Before you start
 
