@@ -31,7 +31,11 @@ on("GET /project/:pid/gpu-capacity", ({ opts }) => ({
   data: {
     visible: true,
     region: opts.cloud?.region ?? "RegionOne",
+    // A superset of the models the project uses/limits, so the merged Quota tiles show the full
+    // region catalog: nvidia-a10 has a project limit (quota tile + region-free note); the rest
+    // have no limit (region availability tiles), incl. a sold-out model.
     capacity: [
+      { model: "nvidia-a10", available: 3, total: 4 },
       { model: "nvidia-a100-80gb", available: 7, total: 16 },
       { model: "nvidia-l40s", available: 0, total: 24 },
     ],

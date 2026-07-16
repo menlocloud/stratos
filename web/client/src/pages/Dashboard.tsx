@@ -8,7 +8,6 @@ import {
 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, MoneyCell } from "@/components/data-table"
-import { GpuCapacityPanel } from "@/components/gpu-capacity-panel"
 import { QuotaOverview } from "@/components/quota-overview"
 import { StatCard } from "@/components/stat-card"
 import { Badge } from "@/components/ui/badge"
@@ -257,20 +256,15 @@ export function DashboardPage() {
       <div className="mt-6">
         <QuotaOverview
           data={quota.data}
+          gpuCapacity={project?.gpuCapacityVisible ? gpuCapacity.data : undefined}
           scope={quotaScope}
           scopeOptions={quotaScopeOptions}
           selectedScopeKey={selectedQuotaScope?.key}
           onScopeChange={setQuotaScopeKey}
-          isLoading={locationsLoading || quota.isLoading}
+          isLoading={locationsLoading || quota.isLoading || (project?.gpuCapacityVisible === true && gpuCapacity.isLoading)}
           error={quota.error}
         />
       </div>
-
-      {project?.gpuCapacityVisible ? (
-        <div className="mt-6">
-          <GpuCapacityPanel data={gpuCapacity.data} isLoading={locationsLoading || gpuCapacity.isLoading} />
-        </div>
-      ) : null}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-2">
         <Card className="min-w-0">
