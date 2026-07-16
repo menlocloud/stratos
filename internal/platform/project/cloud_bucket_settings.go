@@ -41,6 +41,12 @@ func (h *Handler) failBucketFeature(w http.ResponseWriter, err error) {
 		h.fail(w, httpx.BadRequest("This setting is only available on S3 (Ceph) object storage"))
 		return
 	}
+	// A malformed hand-edited policy is the CALLER's mistake — surface the parse detail as a 400 so the
+	// UI shows why, instead of a 500 (or worse, the old silent "saved nothing" success).
+	if errors.Is(err, client.ErrInvalidBucketPolicy) {
+		h.fail(w, httpx.BadRequest(err.Error()))
+		return
+	}
 	h.fail(w, err)
 }
 

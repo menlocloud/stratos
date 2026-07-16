@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -180,6 +181,77 @@ func TestPolicyMutationPreservesUnmodelledFields(t *testing.T) {
 		if !strings.Contains(string(doc.Statement[0]), field) {
 			t.Errorf("field %s was dropped from the customer statement", field)
 		}
+	}
+}
+
+// The policy editor used to accept ANY JSON object: unknown fields were ignored, so a pasted CORS
+// configuration (or a typo'd "Statements" key) decoded to an empty doc, saved NOTHING, and still
+// toasted "Policy saved" — the text was gone on the next load. Non-policy documents must be rejected.
+func TestParseCustomerPolicyRejectsNonPolicyJSON(t *testing.T) {
+	cases := map[string]struct {
+		input    string
+		wantHint string
+	}{
+		"CORS config pasted into the policy editor": {
+			input:    `{"CORSRules":[{"AllowedOrigins":["https://hub-dev.menlo.ai"],"AllowedMethods":["GET"]}]}`,
+			wantHint: "CORS configuration",
+		},
+		"typo'd Statements key": {
+			input:    `{"Version":"2012-10-17","Statements":[{"Effect":"Allow"}]}`,
+			wantHint: `unknown field "Statements"`,
+		},
+		"empty object": {
+			input:    `{}`,
+			wantHint: `no "Statement"`,
+		},
+		"explicit empty statement array": {
+			input:    `{"Version":"2012-10-17","Statement":[]}`,
+			wantHint: `no "Statement"`,
+		},
+		"trailing garbage": {
+			input:    `{"Version":"2012-10-17","Statement":[{"Effect":"Allow"}]} extra`,
+			wantHint: "trailing data",
+		},
+		"not JSON at all": {
+			input:    `hello`,
+			wantHint: "invalid",
+		},
+	}
+	for name, tc := range cases {
+		_, err := parseCustomerPolicyDoc(tc.input)
+		if err == nil {
+			t.Errorf("%s: accepted, want rejection", name)
+			continue
+		}
+		if !errors.Is(err, ErrInvalidBucketPolicy) {
+			t.Errorf("%s: error not marked ErrInvalidBucketPolicy: %v", name, err)
+		}
+		if !strings.Contains(err.Error(), tc.wantHint) {
+			t.Errorf("%s: error %q does not carry hint %q", name, err, tc.wantHint)
+		}
+	}
+}
+
+// A real policy document must parse, default its Version, and keep an Id if it has one — the Id used to
+// be silently dropped on every read-modify-write cycle.
+func TestParseCustomerPolicyAcceptsRealPolicies(t *testing.T) {
+	doc, err := parseCustomerPolicyDoc(`{"Statement":[{"Sid":"Mine","Effect":"Deny"}]}`)
+	if err != nil {
+		t.Fatalf("minimal policy rejected: %v", err)
+	}
+	if doc.Version != "2012-10-17" {
+		t.Errorf("Version not defaulted: %q", doc.Version)
+	}
+	doc, err = parseCustomerPolicyDoc(`{"Version":"2008-10-17","Id":"MyPolicy","Statement":[{"Effect":"Allow"}]}`)
+	if err != nil {
+		t.Fatalf("policy with Id rejected: %v", err)
+	}
+	if doc.ID != "MyPolicy" || doc.Version != "2008-10-17" {
+		t.Errorf("Id/Version not preserved: %+v", doc)
+	}
+	raw, _ := json.Marshal(doc)
+	if !strings.Contains(string(raw), `"Id":"MyPolicy"`) {
+		t.Errorf("Id dropped on re-encode: %s", raw)
 	}
 }
 

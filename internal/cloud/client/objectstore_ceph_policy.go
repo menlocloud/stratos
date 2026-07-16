@@ -11,6 +11,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -48,8 +49,10 @@ type policyStmt struct {
 }
 
 // policyDoc holds statements VERBATIM. Only the ones Stratos owns (by Sid) are ever regenerated.
+// Id is modelled so a customer policy that carries one survives Stratos' read-modify-write cycles.
 type policyDoc struct {
 	Version   string            `json:"Version"`
+	ID        string            `json:"Id,omitempty"`
 	Statement []json.RawMessage `json:"Statement"`
 }
 
@@ -375,6 +378,37 @@ func (c *Client) GetBucketPolicyJSON(ctx context.Context, bucket string) (string
 	return string(raw), err
 }
 
+// ErrInvalidBucketPolicy marks a customer-supplied document that parsed as JSON but is not a bucket
+// policy (wrong document type, typo'd keys, or no statements). Handlers map it to a 400. Without this
+// gate, plain json.Unmarshal ignored unknown fields, so pasting e.g. a CORS configuration into the
+// policy editor decoded to an EMPTY doc, saved nothing, and still reported success.
+var ErrInvalidBucketPolicy = errors.New("invalid bucket policy")
+
+// parseCustomerPolicyDoc STRICTLY parses a hand-supplied policy document: unknown top-level fields are
+// rejected instead of ignored, and a document with no Statement is refused rather than silently saved
+// as "no custom policy".
+func parseCustomerPolicyDoc(policyJSON string) (*policyDoc, error) {
+	doc := &policyDoc{}
+	dec := json.NewDecoder(strings.NewReader(policyJSON))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(doc); err != nil {
+		if strings.Contains(err.Error(), `unknown field "CORSRules"`) {
+			return nil, fmt.Errorf("%w: this is a CORS configuration, not a bucket policy — CORS rules are configured separately from the policy", ErrInvalidBucketPolicy)
+		}
+		return nil, fmt.Errorf(`%w: %v — a policy document has the shape {"Version":"2012-10-17","Statement":[…]}`, ErrInvalidBucketPolicy, err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("%w: trailing data after the policy document", ErrInvalidBucketPolicy)
+	}
+	if len(doc.Statement) == 0 {
+		return nil, fmt.Errorf(`%w: the document has no "Statement" — to remove the custom policy, use clear instead`, ErrInvalidBucketPolicy)
+	}
+	if doc.Version == "" {
+		doc.Version = "2012-10-17"
+	}
+	return doc, nil
+}
+
 // SetBucketPolicyJSON replaces the CUSTOMER portion of the bucket policy with the supplied document. Any
 // Stratos-managed statements (website public-read, per-key grants) are stripped from the input and then
 // re-applied from the CURRENT live policy, so a hand-edited policy can never silently drop a grant or
@@ -383,18 +417,13 @@ func (c *Client) SetBucketPolicyJSON(ctx context.Context, bucket, policyJSON str
 	if c.ceph == nil {
 		return ErrBucketFeatureUnsupported
 	}
-	live, err := c.ceph.getPolicyDoc(ctx, bucket)
-	if err != nil {
-		return err
-	}
 	next := &policyDoc{Version: "2012-10-17"}
 	if strings.TrimSpace(policyJSON) != "" {
-		if err := json.Unmarshal([]byte(policyJSON), next); err != nil {
-			return fmt.Errorf("ceph-s3: invalid bucket policy JSON: %w", err)
+		parsed, err := parseCustomerPolicyDoc(policyJSON)
+		if err != nil {
+			return err
 		}
-		if next.Version == "" {
-			next.Version = "2012-10-17"
-		}
+		next = parsed
 		// Drop any Stratos Sid the caller tried to set by hand — those are ours to manage. Everything else
 		// is carried through byte-for-byte, so fields we do not model (NotAction, NotPrincipal, …) survive.
 		kept := next.Statement[:0]
@@ -404,6 +433,10 @@ func (c *Client) SetBucketPolicyJSON(ctx context.Context, bucket, policyJSON str
 			}
 		}
 		next.Statement = kept
+	}
+	live, err := c.ceph.getPolicyDoc(ctx, bucket)
+	if err != nil {
+		return err
 	}
 	next.Statement = append(next.Statement, live.stratosStmts()...)
 	return c.ceph.putPolicyDoc(ctx, bucket, next)
