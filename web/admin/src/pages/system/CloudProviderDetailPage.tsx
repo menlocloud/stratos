@@ -240,6 +240,46 @@ function ConnectionTab({ id, provider }: TabProps) {
       </Card>
     )
   }
+  // kamaji: no Keystone either — the provider IS a Kamaji management cluster reached over a
+  // kubeconfig, and clusters are delivered as ArgoCD Applications of the pinned chart. Show the
+  // read-only delivery config; the keystone Test-connection/Sync buttons would only 4xx here.
+  if (provider.config?.provider === "kamaji") {
+    const c = asObj(provider.config)
+    const argo = asObj(c.argocd)
+    const cluster = asObj(c.cluster)
+    const versions = Object.keys(asObj(cluster.versions)).sort()
+    const flavors = asArr(cluster.flavors).map(String).filter(Boolean)
+    const regions = Object.keys(asObj(c.regions)).sort()
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-eyebrow">Kamaji management cluster (delivery)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Row label="Kubeconfig" value="configured" />
+          <Row label="Regions" value={regions.join(", ")} />
+          <div className="text-eyebrow mt-6">ArgoCD delivery</div>
+          <Row label="Namespace" value={str(argo.namespace) || "argocd"} />
+          <Row label="AppProject (guardrail)" value={str(argo.project) || "stratos-k8s"} />
+          <Row label="Chart OCI repo" value={str(argo.chartRepo)} />
+          <Row label="Chart name" value={str(argo.chartName) || "openstack-kamaji-cluster"} />
+          <Row label="Chart version (pinned)" value={str(argo.chartVersion)} />
+          <div className="text-eyebrow mt-6">Cluster defaults</div>
+          <Row label="Kamaji DataStore" value={str(cluster.dataStoreName)} />
+          <Row label="Floating network ID (API LB)" value={str(cluster.floatingNetworkId)} />
+          <Row label="External network ID (workers)" value={str(cluster.externalNetworkId)} />
+          <Row label="DNS zone" value={str(cluster.dnsZone)} />
+          <Row label="Curated Kubernetes versions" value={versions.length ? String(versions.length) : ""} />
+          <Row label="Flavor allowlist" value={flavors.length ? `${flavors.length} flavor id(s)` : "all tenant flavors"} />
+          <p className="mt-4 text-sm text-muted-foreground">
+            The management-cluster kubeconfig is stored encrypted and never returned by the API. Clusters are
+            delivered as ArgoCD Applications of the pinned chart; worker nodes run in each customer's own
+            OpenStack tenant.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
   return (
     <Card>
       <CardHeader>

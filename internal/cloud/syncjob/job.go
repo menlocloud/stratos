@@ -119,6 +119,7 @@ func (j *Job) Run(ctx context.Context) (int, error) {
 	for i := range projects {
 		total += j.syncProject(ctx, &projects[i], esCache)
 	}
+	j.sweepKamajiOrphans(ctx)
 	return total, nil
 }
 
@@ -275,4 +276,59 @@ func (j *Job) syncKamajiService(ctx context.Context, p *project.Project, es *ext
 		j.log.Error("syncjob: reconcile kamaji clusters", "project", p.ID, "serviceId", es.ID, "region", region, "err", err)
 	}
 	return st.Created + st.Updated
+}
+
+// sweepKamajiOrphans runs each kamaji provider's service-level orphan sweep once per sync cycle:
+// deleted clusters whose ArgoCD cascade has finished get their appcred revoked, clouds.yaml
+// secret reaped and (when the project namespace empties out) the namespace GC'd. Service-level
+// on purpose — it must also reap leftovers of projects whose stratos doc is already gone
+// (scheduled deletion, teardown), which no per-project walk can visit.
+func (j *Job) sweepKamajiOrphans(ctx context.Context) {
+	services, err := j.services.ListByType(ctx, externalservice.TypeCloud)
+	if err != nil {
+		j.log.Error("syncjob: list services for kamaji sweep", "err", err)
+		return
+	}
+	for i := range services {
+		es := &services[i]
+		if es.IsDisabled() || !es.IsKamaji() {
+			continue
+		}
+		ks, err := j.kamajiFor(es)
+		if err != nil {
+			j.log.Error("syncjob: build kamaji service for sweep", "serviceId", es.ID, "err", err)
+			continue
+		}
+		pending, err := ks.FinalizeAllOrphans(ctx, j.kamajiRevokeResolver(ctx))
+		if err != nil {
+			j.log.Warn("syncjob: kamaji orphan sweep", "serviceId", es.ID, "pending", pending, "err", err)
+		}
+	}
+}
+
+// kamajiRevokeResolver revokes an appcred on the OpenStack service recorded at mint time
+// (AnnotationAppCredService). FAIL-CLOSED: any resolution failure returns an error so the
+// sweep keeps the secret — the only revocation record — for a later pass.
+func (j *Job) kamajiRevokeResolver(ctx context.Context) kamaji.RevokeCredResolver {
+	return func(ctx context.Context, osServiceID, userID, credID string) error {
+		if osServiceID == "" {
+			return fmt.Errorf("appcred %s: no minting service recorded — revoke manually (docs/managed-k8s.md)", credID)
+		}
+		es, err := j.services.Get(ctx, osServiceID)
+		if err != nil {
+			return err
+		}
+		if es == nil {
+			return fmt.Errorf("appcred %s: minting service %s no longer exists — revoke manually", credID, osServiceID)
+		}
+		region := ""
+		if rs := es.RegionNames(); len(rs) > 0 {
+			region = rs[0]
+		}
+		cc, err := client.New(ctx, es.ClientConfig(region))
+		if err != nil {
+			return err
+		}
+		return cc.DeleteAppCredential(ctx, userID, credID)
+	}
 }

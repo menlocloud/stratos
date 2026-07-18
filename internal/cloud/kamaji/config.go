@@ -6,7 +6,10 @@
 // TenantControlPlane + CAPI MachineDeployments. See tasks/managed-k8s-plan.md (D3/D7/§9).
 package kamaji
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Namespace / naming derivations — the ONE place these are derived (ceph RGWUIDFor precedent).
 // Customer-typed names are display-only; every k8s-side identifier is the generated cluster id
@@ -18,7 +21,10 @@ func NamespaceFor(projectID string) string { return "st-" + projectID }
 
 // CloudSecretName is the per-cluster clouds.yaml secret (management-cluster side ONLY — the
 // customer cluster never sees it; see plan §4/D7).
-func CloudSecretName(clusterID string) string { return clusterID + "-cloud-config" }
+func CloudSecretName(clusterID string) string { return clusterID + cloudSecretSuffix }
+
+// cloudSecretSuffix lets FinalizeOrphans map a secret name back to its cluster id.
+const cloudSecretSuffix = "-cloud-config"
 
 // Application labels/annotations stamped by stratos and read back by the sync.
 //
@@ -32,6 +38,15 @@ const (
 	LabelManagedBy        = "app.kubernetes.io/managed-by"
 	ManagedByValue        = "stratos"
 	AnnotationDisplayName = "stratos.io/display-name"
+	// Appcred annotations on the per-cluster clouds.yaml secret: the ONLY durable record of the
+	// keystone application credential minted for the cluster (plan D4). FinalizeOrphans reads them
+	// to revoke the credential once the ArgoCD delete cascade has finished with it.
+	AnnotationAppCredID   = "stratos.io/appcred-id"
+	AnnotationAppCredUser = "stratos.io/appcred-user"
+	// AnnotationAppCredService records WHICH OpenStack externalService minted the credential, so
+	// the service-level sweep can revoke it even after the project doc (and its service
+	// bindings) is gone.
+	AnnotationAppCredService = "stratos.io/appcred-service"
 )
 
 // managedBy reports whether obj carries the stratos ownership marker.
@@ -61,6 +76,7 @@ type ClusterDefaults struct {
 	ExternalNetworkID string            // CAPO external network (clusterNetworking)
 	DNSZone           string            // optional: API FQDN = <clusterID>.<DNSZone> (certSAN + external-dns)
 	Versions          map[string]string // curated k8s version → Glance image id (the ONLY versions offered)
+	Flavors           []string          // optional node-flavor allowlist (empty = every tenant flavor)
 }
 
 // Validate rejects a config that cannot possibly provision (fail at create, not mid-flight).
@@ -91,6 +107,13 @@ type ClusterSpec struct {
 	// AllowedCIDRs restricts API-server LB ingress (Octavia ACL — plan Phase 2a). Empty = open.
 	AllowedCIDRs []string
 	NodeGroups   []NodeGroup
+	// AppCredID/AppCredUserID/AppCredServiceID record the per-cluster keystone application
+	// credential minted at create (plan D4) — stamped as annotations on the clouds.yaml secret
+	// so the orphan sweep can revoke it after the delete cascade, even when the project doc is
+	// already gone. Empty when minting was skipped (fallback admin auth).
+	AppCredID        string
+	AppCredUserID    string
+	AppCredServiceID string
 }
 
 // NodeGroup is one CAPI MachineDeployment-backed worker pool.
@@ -126,6 +149,9 @@ func (s ClusterSpec) Validate(d ClusterDefaults) error {
 	for _, ng := range s.NodeGroups {
 		if ng.Name == "" || ng.FlavorID == "" {
 			return fmt.Errorf("cluster: node group name and flavorId are required")
+		}
+		if len(d.Flavors) > 0 && !slices.Contains(d.Flavors, ng.FlavorID) {
+			return fmt.Errorf("cluster: node group %q: flavor %q is not offered by this provider", ng.Name, ng.FlavorID)
 		}
 		if ng.Autoscale && (ng.Min < 1 || ng.Max < ng.Min) {
 			return fmt.Errorf("cluster: node group %q: autoscale needs 1 <= min <= max", ng.Name)

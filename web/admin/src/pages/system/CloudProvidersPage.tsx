@@ -187,6 +187,7 @@ type KamajiFormState = {
   externalNetworkId: string
   dnsZone: string
   versions: string // one "1.35.4=<glance-image-id>" per line
+  flavors: string // optional allowlist, one Nova flavor id per line (empty = all tenant flavors)
 }
 
 const emptyKamajiForm: KamajiFormState = {
@@ -202,6 +203,7 @@ const emptyKamajiForm: KamajiFormState = {
   externalNetworkId: "",
   dnsZone: "",
   versions: "",
+  flavors: "",
 }
 
 // parseVersions turns the "version=imageId" lines into the config.cluster.versions map;
@@ -229,6 +231,12 @@ const kamajiFormValid = (f: KamajiFormState) => {
 
 function kamajiFormToBody(f: KamajiFormState) {
   const region = f.region.trim()
+  // Optional Nova-flavor allowlist → config.cluster.flavors: string[] (externalservice KamajiConfig).
+  // Omitted entirely when empty — an absent key means "offer all tenant flavors".
+  const flavors = f.flavors
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)
   return {
     name: f.name.trim(),
     type: "CLOUD",
@@ -240,7 +248,9 @@ function kamajiFormToBody(f: KamajiFormState) {
       services: { kubernetes: { [region]: true } },
       argocd: {
         namespace: f.argoNamespace.trim() || "argocd",
-        project: f.argoProject.trim() || "default",
+        // Keep in sync with the backend (externalservice KamajiConfig), which also defaults the
+        // AppProject guardrail to "stratos-k8s" when unset.
+        project: f.argoProject.trim() || "stratos-k8s",
         chartRepo: f.chartRepo.trim(),
         chartName: "openstack-kamaji-cluster",
         chartVersion: f.chartVersion.trim(),
@@ -251,6 +261,7 @@ function kamajiFormToBody(f: KamajiFormState) {
         ...(f.externalNetworkId.trim() ? { externalNetworkId: f.externalNetworkId.trim() } : {}),
         ...(f.dnsZone.trim() ? { dnsZone: f.dnsZone.trim() } : {}),
         versions: parseVersions(f.versions) ?? {},
+        ...(flavors.length ? { flavors } : {}),
       },
     },
     secret: { kubeconfig: f.kubeconfig.trim() },
@@ -299,6 +310,9 @@ function KamajiProviderForm({ form, setForm }: { form: KamajiFormState; setForm:
         <div className="grid gap-2">
           <Label htmlFor="km-argoproj">ArgoCD AppProject</Label>
           <Input id="km-argoproj" value={form.argoProject} onChange={(e) => setForm({ ...form, argoProject: e.target.value })} placeholder="stratos-k8s" />
+          <p className="text-xs text-muted-foreground">
+            The ArgoCD guardrail — cluster Applications are confined to this AppProject (defaults to stratos-k8s).
+          </p>
         </div>
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -330,6 +344,19 @@ function KamajiProviderForm({ form, setForm }: { form: KamajiFormState; setForm:
           onChange={(e) => setForm({ ...form, versions: e.target.value })}
           placeholder="1.35.4=db37655f-…"
         />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="km-flavors">Flavor allowlist (optional, one Nova flavor id per line)</Label>
+        <Textarea
+          id="km-flavors"
+          className="min-h-20 font-mono text-xs"
+          value={form.flavors}
+          onChange={(e) => setForm({ ...form, flavors: e.target.value })}
+          placeholder="c1a4r8&#10;g1a8r16"
+        />
+        <p className="text-xs text-muted-foreground">
+          Only these Nova flavors are offered for worker pools; empty = all tenant flavors offered.
+        </p>
       </div>
       <p className="text-xs text-muted-foreground">
         The kubeconfig belongs to a stratos service account on the Kamaji management cluster (ArgoCD +

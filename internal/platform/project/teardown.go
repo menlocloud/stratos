@@ -84,6 +84,48 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 	}
 	SortCloudResourcesForDeletion(resources)
 
+	// kamaji rows first, split out of the tenant sweep entirely: they have no keystone tenant
+	// (tryTenantClient below can never build a client for them), and their delete is an ArgoCD
+	// Application delete on the management cluster whose cascade runs asynchronously. Rows
+	// archive on a successful delete request; the clouds.yaml secret / appcred / namespace are
+	// reaped by FinalizeOrphans below once the cascade has actually finished.
+	var kamajiServices []string
+	{
+		var sweep []cloud.CloudResource
+		now := time.Now().UTC()
+		for i := range resources {
+			res := &resources[i]
+			es, gerr := h.esSvc.Get(ctx, res.ServiceID)
+			if gerr != nil || es == nil || !es.IsKamaji() {
+				sweep = append(sweep, *res)
+				continue
+			}
+			if h.kamajiFor == nil {
+				sweep = append(sweep, *res)
+				continue
+			}
+			ks, kerr := h.kamajiFor(es)
+			if kerr != nil {
+				slog.Error("teardown: build kamaji service", "project", p.ID, "serviceId", res.ServiceID, "err", kerr)
+				sweep = append(sweep, *res)
+				continue
+			}
+			if !contains(kamajiServices, res.ServiceID) {
+				kamajiServices = append(kamajiServices, res.ServiceID)
+			}
+			if derr := ks.DeleteCluster(ctx, p.ID, res.ExternalID); derr != nil {
+				slog.Error("teardown: delete kamaji cluster", "project", p.ID, "cluster", res.ExternalID, "err", derr)
+				sweep = append(sweep, *res)
+				continue
+			}
+			if aerr := h.cloud.DeleteAndArchive(ctx, res, now); aerr != nil {
+				slog.Error("teardown: archive kamaji cluster row", "project", p.ID, "cluster", res.ExternalID, "err", aerr)
+				sweep = append(sweep, *res)
+			}
+		}
+		resources = sweep
+	}
+
 	remaining := resources
 	for sweep := 0; sweep < teardownSweeps && len(remaining) > 0; sweep++ {
 		if sweep > 0 {
@@ -110,6 +152,38 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 			}
 		}
 		remaining = stillLeft
+	}
+
+	// Best-effort orphan finalization for kamaji services. The ArgoCD delete cascade typically
+	// still runs for minutes after DeleteCluster, so this pass usually reports pending work —
+	// the periodic service-level sweep (syncjob.sweepKamajiOrphans) finishes the job later.
+	// What matters HERE is the pending signal: while the cascade still needs the customer's
+	// keystone tenant (CAPO deletes the worker VMs / LB with credentials scoped to it), the
+	// tenant deletion below must be DEFERRED, or the CAPI finalizers wedge forever.
+	// Scan every ATTACHED kamaji service, not just the ones that still had cache rows — a
+	// cluster deleted minutes before teardown has no row anymore, but its cascade may still be
+	// running against the tenant.
+	for _, svcID := range p.ServiceIDs() {
+		if es, err := h.esSvc.Get(ctx, svcID); err == nil && es != nil && es.IsKamaji() && !contains(kamajiServices, svcID) {
+			kamajiServices = append(kamajiServices, svcID)
+		}
+	}
+	kamajiPending := 0
+	for _, svcID := range kamajiServices {
+		es, err := h.esSvc.Get(ctx, svcID)
+		if err != nil || es == nil || h.kamajiFor == nil {
+			continue
+		}
+		ks, err := h.kamajiFor(es)
+		if err != nil {
+			continue
+		}
+		pending, ferr := ks.FinalizeOrphans(ctx, p.ID, h.kamajiCredRevoker(ctx, p))
+		kamajiPending += pending
+		if ferr != nil {
+			slog.Warn("teardown: kamaji orphan finalize", "project", p.ID, "serviceId", svcID, "pending", pending, "err", ferr)
+			kamajiPending++
+		}
 	}
 
 	// cephRevokeFailed records that a ceph-s3 credential could NOT be revoked (RGW purge failed), so its
@@ -214,6 +288,13 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 		if extProj == "" {
 			continue
 		}
+		// A kamaji delete cascade still needs this tenant (CAPO tears the worker VMs / LB down
+		// with tenant-scoped credentials) — defer the keystone delete; re-run teardown once the
+		// sweep reports clean.
+		if kamajiPending > 0 {
+			slog.Warn("teardown: deferring keystone tenant delete — kamaji cascade in flight", "project", p.ID, "serviceId", svcID)
+			continue
+		}
 		adminCC, err := client.New(ctx, es.ClientConfig(h.cloudRegion))
 		if err != nil {
 			continue
@@ -232,5 +313,18 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 	if len(remaining) > 0 {
 		return fmt.Errorf("teardown left %d resource(s) undeleted; the sync job will reconcile them", len(remaining))
 	}
+	if kamajiPending > 0 {
+		return fmt.Errorf("teardown: %d kamaji cluster remnant(s) still finalizing on the management cluster (keystone tenant deletion deferred) — the periodic sweep revokes credentials and GCs them; re-run teardown afterwards to delete the tenant (docs/managed-k8s.md)", kamajiPending)
+	}
 	return nil
+}
+
+// contains is a tiny []string membership helper (avoids importing slices for one call site).
+func contains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

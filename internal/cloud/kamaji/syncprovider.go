@@ -41,6 +41,12 @@ func (p *ClusterSyncProvider) List(ctx context.Context) ([]cloud.CloudResource, 
 		if id == "" {
 			continue
 		}
+		// A terminating Application (delete issued, resources-finalizer still cascading) must
+		// not re-enter the cache — the row was archived at delete time, and resurrecting it
+		// would flash the cluster back into the UI and billing until the cascade finishes.
+		if dig(app, "metadata", "deletionTimestamp") != nil {
+			continue
+		}
 		// Best-effort enrichment: a half-provisioned cluster still syncs (status stays PROGRESSING).
 		tcp, err := s.findTCP(ctx, ns, id)
 		if err != nil {
@@ -99,6 +105,18 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 	}
 	if issuer := digStr(values, "oidc", "issuerUrl"); issuer != "" {
 		c["oidc_issuer"] = issuer
+		// Full block (snake_case like the rest of the payload) — the client OIDC edit form
+		// prefills from it; keys mirror OIDCValues.
+		oidc := map[string]any{"issuer_url": issuer}
+		for src, dst := range map[string]string{
+			"clientId": "client_id", "usernameClaim": "username_claim", "usernamePrefix": "username_prefix",
+			"groupsClaim": "groups_claim", "groupsPrefix": "groups_prefix",
+		} {
+			if v := digStr(values, "oidc", src); v != "" {
+				oidc[dst] = v
+			}
+		}
+		c["oidc"] = oidc
 	}
 
 	// Control-plane endpoint from the TCP status (host:port the kubeconfig points at).
@@ -147,6 +165,14 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 			}
 			if v, ok := ng["autoscale"].(bool); ok {
 				g["autoscale"] = v
+			}
+			// Labels/taints round-trip through the cache so a node-group edit can prefill them —
+			// SET_NODE_GROUPS full-replaces the value, so a missing prefill would strip them.
+			if labels, ok := ng["nodeLabels"].(map[string]any); ok && len(labels) > 0 {
+				g["labels"] = labels
+			}
+			if taints, ok := ng["nodeTaints"].([]any); ok && len(taints) > 0 {
+				g["taints"] = taints
 			}
 			// MachineDeployment names are chart-derived (typically <cluster>-<group>); match by suffix.
 			for mdName, entry := range live {

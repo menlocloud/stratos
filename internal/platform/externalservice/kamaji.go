@@ -61,6 +61,14 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			}
 		}
 	}
+	var flavors []string
+	if fs, ok := cl["flavors"].([]any); ok {
+		for _, f := range fs {
+			if s := str(f); s != "" {
+				flavors = append(flavors, s)
+			}
+		}
+	}
 	cfg := kamaji.Config{
 		Kubeconfig:    str(e.secretMap()["kubeconfig"]),
 		Region:        e.KamajiRegion(),
@@ -75,6 +83,7 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			ExternalNetworkID: str(cl["externalNetworkId"]),
 			DNSZone:           str(cl["dnsZone"]),
 			Versions:          versions,
+			Flavors:           flavors,
 		},
 	}
 	if cfg.ArgoNamespace == "" {

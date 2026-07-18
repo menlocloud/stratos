@@ -7,10 +7,13 @@ package client
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gophercloud/gophercloud/v2/openstack"
+	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/applicationcredentials"
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/projects"
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/roles"
+	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/tokens"
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/users"
 )
 
@@ -159,4 +162,58 @@ func (c *Client) GrantProjectUserRole(ctx context.Context, projectID, userID, ro
 		return err
 	}
 	return roles.Assign(ctx, ic, roleID, roles.AssignOpts{UserID: userID, ProjectID: projectID}).ExtractErr()
+}
+
+// currentUserID extracts the authenticated user's id off the session token — the owner every
+// application credential minted through this client belongs to. Only password-auth sessions
+// carry it (keystone refuses appcred-minting from an appcred-authenticated token anyway).
+func (c *Client) currentUserID() (string, error) {
+	res, ok := c.provider.GetAuthResult().(tokens.CreateResult)
+	if !ok {
+		return "", fmt.Errorf("cloud: auth session carries no keystone token (appcred-authenticated?)")
+	}
+	u, err := res.ExtractUser()
+	if err != nil {
+		return "", err
+	}
+	return u.ID, nil
+}
+
+// CreateAppCredential mints a keystone application credential owned by the authenticated user
+// and scoped to the session token's project — call it on a client built with
+// ClientConfigForProject so the credential is locked to the CUSTOMER's tenant (kamaji plan D4:
+// the per-cluster credential CAPO/OCCM hold is bounded to that one project). Returns the owning
+// user id (needed for revocation) plus the credential id/secret — the secret is shown by
+// keystone exactly once, here.
+func (c *Client) CreateAppCredential(ctx context.Context, name, description string) (userID, id, secret string, err error) {
+	userID, err = c.currentUserID()
+	if err != nil {
+		return "", "", "", err
+	}
+	ic, err := openstack.NewIdentityV3(c.provider, c.endpointOpts())
+	if err != nil {
+		return "", "", "", err
+	}
+	ac, err := applicationcredentials.Create(ctx, ic, userID, applicationcredentials.CreateOpts{
+		Name:        name,
+		Description: description,
+	}).Extract()
+	if err != nil {
+		return "", "", "", fmt.Errorf("cloud: create application credential: %w", err)
+	}
+	return userID, ac.ID, ac.Secret, nil
+}
+
+// DeleteAppCredential revokes an application credential (absent = success — revocation is
+// idempotent for the finalize-orphans retry loop).
+func (c *Client) DeleteAppCredential(ctx context.Context, userID, id string) error {
+	ic, err := openstack.NewIdentityV3(c.provider, c.endpointOpts())
+	if err != nil {
+		return err
+	}
+	err = applicationcredentials.Delete(ctx, ic, userID, id).ExtractErr()
+	if IsNotFound(err) {
+		return nil
+	}
+	return err
 }

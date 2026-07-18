@@ -75,9 +75,11 @@ func (h *Handler) uiMenuItems(r *http.Request) map[string]any {
 	}
 	for i := range services {
 		es := &services[i]
-		// OpenStack (compute/network/… + Swift object-store) AND ceph-s3 (object-store only) both
-		// contribute menu items — a ceph-only project must still get its Object Storage entry.
-		if es.IsDisabled() || (es.Provider() != "openstack" && !es.IsCephS3()) {
+		// OpenStack (compute/network/… + Swift object-store), ceph-s3 (object-store only) AND
+		// kamaji (kubernetes only) all contribute menu items — a ceph-only project must still get
+		// its Object Storage entry, and the kamaji "kubernetes" slug is what un-hides the client
+		// Kubernetes nav (AppShell gates on menu.items).
+		if es.IsDisabled() || (es.Provider() != "openstack" && !es.IsCephS3() && !es.IsKamaji()) {
 			continue
 		}
 		svcMap, _ := es.Config["services"].(map[string]any)
@@ -590,11 +592,16 @@ func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 	// kamaji: the curated k8s VERSION list (keys only — image ids are operator detail) feeds the
 	// client create/upgrade pickers. Config is not a secret; still expose the minimum needed.
 	if es.IsKamaji() {
+		defaults := es.KamajiConfig().Defaults
 		versions := []any{}
-		for v := range es.KamajiConfig().Defaults.Versions {
+		for v := range defaults.Versions {
 			versions = append(versions, v)
 		}
 		dto["kubernetesVersions"] = versions
+		// Optional node-flavor allowlist: when set, the client node-group picker offers only these.
+		if len(defaults.Flavors) > 0 {
+			dto["kubernetesFlavorIds"] = defaults.Flavors
+		}
 	}
 	return dto
 }

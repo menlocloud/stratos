@@ -171,16 +171,45 @@ func (c *Client) EnsureNamespace(ctx context.Context, name string, labels map[st
 	return err
 }
 
-// ApplySecret applies an Opaque secret with stringData (create-or-update).
-func (c *Client) ApplySecret(ctx context.Context, ns, name string, stringData map[string]string, labels map[string]string) error {
+// GetNamespace returns the namespace object, or nil when absent.
+func (c *Client) GetNamespace(ctx context.Context, name string) (map[string]any, error) {
+	return c.get(ctx, pathNamespaces, name)
+}
+
+// DeleteNamespace removes the namespace (absent = success). Kubernetes finalizes the delete
+// asynchronously, cascading to everything still inside.
+func (c *Client) DeleteNamespace(ctx context.Context, name string) error {
+	return c.delete(ctx, pathNamespaces, name)
+}
+
+// ApplySecret applies an Opaque secret with stringData (create-or-update). annotations may be nil.
+func (c *Client) ApplySecret(ctx context.Context, ns, name string, stringData map[string]string, labels, annotations map[string]string) error {
+	meta := map[string]any{"name": name, "namespace": ns, "labels": toAny(labels)}
+	if len(annotations) > 0 {
+		meta["annotations"] = toAny(annotations)
+	}
 	_, err := c.apply(ctx, fmt.Sprintf(pathSecrets, ns), name, map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"metadata":   map[string]any{"name": name, "namespace": ns, "labels": toAny(labels)},
+		"metadata":   meta,
 		"type":       "Opaque",
 		"stringData": toAny(stringData),
 	})
 	return err
+}
+
+// ListSecrets lists secrets in ns filtered by labelSelector, as full objects (metadata incl.
+// labels/annotations — the orphan-finalize scan reads the appcred annotations off them).
+func (c *Client) ListSecrets(ctx context.Context, ns, labelSelector string) ([]map[string]any, error) {
+	return c.list(ctx, fmt.Sprintf(pathSecrets, ns), labelSelector)
+}
+
+// ListSecretsAllNamespaces lists label-matched secrets across EVERY namespace (GET
+// /api/v1/secrets) — the service-level orphan sweep, which must find leftovers of projects
+// whose stratos doc is already gone (scheduled deletion) and so cannot be enumerated per
+// project. metadata.namespace on each item routes the follow-up calls.
+func (c *Client) ListSecretsAllNamespaces(ctx context.Context, labelSelector string) ([]map[string]any, error) {
+	return c.list(ctx, "/api/v1/secrets", labelSelector)
 }
 
 // GetSecretData returns the base64-decoded .data of a secret, or nil when absent.

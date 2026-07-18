@@ -8,9 +8,12 @@ func BuildApplication(cfg Config, spec ClusterSpec, serviceID, chartVersion stri
 	if chartVersion == "" {
 		chartVersion = cfg.ChartVersion
 	}
+	// The dedicated AppProject is the D3 guardrail (sourceRepos/destinations constrained —
+	// deploy/mgmt-cluster/appproject.yaml). Defaulting to ArgoCD's unrestricted "default"
+	// project would silently drop it, so the fallback is the guardrail project's name.
 	project := cfg.ArgoProject
 	if project == "" {
-		project = "default"
+		project = "stratos-k8s"
 	}
 	return map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1",

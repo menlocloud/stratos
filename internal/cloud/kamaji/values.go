@@ -56,18 +56,28 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 	if d.ExternalNetworkID != "" {
 		values["clusterNetworking"] = map[string]any{"externalNetworkId": d.ExternalNetworkID}
 	}
-	if issuer := spec.OIDC["issuerUrl"]; issuer != "" {
-		oidc := map[string]any{"issuerUrl": issuer}
-		for _, k := range []string{"clientId", "usernameClaim", "usernamePrefix", "groupsClaim", "groupsPrefix", "signingAlgs"} {
-			if v := spec.OIDC[k]; v != "" {
-				oidc[k] = v
-			}
-		}
+	if oidc := OIDCValues(spec.OIDC); oidc != nil {
 		values["oidc"] = oidc
 	}
 
 	values["nodeGroups"] = NodeGroupValues(d, spec.Version, spec.NodeGroups)
 	return values
+}
+
+// OIDCValues renders the chart's oidc block from the customer-supplied config — shared by
+// BuildValues and the SET_OIDC action. nil (= OIDC disabled) when issuerUrl is empty.
+func OIDCValues(oidc map[string]string) map[string]any {
+	issuer := oidc["issuerUrl"]
+	if issuer == "" {
+		return nil
+	}
+	out := map[string]any{"issuerUrl": issuer}
+	for _, k := range []string{"clientId", "usernameClaim", "usernamePrefix", "groupsClaim", "groupsPrefix", "signingAlgs"} {
+		if v := oidc[k]; v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // NodeGroupValues renders the chart's nodeGroups value — shared by BuildValues and the

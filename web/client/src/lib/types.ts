@@ -52,6 +52,10 @@ export type CloudResource = {
   name?: string
   status?: string
   externalId?: string
+  // Which cloud service/region the resource lives on — set on rows synced after the fields
+  // were introduced; consumers must fall back to a project-level location when absent.
+  serviceId?: string
+  region?: string
   projectId?: string
   createdAt?: string
   info?: { createdAt?: string; updatedAt?: string }
@@ -64,6 +68,10 @@ export type ProjectService = {
   name?: string
   type?: string
   status?: string
+  // Managed-Kubernetes (kamaji) services only: curated cluster versions, plus an optional
+  // admin allowlist of node-group flavor ids (present and non-empty only when configured).
+  kubernetesVersions?: string[]
+  kubernetesFlavorIds?: string[]
   [k: string]: unknown
 }
 

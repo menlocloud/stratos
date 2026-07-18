@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/menlocloud/stratos/internal/cloud/client"
 )
@@ -58,6 +59,15 @@ func TestSpecValidate(t *testing.T) {
 	bad.NodeGroups[1].Max = 0
 	if err := bad.Validate(d); err == nil {
 		t.Error("autoscale max < min: want error")
+	}
+	// Flavor allowlist: when configured, only listed flavors pass.
+	d.Flavors = []string{"m5.large"}
+	if err := testSpec().Validate(d); err == nil || !strings.Contains(err.Error(), "not offered") {
+		t.Errorf("allowlist: m5.xlarge must be refused: %v", err)
+	}
+	d.Flavors = []string{"m5.large", "m5.xlarge"}
+	if err := testSpec().Validate(d); err != nil {
+		t.Errorf("allowlist covering both flavors: %v", err)
 	}
 }
 
@@ -173,6 +183,7 @@ func TestCloudsYAML(t *testing.T) {
 type fakeAPI struct {
 	namespaces map[string]map[string]string
 	secrets    map[string]map[string]string // ns/name → stringData
+	secretObjs map[string]map[string]any    // ns/name → full object (metadata for ListSecrets)
 	apps       map[string]map[string]any    // ns/name → object
 	tcps       map[string]map[string]any
 	mds        []map[string]any
@@ -183,6 +194,7 @@ func newFakeAPI() *fakeAPI {
 	return &fakeAPI{
 		namespaces: map[string]map[string]string{},
 		secrets:    map[string]map[string]string{},
+		secretObjs: map[string]map[string]any{},
 		apps:       map[string]map[string]any{},
 		tcps:       map[string]map[string]any{},
 	}
@@ -192,9 +204,57 @@ func (f *fakeAPI) EnsureNamespace(_ context.Context, name string, labels map[str
 	f.namespaces[name] = labels
 	return nil
 }
-func (f *fakeAPI) ApplySecret(_ context.Context, ns, name string, sd map[string]string, _ map[string]string) error {
-	f.secrets[ns+"/"+name] = sd
+func (f *fakeAPI) GetNamespace(_ context.Context, name string) (map[string]any, error) {
+	labels, ok := f.namespaces[name]
+	if !ok {
+		return nil, nil
+	}
+	l := map[string]any{}
+	for k, v := range labels {
+		l[k] = v
+	}
+	return map[string]any{"metadata": map[string]any{"name": name, "labels": l}}, nil
+}
+func (f *fakeAPI) DeleteNamespace(_ context.Context, name string) error {
+	delete(f.namespaces, name)
+	f.deleted = append(f.deleted, "namespace:"+name)
 	return nil
+}
+func (f *fakeAPI) ApplySecret(_ context.Context, ns, name string, sd map[string]string, labels, annotations map[string]string) error {
+	f.secrets[ns+"/"+name] = sd
+	meta := map[string]any{"name": name, "namespace": ns}
+	l := map[string]any{}
+	for k, v := range labels {
+		l[k] = v
+	}
+	meta["labels"] = l
+	if len(annotations) > 0 {
+		a := map[string]any{}
+		for k, v := range annotations {
+			a[k] = v
+		}
+		meta["annotations"] = a
+	}
+	f.secretObjs[ns+"/"+name] = map[string]any{"metadata": meta}
+	return nil
+}
+func (f *fakeAPI) ListSecrets(_ context.Context, ns, labelSelector string) ([]map[string]any, error) {
+	var out []map[string]any
+	for k, v := range f.secretObjs {
+		if strings.HasPrefix(k, ns+"/") && matchSelector(v, labelSelector) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+func (f *fakeAPI) ListSecretsAllNamespaces(_ context.Context, labelSelector string) ([]map[string]any, error) {
+	var out []map[string]any
+	for _, v := range f.secretObjs {
+		if matchSelector(v, labelSelector) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
 }
 func (f *fakeAPI) GetSecretData(_ context.Context, ns, name string) (map[string][]byte, error) {
 	sd, ok := f.secrets[ns+"/"+name]
@@ -209,6 +269,7 @@ func (f *fakeAPI) GetSecretData(_ context.Context, ns, name string) (map[string]
 }
 func (f *fakeAPI) DeleteSecret(_ context.Context, ns, name string) error {
 	delete(f.secrets, ns+"/"+name)
+	delete(f.secretObjs, ns+"/"+name)
 	f.deleted = append(f.deleted, "secret:"+ns+"/"+name)
 	return nil
 }
@@ -302,12 +363,146 @@ func TestServiceCreateDelete(t *testing.T) {
 	if err := svc.DeleteCluster(ctx, "p1", "stc-abcd1234"); err != nil {
 		t.Fatalf("DeleteCluster: %v", err)
 	}
-	if len(api.apps) != 0 || len(api.secrets) != 0 {
-		t.Error("delete left objects behind")
+	if len(api.apps) != 0 {
+		t.Error("delete left the application behind")
+	}
+	// The clouds.yaml secret must SURVIVE the cluster delete — CAPO/OCCM need it while the
+	// ArgoCD cascade deletes the worker VMs / LB. FinalizeOrphans reaps it afterwards.
+	if len(api.secrets) != 1 {
+		t.Error("clouds.yaml secret must outlive the application delete")
 	}
 	// Idempotent: deleting again is fine.
 	if err := svc.DeleteCluster(ctx, "p1", "stc-abcd1234"); err != nil {
 		t.Fatalf("DeleteCluster twice: %v", err)
+	}
+}
+
+func TestFinalizeOrphans(t *testing.T) {
+	api := newFakeAPI()
+	svc := NewWithAPI(api, testCfg(), "svc-1")
+	ctx := context.Background()
+	spec := testSpec()
+	spec.AppCredID, spec.AppCredUserID, spec.AppCredServiceID = "cred-1", "user-1", "svc-os"
+	if _, err := svc.CreateCluster(ctx, spec, client.Config{AuthURL: "https://k/v3", Username: "u", Password: "p", ProjectID: "ext-1", Region: "az1"}); err != nil {
+		t.Fatal(err)
+	}
+	var revoked []string
+	revoke := func(_ context.Context, osSvcID, userID, credID string) error {
+		revoked = append(revoked, osSvcID+"/"+userID+"/"+credID)
+		return nil
+	}
+
+	// Cluster still alive → nothing happens.
+	if _, err := svc.FinalizeOrphans(ctx, "p1", revoke); err != nil {
+		t.Fatalf("FinalizeOrphans (live): %v", err)
+	}
+	if len(revoked) != 0 || len(api.secrets) != 1 {
+		t.Fatal("live cluster must not be finalized")
+	}
+
+	// Application deleted, but the TCP (cascade in flight) still exists → still nothing, and the
+	// leftover is reported as pending (teardown defers tenant deletion on this signal).
+	if err := svc.DeleteCluster(ctx, "p1", spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	api.tcps["st-p1/"+spec.ID] = map[string]any{"metadata": map[string]any{"name": spec.ID}}
+	pending, err := svc.FinalizeOrphans(ctx, "p1", revoke)
+	if err != nil {
+		t.Fatalf("FinalizeOrphans (cascade): %v", err)
+	}
+	if pending != 1 || len(revoked) != 0 || len(api.secrets) != 1 {
+		t.Fatalf("in-flight cascade must stay pending (pending=%d)", pending)
+	}
+
+	// Grace window: a fresh secret (mid-create signature) must never be treated as an orphan
+	// even with no Application/TCP — pending, untouched.
+	delete(api.tcps, "st-p1/"+spec.ID)
+	meta := api.secretObjs["st-p1/"+CloudSecretName(spec.ID)]["metadata"].(map[string]any)
+	meta["creationTimestamp"] = time.Now().UTC().Format(time.RFC3339)
+	pending, err = svc.FinalizeOrphans(ctx, "p1", revoke)
+	if err != nil {
+		t.Fatalf("FinalizeOrphans (grace): %v", err)
+	}
+	if pending != 1 || len(revoked) != 0 || len(api.secrets) != 1 {
+		t.Fatalf("fresh secret must ride out the grace window (pending=%d)", pending)
+	}
+
+	// Cascade done (TCP gone, secret old) → appcred revoked (annotations incl. minting service),
+	// secret deleted, and the now-empty managed namespace GC'd.
+	meta["creationTimestamp"] = time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+	if _, err := svc.FinalizeOrphans(ctx, "p1", revoke); err != nil {
+		t.Fatalf("FinalizeOrphans (done): %v", err)
+	}
+	if len(revoked) != 1 || revoked[0] != "svc-os/user-1/cred-1" {
+		t.Errorf("revoked = %v", revoked)
+	}
+	if len(api.secrets) != 0 {
+		t.Error("orphan secret not reaped")
+	}
+	if _, ok := api.namespaces["st-p1"]; ok {
+		t.Error("empty managed namespace not GC'd")
+	}
+
+	// The service-level sweep sees the same world (labels carry service+project) — a second
+	// cluster's leftovers finalize through FinalizeAllOrphans without any project doc.
+	spec2 := testSpec()
+	spec2.ID = "stc-second01"
+	spec2.AppCredID, spec2.AppCredUserID, spec2.AppCredServiceID = "cred-2", "user-1", "svc-os"
+	if _, err := svc.CreateCluster(ctx, spec2, client.Config{AuthURL: "https://k/v3", Username: "u", Password: "p", ProjectID: "ext-1", Region: "az1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteCluster(ctx, "p1", spec2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.FinalizeAllOrphans(ctx, revoke); err != nil {
+		t.Fatalf("FinalizeAllOrphans: %v", err)
+	}
+	if len(revoked) != 2 || revoked[1] != "svc-os/user-1/cred-2" {
+		t.Errorf("sweep revoked = %v", revoked)
+	}
+	if len(api.secrets) != 0 {
+		t.Error("sweep left the orphan secret")
+	}
+
+	// Fail-closed: a failing revoker keeps the secret (the only revocation record).
+	spec3 := testSpec()
+	spec3.ID = "stc-third002"
+	spec3.AppCredID, spec3.AppCredUserID, spec3.AppCredServiceID = "cred-3", "user-1", "svc-os"
+	if _, err := svc.CreateCluster(ctx, spec3, client.Config{AuthURL: "https://k/v3", Username: "u", Password: "p", ProjectID: "ext-1", Region: "az1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteCluster(ctx, "p1", spec3.ID); err != nil {
+		t.Fatal(err)
+	}
+	failing := func(_ context.Context, _, _, _ string) error { return context.DeadlineExceeded }
+	pending, err = svc.FinalizeOrphans(ctx, "p1", failing)
+	if err == nil || pending != 1 {
+		t.Errorf("failing revoker: want pending=1 + error, got pending=%d err=%v", pending, err)
+	}
+	if len(api.secrets) != 1 {
+		t.Error("failing revoker must keep the revocation record")
+	}
+}
+
+func TestValidateUpgradePath(t *testing.T) {
+	ok := [][2]string{{"1.34.2", "1.34.5"}, {"1.34.2", "1.35.0"}, {"v1.34.2", "1.35.4"}}
+	for _, c := range ok {
+		if err := ValidateUpgradePath(c[0], c[1]); err != nil {
+			t.Errorf("%s → %s: %v", c[0], c[1], err)
+		}
+	}
+	bad := [][2]string{
+		{"1.35.4", "1.35.4"}, // same version
+		{"1.35.4", "1.34.2"}, // minor downgrade
+		{"1.35.4", "1.35.1"}, // patch downgrade
+		{"1.33.0", "1.35.0"}, // two-minor jump
+		{"1.35.4", "2.0.0"},  // major change
+		{"junk", "1.35.4"},   // unparseable
+	}
+	for _, c := range bad {
+		if err := ValidateUpgradePath(c[0], c[1]); err == nil {
+			t.Errorf("%s → %s: want error", c[0], c[1])
+		}
 	}
 }
 

@@ -1,8 +1,11 @@
 // Managed Kubernetes (kamaji provider) — list/create/manage clusters. The cloud scope for
-// cluster CRUD is the KAMAJI service's location; the flavor picker for node groups reads the
-// project's OPENSTACK service (worker VMs run in the customer's own tenant). Actions map to
-// Go cloud_kamaji.go: create/delete + GET_KUBECONFIG / UPGRADE / SET_NODE_GROUPS.
-import { useMemo, useState } from "react"
+// cluster CRUD is a KAMAJI location (the create wizard offers a picker when the project has
+// more than one); the flavor picker for node groups reads the project's OPENSTACK service
+// (worker VMs run in the customer's own tenant) and mirrors CreateServerPage's flavor gating:
+// quota + region GPU capacity + no ephemeral/swap flavors + the admin's kubernetesFlavorIds
+// allowlist. Actions map to Go cloud_kamaji.go: create/delete + GET_KUBECONFIG / UPGRADE /
+// SET_NODE_GROUPS / SET_OIDC.
+import { useCallback, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
@@ -11,6 +14,7 @@ import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -30,8 +34,11 @@ import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch, type CloudScope } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useLocations, useProjectId, useProjectServices } from "@/lib/hooks"
-import type { CloudResource } from "@/lib/types"
+import {
+  useLocations, useProject, useProjectGpuCapacity, useProjectId, useProjectQuota, useProjectServices,
+} from "@/lib/hooks"
+import { gpuCapacityViolations, serverQuotaViolations } from "@/lib/quota"
+import type { CloudResource, Location } from "@/lib/types"
 
 type Cluster = Record<string, any>
 type NodeGroupRow = {
@@ -44,13 +51,59 @@ type NodeGroupRow = {
   labels: string // "k=v,k2=v2"
   taints: string // "key=val:NoSchedule,…"
 }
-type Flavor = { externalId?: string; id?: string; name?: string; vcpus?: number; ram?: number }
+// LIST_FLAVORS rows come back in the same shape CreateServerPage consumes: the OpenStack
+// flavor document nested under `data`, with the nova id mirrored as `externalId`.
+type Flavor = {
+  externalId?: string
+  data?: {
+    id?: string
+    name?: string
+    vcpus?: number
+    ram?: number
+    disk?: number
+    ephemeral?: number
+    swap?: number
+    extra_specs?: Record<string, unknown>
+  }
+}
+// What the node-group flavor Select renders — precomputed at page level so the create wizard
+// and the manage sheet share identical filtering/gating.
+type FlavorOption = {
+  id: string
+  name: string
+  spec?: string // "4 vCPU · 8 GB RAM"
+  blocked?: boolean // exceeds project quota or region GPU capacity — must not be picked
+}
+
+type OidcDraft = {
+  issuerUrl: string
+  clientId: string
+  usernameClaim: string
+  usernamePrefix: string
+  groupsClaim: string
+  groupsPrefix: string
+}
+const emptyOidc: OidcDraft = {
+  issuerUrl: "", clientId: "", usernameClaim: "", usernamePrefix: "", groupsClaim: "", groupsPrefix: "",
+}
+
+// Trimmed, empty-free OIDC payload — `{}` (absent issuerUrl) means "disable OIDC" server-side.
+function oidcToBody(o: OidcDraft): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(o)
+      .map(([k, v]) => [k, v.trim()])
+      .filter(([, v]) => v !== ""),
+  )
+}
 
 const emptyGroup: NodeGroupRow = { name: "workers", flavorId: "", count: "3", autoscale: false, min: "1", max: "5", labels: "", taints: "" }
 
 function cluster(r: CloudResource): Cluster {
   return (r.data?.cluster as Cluster) ?? {}
 }
+
+// Stable key for a location picker — the API array order is not stable, so never key by index.
+const locKeyOf = (l: Location) => `${l.serviceId ?? ""}::${l.region ?? ""}`
 
 // Newest-first semver sort for the curated version list.
 function sortVersions(vs: string[]): string[] {
@@ -62,6 +115,40 @@ function sortVersions(vs: string[]): string[] {
     }
     return 0
   })
+}
+
+function parseVersion(v: string): [number, number, number] {
+  const p = v.trim().replace(/^v/i, "").split(".").map((n) => Number(n) || 0)
+  return [p[0] ?? 0, p[1] ?? 0, p[2] ?? 0]
+}
+
+// Mirrors the server's UPGRADE validation: same major AND (same minor with a higher patch,
+// OR exactly the next minor). Downgrades and jumps of two or more minors are rejected.
+function isUpgradeTarget(current: string, target: string): boolean {
+  if (!current.trim() || !target.trim() || current === target) return false
+  const [cMaj, cMin, cPat] = parseVersion(current)
+  const [tMaj, tMin, tPat] = parseVersion(target)
+  if (tMaj !== cMaj) return false
+  if (tMin === cMin) return tPat > cPat
+  return tMin === cMin + 1
+}
+
+// Total desired worker capacity across node groups — fixed groups contribute `count`,
+// autoscale groups their min–max range. Rendered as "n" when min === max, else "min–max".
+function desiredNodes(c: Cluster): { min: number; max: number } {
+  let min = 0
+  let max = 0
+  for (const g of (c.node_groups as Cluster[]) ?? []) {
+    if (g.autoscale === true) {
+      min += Number(g.min) || 0
+      max += Number(g.max) || 0
+    } else {
+      const n = Number(g.count ?? g.replicas) || 0
+      min += n
+      max += n
+    }
+  }
+  return { min, max }
 }
 
 function parseLabels(s: string): Record<string, string> | undefined {
@@ -88,13 +175,43 @@ function groupsToData(groups: NodeGroupRow[]) {
   }))
 }
 
+// rowsToSyncGroups mirrors the sync payload's snake_case node_groups shape for the optimistic
+// cache patch after SET_NODE_GROUPS (phase/ready counts are unknown until the next sync and
+// are intentionally left out).
+function rowsToSyncGroups(rows: NodeGroupRow[]): Cluster[] {
+  return rows.map((g) => ({
+    name: g.name.trim(),
+    flavor_id: g.flavorId,
+    ...(g.autoscale
+      ? { autoscale: true, min: Number(g.min), max: Number(g.max) }
+      : { count: Number(g.count) }),
+    ...(parseLabels(g.labels) ? { labels: parseLabels(g.labels) } : {}),
+    ...(g.taints.trim() ? { taints: g.taints.split(",").map((t) => t.trim()).filter(Boolean) } : {}),
+  }))
+}
+
+// The SET_OIDC request body is camelCase; the sync payload's cluster.oidc is snake_case.
+const oidcSnakeKeys: Record<string, string> = {
+  issuerUrl: "issuer_url",
+  clientId: "client_id",
+  usernameClaim: "username_claim",
+  usernamePrefix: "username_prefix",
+  groupsClaim: "groups_claim",
+  groupsPrefix: "groups_prefix",
+}
+function oidcToSyncShape(oidc: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(oidc).map(([k, v]) => [oidcSnakeKeys[k] ?? k, v]))
+}
+
 function groupValid(g: NodeGroupRow): boolean {
   if (!g.name.trim() || !g.flavorId) return false
   if (g.autoscale) return Number(g.min) >= 1 && Number(g.max) >= Number(g.min)
   return Number(g.count) >= 1
 }
 
-// dataGroupsToRows prefills the edit dialog from the cached cluster payload (snake_case sync shape).
+// dataGroupsToRows prefills the edit dialog from the cached cluster payload (snake_case sync
+// shape) — including labels/taints, since SET_NODE_GROUPS is a full replace and an empty
+// prefill would silently strip them on save.
 function dataGroupsToRows(c: Cluster): NodeGroupRow[] {
   const groups = (c.node_groups as Cluster[]) ?? []
   if (!groups.length) return [{ ...emptyGroup }]
@@ -105,8 +222,10 @@ function dataGroupsToRows(c: Cluster): NodeGroupRow[] {
     autoscale: g.autoscale === true,
     min: String(g.min ?? 1),
     max: String(g.max ?? 5),
-    labels: "",
-    taints: "",
+    labels: Object.entries((g.labels as Record<string, string>) ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join(","),
+    taints: ((g.taints as string[]) ?? []).map(String).join(","),
   }))
 }
 
@@ -115,17 +234,49 @@ export default function KubernetesPage() {
   const qc = useQueryClient()
   const locations = useLocations(pid)
   const services = useProjectServices(pid)
+  const project = useProject(pid).project
 
-  // Cluster CRUD scope = the kamaji service; flavors come from the OpenStack service.
-  const kLoc = locations.data?.find((l) => l.provider === "kamaji")
+  // Cluster CRUD scope = a kamaji location; flavors come from the OpenStack service.
+  const kLocs = useMemo(
+    () => (locations.data ?? []).filter((l) => l.provider === "kamaji" && l.serviceId && l.region),
+    [locations.data],
+  )
+  const kLoc = kLocs[0]
   const osLoc = locations.data?.find((l) => l.provider !== "kamaji" && l.provider !== "ceph-s3")
   const kScope: CloudScope | undefined = kLoc?.serviceId && kLoc?.region ? { serviceId: kLoc.serviceId, region: kLoc.region } : undefined
   const osScope: CloudScope | undefined = osLoc?.serviceId && osLoc?.region ? { serviceId: osLoc.serviceId, region: osLoc.region } : undefined
 
-  const versions = useMemo(() => {
-    const svc = services.data?.find((s) => s.id === kLoc?.serviceId)
-    return sortVersions(((svc?.kubernetesVersions as string[]) ?? []).filter(Boolean))
-  }, [services.data, kLoc?.serviceId])
+  // The create wizard's chosen kamaji location (auto-selects the sole one; picker when several).
+  const [createLocKey, setCreateLocKey] = useState("")
+  const createLoc = kLocs.find((l) => locKeyOf(l) === createLocKey) ?? kLocs[0]
+  const createScope: CloudScope | undefined =
+    createLoc?.serviceId && createLoc?.region ? { serviceId: createLoc.serviceId, region: createLoc.region } : undefined
+
+  // Curated versions live on the kamaji service DTO — per service, so per selected location.
+  const versionsFor = useCallback(
+    (serviceId?: string) =>
+      sortVersions((services.data?.find((s) => s.id === serviceId)?.kubernetesVersions ?? []).filter(Boolean)),
+    [services.data],
+  )
+  const createVersions = useMemo(() => versionsFor(createLoc?.serviceId), [versionsFor, createLoc?.serviceId])
+
+  // A cached cluster row records the kamaji service it lives on (serviceId/region on the
+  // resource DTO). With several kamaji locations attached, the ROW's own service — not
+  // whichever location happens to be first — must resolve the curated versions, the flavor
+  // allowlist and the x-service-id scope for actions; rows synced before those fields
+  // existed fall back to the first location.
+  const rowServiceId = useCallback(
+    (r: CloudResource) => r.serviceId || kLoc?.serviceId,
+    [kLoc?.serviceId],
+  )
+  const rowScope = useCallback(
+    (r: CloudResource): CloudScope | undefined => {
+      const serviceId = r.serviceId || kLoc?.serviceId
+      const region = r.region || kLocs.find((l) => l.serviceId === serviceId)?.region
+      return serviceId && region ? { serviceId, region } : undefined
+    },
+    [kLoc?.serviceId, kLocs],
+  )
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ["cloud", pid, "KUBERNETES_CLUSTER"],
@@ -144,6 +295,44 @@ export default function KubernetesPage() {
     enabled: !!pid && !!osScope,
     select: (d) => d?.result ?? [],
   })
+  // Same gating inputs CreateServerPage uses: live compute/GPU quota + region GPU capacity
+  // (capacity only fetched when the operator made it visible to the project).
+  const projectQuota = useProjectQuota(pid, osScope)
+  const gpuCapacity = useProjectGpuCapacity(pid, osScope, project?.gpuCapacityVisible === true)
+
+  // Node-group flavor options, filtered and gated exactly like the create-server wizard:
+  //  - no local ephemeral/swap disk (worker nodes boot from volume; backend rejects those),
+  //  - only ids on the kamaji service's kubernetesFlavorIds allowlist when one is configured,
+  //  - flavors that exceed the project quota or the region's GPU capacity cannot be picked.
+  const flavorOptionsFor = useCallback(
+    (kamajiServiceId?: string): FlavorOption[] => {
+      const allow = new Set(
+        (services.data?.find((s) => s.id === kamajiServiceId)?.kubernetesFlavorIds ?? []).filter(Boolean),
+      )
+      return (flavors.data ?? [])
+        .filter((f) => !(f.data?.ephemeral ?? 0) && !(f.data?.swap ?? 0))
+        .filter((f) => allow.size === 0 || allow.has(f.externalId ?? "") || allow.has(f.data?.id ?? ""))
+        .map((f) => {
+          const id = f.externalId ?? f.data?.id ?? ""
+          const blocked =
+            serverQuotaViolations(projectQuota.data, f).length > 0 ||
+            gpuCapacityViolations(gpuCapacity.data, f).length > 0
+          const spec = [
+            f.data?.vcpus != null ? `${f.data.vcpus} vCPU` : "",
+            f.data?.ram ? `${Math.round(f.data.ram / 1024)} GB RAM` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")
+          return { id, name: f.data?.name ?? id, spec, blocked }
+        })
+        .filter((o) => !!o.id)
+    },
+    [services.data, flavors.data, projectQuota.data, gpuCapacity.data],
+  )
+  const createFlavorOptions = useMemo(
+    () => flavorOptionsFor(createLoc?.serviceId),
+    [flavorOptionsFor, createLoc?.serviceId],
+  )
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["cloud", pid, "KUBERNETES_CLUSTER"] })
 
@@ -151,8 +340,23 @@ export default function KubernetesPage() {
   const [toDelete, setToDelete] = useState<CloudResource | null>(null)
   const [manageFor, setManageFor] = useState<CloudResource | null>(null)
 
+  // Optimistic patch of a cluster row after a successful action. The mgmt-cluster sync only
+  // refreshes the cached row minutes later, and the manage sheet re-reads this row — without
+  // the patch a second SET_NODE_GROUPS/SET_OIDC full-replaces with the STALE payload and
+  // silently reverts the first edit. The next sync overwrites with live truth, which is fine.
+  const patchCluster = useCallback(
+    (id: string, patch: Record<string, any>) => {
+      const apply = (r: CloudResource): CloudResource =>
+        r.id === id ? { ...r, data: { ...r.data, cluster: { ...(r.data?.cluster ?? {}), ...patch } } } : r
+      qc.setQueryData<CloudResource[]>(["cloud", pid, "KUBERNETES_CLUSTER"], (rows) => rows?.map(apply))
+      setManageFor((m) => (m && m.id === id ? apply(m) : m))
+    },
+    [qc, pid],
+  )
+
   const del = useMutation({
-    mutationFn: (id: string) => apiFetch(`/project/${pid}/cloud/${id}`, { method: "DELETE", cloud: kScope }),
+    mutationFn: (r: CloudResource) =>
+      apiFetch(`/project/${pid}/cloud/${r.id}`, { method: "DELETE", cloud: rowScope(r) }),
     onSuccess: () => {
       toast.success("Cluster deletion requested")
       setToDelete(null)
@@ -184,7 +388,17 @@ export default function KubernetesPage() {
         id: "version",
         accessorFn: (r) => (cluster(r).version as string) ?? "",
         header: sortableHeader("Version"),
-        cell: ({ getValue }) => <span className="font-mono text-sm">{getValue() || "—"}</span>,
+        cell: ({ row, getValue }) => {
+          const current = (getValue() as string) || ""
+          const upgradable =
+            !!current && versionsFor(rowServiceId(row.original)).some((v) => isUpgradeTarget(current, v))
+          return (
+            <span className="flex items-center gap-2">
+              <span className="font-mono text-sm">{current || "—"}</span>
+              {upgradable ? <Badge variant="outline">Upgrade available</Badge> : null}
+            </span>
+          )
+        },
       },
       {
         id: "status",
@@ -200,9 +414,12 @@ export default function KubernetesPage() {
       },
       {
         id: "nodes",
-        accessorFn: (r) => ((cluster(r).node_groups as Cluster[]) ?? []).length,
-        header: sortableHeader("Node groups"),
-        cell: ({ getValue }) => <span className="text-sm">{getValue()}</span>,
+        accessorFn: (r) => desiredNodes(cluster(r)).min,
+        header: sortableHeader("Nodes"),
+        cell: ({ row }) => {
+          const { min, max } = desiredNodes(cluster(row.original))
+          return <span className="text-sm tabular-nums">{max > min ? `${min}–${max}` : min}</span>
+        },
       },
       {
         id: "created",
@@ -236,7 +453,7 @@ export default function KubernetesPage() {
         ),
       },
     ],
-    [],
+    [versionsFor, rowServiceId],
   )
 
   return (
@@ -283,14 +500,20 @@ export default function KubernetesPage() {
         <ClusterFormDialog
           title="Create Kubernetes cluster"
           submitLabel="Create cluster"
-          versions={versions}
-          flavors={flavors.data ?? []}
+          versions={createVersions}
+          flavors={createFlavorOptions}
+          locations={kLocs}
+          locKey={createLoc ? locKeyOf(createLoc) : ""}
+          onLocKey={setCreateLocKey}
           onClose={() => setCreateOpen(false)}
           onSubmit={async (body) => {
+            // Target the CHOSEN location explicitly — with several kamaji locations the first
+            // one in the API array is not necessarily the one the user picked.
+            if (!createScope) throw new Error("Select a location first")
             await apiFetch(`/project/${pid}/cloud`, {
               method: "POST",
               body: { type: "KUBERNETES_CLUSTER", data: body },
-              cloud: kScope,
+              cloud: createScope,
             })
             toast.success(`Cluster "${body.name}" is being created`)
             setCreateOpen(false)
@@ -310,7 +533,7 @@ export default function KubernetesPage() {
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setToDelete(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => toDelete && del.mutate(toDelete.id)} disabled={del.isPending}>
+            <Button variant="destructive" onClick={() => toDelete && del.mutate(toDelete)} disabled={del.isPending}>
               {del.isPending ? "Deleting…" : "Delete"}
             </Button>
           </DialogFooter>
@@ -320,13 +543,13 @@ export default function KubernetesPage() {
       {manageFor && (
         <ClusterManageSheet
           pid={pid}
-          scope={kScope}
+          scope={rowScope(manageFor)}
           resource={manageFor}
-          versions={versions}
-          flavors={flavors.data ?? []}
+          versions={versionsFor(rowServiceId(manageFor))}
+          flavors={flavorOptionsFor(rowServiceId(manageFor))}
           onClose={() => setManageFor(null)}
           onDeleted={() => setToDelete(manageFor)}
-          onChanged={invalidate}
+          onPatch={(patch) => patchCluster(manageFor.id, patch)}
         />
       )}
     </>
@@ -335,21 +558,27 @@ export default function KubernetesPage() {
 
 // ── create/edit form ─────────────────────────────────────────────────────────
 function ClusterFormDialog({
-  title, submitLabel, versions, flavors, onClose, onSubmit,
+  title, submitLabel, versions, flavors, locations, locKey, onLocKey, onClose, onSubmit,
 }: {
   title: string
   submitLabel: string
   versions: string[]
-  flavors: Flavor[]
+  flavors: FlavorOption[]
+  locations: Location[]
+  locKey: string
+  onLocKey: (key: string) => void
   onClose: () => void
   onSubmit: (body: Record<string, any>) => Promise<void>
 }) {
   const [name, setName] = useState("")
-  const [version, setVersion] = useState(versions[0] ?? "")
+  // Derived, not effect-reset: switching location swaps the curated list, and a stale pick
+  // that is no longer offered falls back to the newest offered version.
+  const [versionSel, setVersionSel] = useState("")
+  const version = versions.includes(versionSel) ? versionSel : versions[0] ?? ""
   const [ha, setHa] = useState(true)
   const [groups, setGroups] = useState<NodeGroupRow[]>([{ ...emptyGroup }])
   const [oidcOpen, setOidcOpen] = useState(false)
-  const [oidc, setOidc] = useState({ issuerUrl: "", clientId: "", usernameClaim: "", groupsClaim: "" })
+  const [oidc, setOidc] = useState<OidcDraft>({ ...emptyOidc })
   const [allowedCidrs, setAllowedCidrs] = useState("")
   const [pending, setPending] = useState(false)
 
@@ -363,15 +592,7 @@ function ClusterFormDialog({
         version,
         ha,
         nodeGroups: groupsToData(groups),
-        ...(oidc.issuerUrl.trim()
-          ? {
-              oidc: Object.fromEntries(
-                Object.entries(oidc)
-                  .map(([k, v]) => [k, v.trim()])
-                  .filter(([, v]) => v !== ""),
-              ),
-            }
-          : {}),
+        ...(oidc.issuerUrl.trim() ? { oidc: oidcToBody(oidc) } : {}),
         ...(allowedCidrs.trim()
           ? { allowedCidrs: allowedCidrs.split(",").map((c) => c.trim()).filter(Boolean) }
           : {}),
@@ -394,6 +615,37 @@ function ClusterFormDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
+          {locations.length > 1 && (
+            <div className="grid gap-2">
+              <Label>Location</Label>
+              <Select
+                value={locKey}
+                onValueChange={(k) => {
+                  if (k === locKey) return
+                  onLocKey(k)
+                  // Offered flavors can differ per location's allowlist — clear picks so a
+                  // flavor from the previous location can't be submitted here.
+                  setGroups(groups.map((g) => ({ ...g, flavorId: "" })))
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {locations.map((l) => (
+                    <SelectItem key={locKeyOf(l)} value={locKeyOf(l)}>
+                      {l.displayName || l.region}
+                      {l.serviceName ? ` — ${l.serviceName}` : ""}
+                      {l.displayName && l.displayName !== l.region ? ` (${l.region})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Each location hosts its own clusters — offered versions and flavors may differ.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="k8s-name">Name</Label>
@@ -401,7 +653,7 @@ function ClusterFormDialog({
             </div>
             <div className="grid gap-2">
               <Label>Version</Label>
-              <Select value={version} onValueChange={setVersion}>
+              <Select value={version} onValueChange={setVersionSel}>
                 <SelectTrigger>
                   <SelectValue placeholder={versions.length ? "Pick a version" : "No versions offered"} />
                 </SelectTrigger>
@@ -439,24 +691,7 @@ function ClusterFormDialog({
           </button>
           {oidcOpen && (
             <div className="grid gap-4 rounded-lg border p-3">
-              <div className="grid gap-2">
-                <Label htmlFor="oidc-issuer">Issuer URL</Label>
-                <Input id="oidc-issuer" className="font-mono" value={oidc.issuerUrl} onChange={(e) => setOidc({ ...oidc, issuerUrl: e.target.value })} placeholder="https://auth.example.com" />
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div className="grid gap-2">
-                  <Label htmlFor="oidc-client">Client ID</Label>
-                  <Input id="oidc-client" value={oidc.clientId} onChange={(e) => setOidc({ ...oidc, clientId: e.target.value })} placeholder="kubernetes" />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="oidc-user">Username claim</Label>
-                  <Input id="oidc-user" value={oidc.usernameClaim} onChange={(e) => setOidc({ ...oidc, usernameClaim: e.target.value })} placeholder="email" />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="oidc-groups">Groups claim</Label>
-                  <Input id="oidc-groups" value={oidc.groupsClaim} onChange={(e) => setOidc({ ...oidc, groupsClaim: e.target.value })} placeholder="groups" />
-                </div>
-              </div>
+              <OidcFields value={oidc} onChange={setOidc} idPrefix="oidc" />
               <p className="text-xs text-muted-foreground">
                 Point the cluster's API server at your own identity provider. You manage RBAC bindings for OIDC users.
               </p>
@@ -474,12 +709,54 @@ function ClusterFormDialog({
   )
 }
 
+// Shared OIDC field set — used by the create wizard and the manage sheet's SET_OIDC dialog.
+function OidcFields({
+  value, onChange, idPrefix,
+}: {
+  value: OidcDraft
+  onChange: (v: OidcDraft) => void
+  idPrefix: string
+}) {
+  const set = (patch: Partial<OidcDraft>) => onChange({ ...value, ...patch })
+  return (
+    <>
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-issuer`}>Issuer URL</Label>
+        <Input id={`${idPrefix}-issuer`} className="font-mono" value={value.issuerUrl} onChange={(e) => set({ issuerUrl: e.target.value })} placeholder="https://auth.example.com" />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor={`${idPrefix}-client`}>Client ID</Label>
+          <Input id={`${idPrefix}-client`} value={value.clientId} onChange={(e) => set({ clientId: e.target.value })} placeholder="kubernetes" />
+        </div>
+        <div />
+        <div className="grid gap-2">
+          <Label htmlFor={`${idPrefix}-user`}>Username claim</Label>
+          <Input id={`${idPrefix}-user`} value={value.usernameClaim} onChange={(e) => set({ usernameClaim: e.target.value })} placeholder="email" />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor={`${idPrefix}-user-prefix`}>Username prefix</Label>
+          <Input id={`${idPrefix}-user-prefix`} value={value.usernamePrefix} onChange={(e) => set({ usernamePrefix: e.target.value })} placeholder="oidc:" />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor={`${idPrefix}-groups`}>Groups claim</Label>
+          <Input id={`${idPrefix}-groups`} value={value.groupsClaim} onChange={(e) => set({ groupsClaim: e.target.value })} placeholder="groups" />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor={`${idPrefix}-groups-prefix`}>Groups prefix</Label>
+          <Input id={`${idPrefix}-groups-prefix`} value={value.groupsPrefix} onChange={(e) => set({ groupsPrefix: e.target.value })} placeholder="oidc:" />
+        </div>
+      </div>
+    </>
+  )
+}
+
 function NodeGroupsEditor({
   groups, setGroups, flavors,
 }: {
   groups: NodeGroupRow[]
   setGroups: (g: NodeGroupRow[]) => void
-  flavors: Flavor[]
+  flavors: FlavorOption[]
 }) {
   const set = (i: number, patch: Partial<NodeGroupRow>) =>
     setGroups(groups.map((g, j) => (j === i ? { ...g, ...patch } : g)))
@@ -502,17 +779,24 @@ function NodeGroupsEditor({
               <Label>Flavor</Label>
               <Select value={g.flavorId} onValueChange={(v) => set(i, { flavorId: v })}>
                 <SelectTrigger>
-                  <SelectValue placeholder={flavors.length ? "Pick a flavor" : "Loading flavors…"} />
+                  <SelectValue placeholder={flavors.length ? "Pick a flavor" : "No flavors available"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {flavors.map((f, j) => {
-                    const id = f.externalId ?? f.id ?? String(j)
-                    return (
-                      <SelectItem key={id} value={id}>
-                        {f.name ?? id}
-                      </SelectItem>
-                    )
-                  })}
+                  {/* An existing group's flavor that is no longer offered (allowlist change,
+                      catalog drift) stays visible and submittable — SET_NODE_GROUPS is a full
+                      replace and must not silently drop untouched groups. */}
+                  {g.flavorId && !flavors.some((o) => o.id === g.flavorId) ? (
+                    <SelectItem value={g.flavorId}>
+                      <span className="font-mono text-xs">{g.flavorId}</span>
+                    </SelectItem>
+                  ) : null}
+                  {flavors.map((o) => (
+                    <SelectItem key={o.id} value={o.id} disabled={o.blocked}>
+                      {o.name}
+                      {o.spec ? <span className="text-xs text-muted-foreground"> {o.spec}</span> : null}
+                      {o.blocked ? <span className="text-xs text-destructive"> exceeds project quota</span> : null}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -565,25 +849,43 @@ function NodeGroupsEditor({
 
 // ── manage sheet ─────────────────────────────────────────────────────────────
 function ClusterManageSheet({
-  pid, scope, resource, versions, flavors, onClose, onDeleted, onChanged,
+  pid, scope, resource, versions, flavors, onClose, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
   resource: CloudResource
   versions: string[]
-  flavors: Flavor[]
+  flavors: FlavorOption[]
   onClose: () => void
   onDeleted: () => void
-  onChanged: () => void
+  // Optimistically applies a partial data.cluster patch to the cached row (and this sheet's
+  // resource prop) — MUST be called after every successful mutating action, or the next
+  // full-replace action would be built from stale data.
+  onPatch: (patch: Record<string, any>) => void
 }) {
   const c = cluster(resource)
   const name = (c.name as string) || resource.externalId || resource.id
   const groups = (c.node_groups as Cluster[]) ?? []
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [oidcEditOpen, setOidcEditOpen] = useState(false)
   const current = (c.version as string) ?? ""
-  const upgradeTargets = versions.filter((v) => v !== current)
+  // Only versions the server would accept (same major; same minor higher patch, or minor+1) —
+  // never offer downgrades or multi-minor jumps that would just 400.
+  const upgradeTargets = versions.filter((v) => isUpgradeTarget(current, v))
   const [target, setTarget] = useState("")
+
+  // Prefill the SET_OIDC form from the sync payload's oidc object (fields present only when
+  // set); the legacy oidc_issuer string covers clusters synced before the object existed.
+  const oidcData = (c.oidc as Record<string, unknown>) ?? {}
+  const oidcInitial: OidcDraft = {
+    issuerUrl: String(oidcData.issuer_url ?? c.oidc_issuer ?? ""),
+    clientId: String(oidcData.client_id ?? ""),
+    usernameClaim: String(oidcData.username_claim ?? ""),
+    usernamePrefix: String(oidcData.username_prefix ?? ""),
+    groupsClaim: String(oidcData.groups_claim ?? ""),
+    groupsPrefix: String(oidcData.groups_prefix ?? ""),
+  }
 
   const act = (action: string, data?: Record<string, any>) =>
     apiFetch<{ result?: any }>(`/project/${pid}/cloud/${resource.id}/action`, {
@@ -616,7 +918,7 @@ function ClusterManageSheet({
     onSuccess: () => {
       toast.success(`Upgrade to ${target} started — control plane first, then node groups roll`)
       setUpgradeOpen(false)
-      onChanged()
+      onPatch({ version: target })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -640,7 +942,10 @@ function ClusterManageSheet({
             </div>
             <div className="rounded-lg border bg-card p-3">
               <div className="text-xs text-muted-foreground">Version</div>
-              <div className="font-mono text-sm">{current || "—"}</div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-mono text-sm">{current || "—"}</span>
+                {upgradeTargets.length > 0 ? <Badge variant="outline">Upgrade available</Badge> : null}
+              </div>
             </div>
             <div className="rounded-lg border bg-card p-3">
               <div className="text-xs text-muted-foreground">Control plane</div>
@@ -656,20 +961,23 @@ function ClusterManageSheet({
             <Button size="sm" onClick={() => kubeconfig.mutate()} disabled={kubeconfig.isPending}>
               <Download className="size-4" /> {kubeconfig.isPending ? "Fetching…" : "Download kubeconfig"}
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setUpgradeOpen(true)} disabled={!upgradeTargets.length}>
+            <Button size="sm" variant="outline" onClick={() => setUpgradeOpen(true)}>
               Upgrade
             </Button>
             <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
               Edit node groups
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setOidcEditOpen(true)}>
+              Configure OIDC
             </Button>
             <Button size="sm" variant="destructive" onClick={onDeleted}>
               <Trash2 className="size-4" /> Delete
             </Button>
           </div>
 
-          {(c.oidc_issuer as string) && (
+          {oidcInitial.issuerUrl && (
             <p className="text-xs text-muted-foreground">
-              OIDC issuer: <span className="font-mono">{c.oidc_issuer as string}</span>
+              OIDC issuer: <span className="font-mono">{oidcInitial.issuerUrl}</span>
             </p>
           )}
 
@@ -719,24 +1027,36 @@ function ClusterManageSheet({
                 version's image. Workloads move as nodes are replaced.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-2 py-2">
-              <Label>Target version (current: {current || "—"})</Label>
-              <Select value={target} onValueChange={setTarget}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Pick a version" />
-                </SelectTrigger>
-                <SelectContent>
-                  {upgradeTargets.map((v) => (
-                    <SelectItem key={v} value={v}>{v}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {upgradeTargets.length === 0 ? (
+              <p className="py-2 text-sm text-muted-foreground">
+                This cluster is up to date — none of the offered versions is a valid upgrade
+                from <span className="font-mono">{current || "the current version"}</span>. Upgrades go one minor
+                version at a time (or to a newer patch of the same minor).
+              </p>
+            ) : (
+              <div className="grid gap-2 py-2">
+                <Label>Target version (current: {current || "—"})</Label>
+                <Select value={target} onValueChange={setTarget}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pick a version" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {upgradeTargets.map((v) => (
+                      <SelectItem key={v} value={v}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <DialogFooter>
-              <Button variant="outline" onClick={() => setUpgradeOpen(false)}>Cancel</Button>
-              <Button onClick={() => upgrade.mutate()} disabled={!target || upgrade.isPending}>
-                {upgrade.isPending ? "Starting…" : "Upgrade"}
+              <Button variant="outline" onClick={() => setUpgradeOpen(false)}>
+                {upgradeTargets.length === 0 ? "Close" : "Cancel"}
               </Button>
+              {upgradeTargets.length > 0 && (
+                <Button onClick={() => upgrade.mutate()} disabled={!upgradeTargets.includes(target) || upgrade.isPending}>
+                  {upgrade.isPending ? "Starting…" : "Upgrade"}
+                </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -749,9 +1069,23 @@ function ClusterManageSheet({
             onClose={() => setEditOpen(false)}
             onSubmit={async (rows) => {
               await act("SET_NODE_GROUPS", { nodeGroups: groupsToData(rows) })
+              onPatch({ node_groups: rowsToSyncGroups(rows) })
               toast.success("Node groups update started")
               setEditOpen(false)
-              onChanged()
+            }}
+          />
+        )}
+
+        {/* OIDC: prefilled form → SET_OIDC (empty issuer = disable) */}
+        {oidcEditOpen && (
+          <OidcEditDialog
+            initial={oidcInitial}
+            onClose={() => setOidcEditOpen(false)}
+            onSubmit={async (oidc) => {
+              await act("SET_OIDC", { oidc })
+              onPatch({ oidc: oidcToSyncShape(oidc), oidc_issuer: oidc.issuerUrl ?? "" })
+              toast.success(oidc.issuerUrl ? "OIDC update started" : "OIDC is being disabled")
+              setOidcEditOpen(false)
             }}
           />
         )}
@@ -760,11 +1094,54 @@ function ClusterManageSheet({
   )
 }
 
+function OidcEditDialog({
+  initial, onClose, onSubmit,
+}: {
+  initial: OidcDraft
+  onClose: () => void
+  onSubmit: (oidc: Record<string, string>) => Promise<void>
+}) {
+  const [oidc, setOidc] = useState<OidcDraft>(initial)
+  const [pending, setPending] = useState(false)
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>OIDC authentication</DialogTitle>
+          <DialogDescription>
+            Point the cluster's API server at your own identity provider. You manage RBAC bindings for OIDC users.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          <OidcFields value={oidc} onChange={setOidc} idPrefix="oidc-edit" />
+          <p className="text-xs text-muted-foreground">
+            Leave the issuer URL empty to disable OIDC authentication on this cluster.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => {
+              setPending(true)
+              onSubmit(oidcToBody(oidc))
+                .catch((e: Error) => toast.error(e.message))
+                .finally(() => setPending(false))
+            }}
+            disabled={pending}
+          >
+            {pending ? "Applying…" : "Apply"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function EditNodeGroupsDialog({
   initial, flavors, onClose, onSubmit,
 }: {
   initial: NodeGroupRow[]
-  flavors: Flavor[]
+  flavors: FlavorOption[]
   onClose: () => void
   onSubmit: (rows: NodeGroupRow[]) => Promise<void>
 }) {
