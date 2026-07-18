@@ -1,43 +1,80 @@
-{
-  "_id": "svc-openstack-dev",
-  "name": "dev region",
-  "type": "CLOUD",
-  "status": "PUBLIC",
-  "config": {
-    "identityUrl": "https://cloud-console.menlo.ai:5000/v3",
-    "provider": "openstack",
-    "shared": false,
-    "domainOnlyAdmin": false,
-    "vhi": false,
-    "gnocchiGranularity": 300,
-    "auth": {
-      "adminAuthType": "password",
-      "adminUsername": "dev",
-      "adminDomainName": "Default",
-      "adminProjectId": "01b258599b2f47f881a1cc3512fe09a4"
+[
+  {
+    "_id": "svc-openstack-dev",
+    "name": "dev region",
+    "type": "CLOUD",
+    "status": "PUBLIC",
+    "config": {
+      "identityUrl": "https://cloud-console.menlo.ai:5000/v3",
+      "provider": "openstack",
+      "shared": false,
+      "domainOnlyAdmin": false,
+      "vhi": false,
+      "gnocchiGranularity": 300,
+      "auth": {
+        "adminAuthType": "password",
+        "adminUsername": "dev",
+        "adminDomainName": "Default",
+        "adminProjectId": "01b258599b2f47f881a1cc3512fe09a4"
+      },
+      "customer": { "domainId": "default" },
+      "regions": {
+        "RegionOne": { "name": "RegionOne", "country": "", "displayName": "" }
+      },
+      "services": {
+        "compute": { "RegionOne": true },
+        "network": { "RegionOne": true },
+        "image":   { "RegionOne": true },
+        "metric":  { "RegionOne": true },
+        "dns":     { "RegionOne": true },
+        "key-manager": { "RegionOne": true },
+        "object-store": { "RegionOne": true },
+        "load-balancer": { "RegionOne": true },
+        "orchestration": { "RegionOne": true },
+        "sharev2": { "RegionOne": true }
+      },
+      "features": {},
+      "sharedSettings": {},
+      "objectStorage": {},
+      "provisioning": { "projectRoles": [] }
     },
-    "customer": { "domainId": "default" },
-    "regions": {
-      "RegionOne": { "name": "RegionOne", "country": "", "displayName": "" }
-    },
-    "services": {
-      "compute": { "RegionOne": true },
-      "network": { "RegionOne": true },
-      "image":   { "RegionOne": true },
-      "metric":  { "RegionOne": true },
-      "dns":     { "RegionOne": true },
-      "key-manager": { "RegionOne": true },
-      "object-store": { "RegionOne": true },
-      "load-balancer": { "RegionOne": true },
-      "orchestration": { "RegionOne": true },
-      "sharev2": { "RegionOne": true }
-    },
-    "features": {},
-    "sharedSettings": {},
-    "objectStorage": {},
-    "provisioning": { "projectRoles": [] }
+    "secret": {
+      "adminPassword": "__ADMIN_PASSWORD__"
+    }
   },
-  "secret": {
-    "adminPassword": "__ADMIN_PASSWORD__"
+  {
+    "_id": "svc-kamaji-dev",
+    "name": "kamaji dev (managed kubernetes)",
+    "type": "CLOUD",
+    "status": "PRIVATE",
+    "config": {
+      "provider": "kamaji",
+      "regions": {
+        "RegionOne": { "name": "RegionOne", "country": "", "displayName": "" }
+      },
+      "services": {
+        "kubernetes": { "RegionOne": true }
+      },
+      "argocd": {
+        "namespace": "argocd",
+        "project": "stratos-k8s",
+        "chartRepo": "ghcr.io/menlocloud/charts",
+        "chartName": "openstack-kamaji-cluster",
+        "chartVersion": "0.2.3"
+      },
+      "cluster": {
+        "dataStoreName": "default",
+        "floatingNetworkId": "__FLOATING_NETWORK_ID__",
+        "externalNetworkId": "__EXTERNAL_NETWORK_ID__",
+        "dnsZone": "k8s.example.com",
+        "versions": {
+          "1.35.4": "__GLANCE_IMAGE_ID_1_35_4__"
+        },
+        "flavors": []
+      }
+    },
+    "secret": {
+      "kubeconfig": "__MGMT_CLUSTER_KUBECONFIG__"
+    }
   }
-}
+]

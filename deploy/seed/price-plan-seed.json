@@ -1,86 +1,331 @@
 {
-  "_readme": [
-    "Competitor-mapped public rate card (docs/pricing-rate-card.md). Apply after sign-off:",
-    "1) POST /api/v1/admin/price-plan   with .plan  -> note the returned id",
-    "2) For each .rules[]: set pricePlanId to that id, POST /api/v1/admin/price-plan/rule",
-    "All prices USD/hour (platform base currency must be USD).",
-    "GPU rules are additive on top of the CPU/RAM component rules — see the rate card's",
-    "calibration note before changing values. gpu_model aliases follow the pci-alias form."
-  ],
-  "plan": {
-    "name": "Public rate card",
-    "enabled": true,
-    "accessMode": "PUBLIC",
-    "serviceProviders": []
-  },
-  "rules": [
+ "_readme": [
+  "Competitor-mapped public rate card (docs/pricing-rate-card.md). Apply after sign-off:",
+  "1) POST /api/v1/admin/price-plan   with .plan  -> note the returned id",
+  "2) For each .rules[]: set pricePlanId to that id, POST /api/v1/admin/price-plan/rule",
+  "All prices USD/hour (platform base currency must be USD).",
+  "GPU rules are additive on top of the CPU/RAM component rules — see the rate card's",
+  "calibration note before changing values. gpu_model aliases follow the pci-alias form.",
+  "kubernetes_cluster is the managed-k8s CONTROL-PLANE fee only, priced per CP replica",
+  "(attrs: display_name/version/status/endpoint/cp_replicas/node_groups — see",
+  "internal/cloud/billingresource/kubernetescluster.go). A cluster's worker VMs, volumes",
+  "and API load balancer live in the customer's own keystone tenant and already bill via",
+  "the existing instance/volume/load_balancer rules — never add k8s rules for them here",
+  "(double-charge). Billing starts once the control-plane endpoint exists; the rate below",
+  "is a placeholder until the plan-§6 CP-pricing decision (free CP vs paid HA vs flat fee).",
+  "_pendingRules are NOT applied by the steps above. kubernetes_cluster sits there (matching the commented-out twin in price-plan-seed.sql) until the plan-§6 CP-pricing decision; move it into .rules to activate, and update the SQL twin in the same change."
+ ],
+ "plan": {
+  "name": "Public rate card",
+  "enabled": true,
+  "accessMode": "PUBLIC",
+  "serviceProviders": []
+ },
+ "rules": [
+  {
+   "name": "Compute: CPU + RAM components",
+   "timeUnit": "hour",
+   "resourceType": "instance",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
     {
-      "name": "Compute: CPU + RAM components",
-      "timeUnit": "hour",
-      "resourceType": "instance",
-      "pricePlanId": "<PLAN_ID>",
-      "applyMethod": "ADD_TO_TOTAL",
-      "prices": [
-        { "attributeName": "vcpus", "tiers": [{ "value": "0.008" }] },
-        { "attributeName": "ram_gb", "tiers": [{ "value": "0.004" }] }
-      ],
-      "filters": [],
-      "modifiers": []
-    },
-    { "name": "GPU:nvidia-4090 (RTX 4090)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.65" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-4090" }], "modifiers": [] },
-    { "name": "GPU:nvidia-3090 (RTX 3090)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.43" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-3090" }], "modifiers": [] },
-    { "name": "GPU:nvidia-3080ti (RTX 3080 Ti, interpolated)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.29" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-3080ti" }], "modifiers": [] },
-    { "name": "GPU:nvidia-a6000 (RTX A6000 Ampere 48GB)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.47" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-a6000" }], "modifiers": [] },
-    { "name": "GPU:nvidia-pro-6000 (RTX PRO 6000 Blackwell 96GB)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "1.99" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-pro-6000" }], "modifiers": [] },
-    { "name": "GPU:nvidia-pro-4500 (RTX PRO 4500 Blackwell 32GB, interpolated)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.69" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "nvidia-pro-4500" }], "modifiers": [] },
-    { "name": "GPU:intel-a60 (placeholder, no market benchmark)", "timeUnit": "hour", "resourceType": "instance", "pricePlanId": "<PLAN_ID>", "applyMethod": "ADD_TO_TOTAL", "prices": [{ "attributeName": "gpu_count", "tiers": [{ "value": "0.15" }] }], "filters": [{ "attributeName": "gpu_model", "operator": "eq", "value": "intel-a60" }], "modifiers": [] },
-    {
-      "name": "Public egress: 1 TiB free, then $0.01/GB",
-      "timeUnit": "hour",
-      "resourceType": "instance_traffic",
-      "pricePlanId": "<PLAN_ID>",
-      "applyMethod": "ADD_TO_TOTAL",
-      "prices": [
-        {
-          "attributeName": "outgoing_public_traffic_mb",
-          "tiers": [
-            { "from": "0", "to": "1048576", "value": "0" },
-            { "from": "1048576", "value": "0.00001" }
-          ]
-        }
-      ],
-      "filters": [],
-      "modifiers": []
+     "attributeName": "vcpus",
+     "tiers": [
+      {
+       "value": "0.008"
+      }
+     ]
     },
     {
-      "name": "Block storage",
-      "timeUnit": "hour",
-      "resourceType": "volume",
-      "pricePlanId": "<PLAN_ID>",
-      "applyMethod": "ADD_TO_TOTAL",
-      "prices": [{ "attributeName": "size", "tiers": [{ "value": "0.000137" }] }],
-      "filters": [],
-      "modifiers": []
-    },
-    {
-      "name": "Floating IP",
-      "timeUnit": "hour",
-      "resourceType": "floating_ip",
-      "pricePlanId": "<PLAN_ID>",
-      "applyMethod": "ADD_TO_TOTAL",
-      "prices": [{ "attributeName": "existence", "tiers": [{ "value": "0.005" }] }],
-      "filters": [],
-      "modifiers": []
-    },
-    {
-      "name": "Load balancer",
-      "timeUnit": "hour",
-      "resourceType": "load_balancer",
-      "pricePlanId": "<PLAN_ID>",
-      "applyMethod": "ADD_TO_TOTAL",
-      "prices": [{ "attributeName": "existence", "tiers": [{ "value": "0.0165" }] }],
-      "filters": [],
-      "modifiers": []
+     "attributeName": "ram_gb",
+     "tiers": [
+      {
+       "value": "0.004"
+      }
+     ]
     }
-  ]
+   ],
+   "filters": [],
+   "modifiers": []
+  },
+  {
+   "name": "GPU:nvidia-4090 (RTX 4090)",
+   "timeUnit": "hour",
+   "resourceType": "instance",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "gpu_count",
+     "tiers": [
+      {
+       "value": "0.65"
+      }
+     ]
+    }
+   ],
+   "filters": [
+    {
+     "attributeName": "gpu_model",
+     "operator": "eq",
+     "value": "nvidia-4090"
+    }
+   ],
+   "modifiers": []
+  },
+  {
+   "name": "GPU:nvidia-3090 (RTX 3090)",
+   "timeUnit": "hour",
+   "resourceType": "instance",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "gpu_count",
+     "tiers": [
+      {
+       "value": "0.43"
+      }
+     ]
+    }
+   ],
+   "filters": [
+    {
+     "attributeName": "gpu_model",
+     "operator": "eq",
+     "value": "nvidia-3090"
+    }
+   ],
+   "modifiers": []
+  },
+  {
+   "name": "GPU:nvidia-3080ti (RTX 3080 Ti, interpolated)",
+   "timeUnit": "hour",
+   "resourceType": "instance",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "gpu_count",
+     "tiers": [
+      {
+       "value": "0.29"
+      }
+     ]
+    }
+   ],
+   "filters": [
+    {
+     "attributeName": "gpu_model",
+     "operator": "eq",
+     "value": "nvidia-3080ti"
+    }
+   ],
+   "modifiers": []
+  },
+  {
+   "name": "GPU:nvidia-a6000 (RTX A6000 Ampere 48GB)",
+   "timeUnit": "hour",
+   "resourceType": "instance",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "gpu_count",
+     "tiers": [
+      {
+       "value": "0.47"
+      }
+     ]
+    }
+   ],
+   "filters": [
+    {
+     "attributeName": "gpu_model",
+     "operator": "eq",
+     "value": "nvidia-a6000"
+    }
+   ],
+   "modifiers": []
+  },
+  {
+   "name": "GPU:nvidia-pro-6000 (RTX PRO 6000 Blackwell 96GB)",
+   "timeUnit": "hour",
+   "resourceType": "instance",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "gpu_count",
+     "tiers": [
+      {
+       "value": "1.99"
+      }
+     ]
+    }
+   ],
+   "filters": [
+    {
+     "attributeName": "gpu_model",
+     "operator": "eq",
+     "value": "nvidia-pro-6000"
+    }
+   ],
+   "modifiers": []
+  },
+  {
+   "name": "GPU:nvidia-pro-4500 (RTX PRO 4500 Blackwell 32GB, interpolated)",
+   "timeUnit": "hour",
+   "resourceType": "instance",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "gpu_count",
+     "tiers": [
+      {
+       "value": "0.69"
+      }
+     ]
+    }
+   ],
+   "filters": [
+    {
+     "attributeName": "gpu_model",
+     "operator": "eq",
+     "value": "nvidia-pro-4500"
+    }
+   ],
+   "modifiers": []
+  },
+  {
+   "name": "GPU:intel-a60 (placeholder, no market benchmark)",
+   "timeUnit": "hour",
+   "resourceType": "instance",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "gpu_count",
+     "tiers": [
+      {
+       "value": "0.15"
+      }
+     ]
+    }
+   ],
+   "filters": [
+    {
+     "attributeName": "gpu_model",
+     "operator": "eq",
+     "value": "intel-a60"
+    }
+   ],
+   "modifiers": []
+  },
+  {
+   "name": "Public egress: 1 TiB free, then $0.01/GB",
+   "timeUnit": "hour",
+   "resourceType": "instance_traffic",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "outgoing_public_traffic_mb",
+     "tiers": [
+      {
+       "from": "0",
+       "to": "1048576",
+       "value": "0"
+      },
+      {
+       "from": "1048576",
+       "value": "0.00001"
+      }
+     ]
+    }
+   ],
+   "filters": [],
+   "modifiers": []
+  },
+  {
+   "name": "Block storage",
+   "timeUnit": "hour",
+   "resourceType": "volume",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "size",
+     "tiers": [
+      {
+       "value": "0.000137"
+      }
+     ]
+    }
+   ],
+   "filters": [],
+   "modifiers": []
+  },
+  {
+   "name": "Floating IP",
+   "timeUnit": "hour",
+   "resourceType": "floating_ip",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "existence",
+     "tiers": [
+      {
+       "value": "0.005"
+      }
+     ]
+    }
+   ],
+   "filters": [],
+   "modifiers": []
+  },
+  {
+   "name": "Load balancer",
+   "timeUnit": "hour",
+   "resourceType": "load_balancer",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "existence",
+     "tiers": [
+      {
+       "value": "0.0165"
+      }
+     ]
+    }
+   ],
+   "filters": [],
+   "modifiers": []
+  }
+ ],
+ "_pendingRules": [
+  {
+   "name": "Kubernetes control plane (per CP replica; placeholder pending plan §6)",
+   "timeUnit": "hour",
+   "resourceType": "kubernetes_cluster",
+   "pricePlanId": "<PLAN_ID>",
+   "applyMethod": "ADD_TO_TOTAL",
+   "prices": [
+    {
+     "attributeName": "cp_replicas",
+     "tiers": [
+      {
+       "value": "0.015"
+      }
+     ]
+    }
+   ],
+   "filters": [],
+   "modifiers": []
+  }
+ ]
 }

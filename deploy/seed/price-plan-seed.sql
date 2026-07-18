@@ -34,6 +34,15 @@ INSERT INTO "pricePlanRule" (id, doc) VALUES
 ('6a4e63e8aa5e5eed10000013', '{"name":"Load balancer","timeUnit":"hour","resourceType":"load_balancer","pricePlanId":"6a4e63e8aa5e5eed10000001","applyMethod":"ADD_TO_TOTAL","prices":[{"attributeName":"existence","tiers":[{"value":"0.0165"}]}],"filters":[],"modifiers":[]}')
 ON CONFLICT (id) DO NOTHING;
 
+-- Managed Kubernetes CONTROL-PLANE fee (kubernetes_cluster, priced per cp_replicas).
+-- Deliberately commented: the CP-pricing decision is still open (tasks/managed-k8s-plan.md §6 —
+-- free CP + paid HA vs flat fee). Uncomment after that decision; keep in sync with the
+-- kubernetes_cluster entry in price-plan-seed.json. Worker VMs/volumes/LBs already bill via
+-- the instance/volume/load_balancer rules above — never add k8s worker rules here.
+-- INSERT INTO "pricePlanRule" (id, doc) VALUES
+-- ('6a4e63e8aa5e5eed10000014', '{"name":"Kubernetes control plane (per CP replica)","timeUnit":"hour","resourceType":"kubernetes_cluster","pricePlanId":"6a4e63e8aa5e5eed10000001","applyMethod":"ADD_TO_TOTAL","prices":[{"attributeName":"cp_replicas","tiers":[{"value":"0.015"}]}],"filters":[],"modifiers":[]}')
+-- ON CONFLICT (id) DO NOTHING;
+
 -- Sanity read-back
 SELECT id, doc->>'name' AS name FROM "pricePlan" WHERE id = '6a4e63e8aa5e5eed10000001';
 SELECT count(*) AS rules FROM "pricePlanRule" WHERE doc->>'pricePlanId' = '6a4e63e8aa5e5eed10000001';

@@ -1,0 +1,48 @@
+# ArgoCD AppProject `stratos-k8s` — the guardrail around every stratos-created Application
+# (tasks/managed-k8s-plan.md D3 / §3.0). Every customer-cluster Application stratos applies
+# carries `spec.project: stratos-k8s` (internal/cloud/kamaji/application.go), so even a
+# compromised stratos credential can only:
+#   * source charts from OUR pinned OCI registry (never an arbitrary git/helm repo),
+#   * deploy into in-cluster st-* namespaces (never argocd/kube-system/other tenants).
+#
+# The project name and the argocd namespace must match the provider config
+# (config.argocd.project / config.argocd.namespace — deploy/seed/external-service-dev.json).
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: stratos-k8s
+  namespace: argocd
+  # Keep the AppProject when the argocd Application managing this manifest is pruned —
+  # deleting it would orphan-block every customer-cluster Application.
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  description: >-
+    Stratos managed-Kubernetes customer clusters (openstack-kamaji-cluster chart).
+    Applications here are written exclusively by the stratos API — do not hand-edit.
+
+  # ONLY our OCI chart registry. ArgoCD spells OCI repoURLs WITHOUT the oci:// prefix
+  # (matches config.argocd.chartRepo in the stratos provider config).
+  sourceRepos:
+    - ghcr.io/menlocloud/charts
+
+  # In-cluster st-<projectId> namespaces only.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: "st-*"
+
+  # Cluster-scoped resources the chart may create. Conservative default: NONE.
+  #
+  #   * Namespaces are deliberately absent — stratos pre-creates st-* itself (SSA via its own
+  #     RBAC, rbac.yaml), so the chart never needs to create one.
+  #   * The chart contract is UNVERIFIED (internal/cloud/kamaji/values.go header — the chart
+  #     source is OCI-only). If the first live drill fails sync with
+  #     "resource <group>/<Kind> is not permitted in project stratos-k8s", add EXACTLY that
+  #     group/kind here and record it in docs/managed-k8s.md. Likely candidates, from the chart
+  #     features (cluster-autoscaler RBAC): rbac.authorization.k8s.io ClusterRole +
+  #     ClusterRoleBinding. CRDs themselves are installed by the platform plane (Kamaji /
+  #     cluster-api operators), NOT by this chart — do not whitelist CustomResourceDefinition.
+  clusterResourceWhitelist: []
+
+  # Namespaced resources: no blacklist — the AppProject's destination constraint (st-* only)
+  # is the boundary that matters; the chart renders TCP/CAPI/addon objects freely inside it.

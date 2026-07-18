@@ -105,10 +105,12 @@ Useful env toggles (all default off; full table in
 
 Fresh databases need the platform/billing config documents before the billing and
 project endpoints work. The canonical documents live in `deploy/seed/`
-(`platform-configuration.json`, `billing-configuration.json`,
-`external-service-dev.json`). The `deploy/seed/apply-seed.sh` script upserts them
-into a cluster's datastore via `kubectl`; for a local PostgreSQL, upsert the same
-JSON into the matching document table (`id text primary key, doc jsonb`), e.g.:
+(`platform-configuration.json`, `billing-configuration.json`). The
+`deploy/seed/apply-seed.sh` script upserts those two singletons into a cluster's
+datastore via `kubectl` (`external-service-dev.json` is a reference EXAMPLE for
+creating dev providers through the admin Add-provider form/API — apply-seed.sh
+does not seed it); for a local PostgreSQL, upsert the same JSON into the matching
+document table (`id text primary key, doc jsonb`), e.g.:
 
 ```sh
 psql "$STRATOS_DB_URL" -c \
@@ -129,10 +131,14 @@ Two ways to give Stratos a cloud:
    API authenticates in the background and exposes a read-only probe at
    `GET :8081/debug/cloud`.
 2. **Register an external service** — insert a `CLOUD` `externalService` document
-   (see `deploy/seed/external-service-dev.json` for the shape: `config.provider`,
-   `config.identityUrl`, regions, per-service enablement, and the encrypted admin
-   auth). This is how a real region is configured and supersedes the env
-   bootstrap; sync and per-tenant clients use it.
+   (see `deploy/seed/external-service-dev.json` — an array with one example
+   document per provider kind: `openstack` with `config.identityUrl`, regions,
+   per-service enablement and the encrypted admin auth, and `kamaji` with the
+   argocd/cluster blocks and the management kubeconfig secret; insert each
+   element as its own row, replacing the `__…__` placeholders). This is how a
+   real region is configured and supersedes the env bootstrap; sync and
+   per-tenant clients use it. The kamaji provider also needs a prepared
+   management cluster — see `docs/managed-k8s.md`.
 
 ## Run the SPAs with hot reload
 

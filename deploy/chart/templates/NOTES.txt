@@ -42,3 +42,7 @@ Point them at your IdP (or the bundled Keycloak's public URL).
 
 A fresh database needs the base configuration documents seeded before the
 billing/project endpoints work — see deploy/seed/ in the repo.
+
+Adding a kamaji managed-Kubernetes provider additionally requires a prepared
+management cluster (ArgoCD + deploy/mgmt-cluster manifests) — see
+docs/managed-k8s.md in the repo.
