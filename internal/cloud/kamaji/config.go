@@ -159,6 +159,15 @@ func (s ClusterSpec) Validate(d ClusterDefaults) error {
 		if !ng.Autoscale && ng.Count < 1 {
 			return fmt.Errorf("cluster: node group %q: count must be >= 1", ng.Name)
 		}
+		for _, t := range ng.Taints {
+			obj := taintToObject(t)
+			if obj == nil {
+				return fmt.Errorf("cluster: node group %q: taint %q must be key[=value]:Effect", ng.Name, t)
+			}
+			if effect, _ := obj["effect"].(string); !ValidTaintEffects[effect] {
+				return fmt.Errorf("cluster: node group %q: taint %q: effect must be NoSchedule, PreferNoSchedule or NoExecute", ng.Name, t)
+			}
+		}
 	}
 	return nil
 }

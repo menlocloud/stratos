@@ -5,15 +5,18 @@ operational companion to the design doc — **`tasks/managed-k8s-plan.md` stays 
 source**; section references (§) below point into it. Release posture is **internal-first**
 (plan §3.5): we run this ourselves, hardened by these procedures, before customer exposure.
 
-> ## ⚠ Top blocker before any live drill: the chart contract is UNVERIFIED
+> ## Chart contract: VALUES VERIFIED (2026-07-19) — template semantics still need the drill
 >
-> The `openstack-kamaji-cluster` chart is OCI-only (`ghcr.io/menlocloud/charts`, source not
-> vendored in git). Every chart value stratos generates lives in **one** file —
-> `internal/cloud/kamaji/values.go` — whose header marks the contract **UNVERIFIED**: the
-> node-group field spellings and the clouds.yaml secret knob mirror the infra-ops wrapper
-> values, not the chart source. **Pull and read the chart source (plan §3.0) and reconcile
-> `values.go` against it before the first live cluster.** Until then, nothing downstream of
-> "stratos applies an Application" can be trusted to render.
+> The values contract in `internal/cloud/kamaji/values.go` was reconciled against the chart's
+> default-values snapshot `values.upstream.yaml` (chart **0.2.3**) vendored in the infra-ops
+> wrappers (`kubernetes/clusters/kamaji-cluster-az1/charts/{dev,sysadmin,stag,prod}-cluster`):
+> `cloudCredentialsSecretName`, inline `oidc.*` (no helm `lookup` on our path — ArgoCD-safe),
+> `kamajiControlPlane.*`, `clusterNetworking.externalNetworkId` (internal network auto-created
+> per cluster by default), `nodeGroups[].machine*` spellings, taint **objects**, the
+> autoscaler-tag-matches-cluster-minor constraint, and the KAMAJI-FIX addon tolerations.
+> **Still unverified until the live drill** (chart source is not anonymously pullable from
+> ghcr — 401; vendor it or grant a read:packages token): MachineDeployment naming, autoscale
+> annotation mechanics, upgrade rotation semantics, Lua health checks against live CRDs.
 
 ## 1. Management-cluster prerequisites
 

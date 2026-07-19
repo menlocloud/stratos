@@ -191,9 +191,15 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 				if groups, ok := values["nodeGroups"].([]any); ok {
 					for _, raw := range groups {
 						if g, ok := raw.(map[string]any); ok {
-							g["imageId"] = img
+							g["machineImageId"] = img
 						}
 					}
+				}
+			}
+			// Keep the autoscaler on the new minor (chart constraint: tag minor == cluster minor).
+			if maj, min, _, verr := kamaji.ParseVersion(version); verr == nil {
+				values["autoscaler"] = map[string]any{
+					"image": map[string]any{"tag": fmt.Sprintf("v%d.%d.0", maj, min)},
 				}
 			}
 			return nil
@@ -249,10 +255,10 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 				if !ok {
 					continue
 				}
-				if img, _ := g["imageId"].(string); img == "" {
+				if img, _ := g["machineImageId"].(string); img == "" {
 					name, _ := g["name"].(string)
 					if prev := prevImage[name]; prev != "" {
-						g["imageId"] = prev
+						g["machineImageId"] = prev
 					} else {
 						return httpx.BadRequest(fmt.Sprintf("node group %q: no image for version %s — set an imageId or update the provider's version matrix", name, version))
 					}
@@ -325,8 +331,8 @@ func prevGroupIndex(values map[string]any) (flavor, image map[string]string) {
 		if name == "" {
 			continue
 		}
-		flavor[name], _ = g["flavor"].(string)
-		image[name], _ = g["imageId"].(string)
+		flavor[name], _ = g["machineFlavor"].(string)
+		image[name], _ = g["machineImageId"].(string)
 	}
 	return flavor, image
 }

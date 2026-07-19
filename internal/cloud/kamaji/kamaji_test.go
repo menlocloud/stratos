@@ -99,21 +99,33 @@ func TestBuildValues(t *testing.T) {
 		t.Fatalf("nodeGroups = %d", len(groups))
 	}
 	g0 := groups[0].(map[string]any)
-	if g0["imageId"] != "img-1354" { // resolved from the version matrix
-		t.Errorf("imageId = %v", g0["imageId"])
+	if g0["machineImageId"] != "img-1354" { // resolved from the version matrix
+		t.Errorf("machineImageId = %v", g0["machineImageId"])
 	}
-	if g0["count"] != 3 {
-		t.Errorf("count = %v", g0["count"])
+	// Fixed group: chart wrapper shape pins count == min == max, autoscale false.
+	if g0["autoscale"] != false || g0["machineCount"] != 3 || g0["machineCountMin"] != 3 || g0["machineCountMax"] != 3 {
+		t.Errorf("fixed group = %v", g0)
 	}
-	if _, has := g0["autoscale"]; has {
-		t.Error("fixed group must not carry autoscale")
+	if g0["machineFlavor"] != "m5.large" {
+		t.Errorf("machineFlavor = %v", g0["machineFlavor"])
+	}
+	// Taints render as the chart's objects, not the API's strings.
+	taints := g0["taints"].([]any)
+	t0 := taints[0].(map[string]any)
+	if t0["key"] != "gpu" || t0["value"] != "true" || t0["effect"] != "NoSchedule" {
+		t.Errorf("taint object = %v", t0)
 	}
 	g1 := groups[1].(map[string]any)
-	if g1["autoscale"] != true || g1["min"] != 1 || g1["max"] != 5 {
+	if g1["autoscale"] != true || g1["machineCountMin"] != 1 || g1["machineCountMax"] != 5 || g1["machineCount"] != 1 {
 		t.Errorf("autoscale group = %v", g1)
 	}
-	if _, has := g1["count"]; has {
-		t.Error("autoscale group must not carry count")
+	// Autoscaler image tag follows the cluster minor (chart constraint).
+	if tag := dig(v, "autoscaler", "image", "tag"); tag != "v1.35.0" {
+		t.Errorf("autoscaler tag = %v", tag)
+	}
+	// KAMAJI-FIX addon values present, openstack addons stay enabled (v1 worker-side CCM/CSI).
+	if en := dig(v, "addons", "openstack", "enabled"); en != true {
+		t.Errorf("addons.openstack.enabled = %v", en)
 	}
 
 	// No OIDC issuer → no oidc block at all (chart default = disabled).
@@ -126,6 +138,27 @@ func TestBuildValues(t *testing.T) {
 	}
 	if v["kamajiControlPlane"].(map[string]any)["replicas"] != 1 {
 		t.Error("non-HA replicas != 1")
+	}
+}
+
+func TestTaintRoundTrip(t *testing.T) {
+	for s, want := range map[string]string{
+		"gpu=true:NoSchedule":  "gpu=true:NoSchedule",
+		"dedicated:NoExecute":  "dedicated:NoExecute",
+		"a=b:PreferNoSchedule": "a=b:PreferNoSchedule",
+	} {
+		obj := taintToObject(s)
+		if obj == nil {
+			t.Fatalf("taintToObject(%q) = nil", s)
+		}
+		if got := taintToString(obj); got != want {
+			t.Errorf("round trip %q = %q", s, got)
+		}
+	}
+	for _, bad := range []string{"", "noeffect", ":NoSchedule", "key:"} {
+		if taintToObject(bad) != nil {
+			t.Errorf("taintToObject(%q) must be nil", bad)
+		}
 	}
 }
 

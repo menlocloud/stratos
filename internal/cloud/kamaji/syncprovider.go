@@ -155,10 +155,12 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 			name, _ := ng["name"].(string)
 			g := map[string]any{
 				"name":      name,
-				"flavor_id": ng["flavor"],
-				"image_id":  ng["imageId"],
+				"flavor_id": ng["machineFlavor"],
+				"image_id":  ng["machineImageId"],
 			}
-			for k, src := range map[string]string{"count": "count", "min": "min", "max": "max"} {
+			// Cache keys keep the API's vocabulary (count/min/max); the chart spells them
+			// machineCount/machineCountMin/machineCountMax (verified contract).
+			for k, src := range map[string]string{"count": "machineCount", "min": "machineCountMin", "max": "machineCountMax"} {
 				if v, ok := ng[src]; ok {
 					g[k] = v
 				}
@@ -168,11 +170,22 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 			}
 			// Labels/taints round-trip through the cache so a node-group edit can prefill them —
 			// SET_NODE_GROUPS full-replaces the value, so a missing prefill would strip them.
+			// Taints come back as the chart's objects; the cache/UI keep the API's string form.
 			if labels, ok := ng["nodeLabels"].(map[string]any); ok && len(labels) > 0 {
 				g["labels"] = labels
 			}
-			if taints, ok := ng["nodeTaints"].([]any); ok && len(taints) > 0 {
-				g["taints"] = taints
+			if taints, ok := ng["taints"].([]any); ok && len(taints) > 0 {
+				strs := make([]any, 0, len(taints))
+				for _, t := range taints {
+					if obj, ok := t.(map[string]any); ok {
+						if s := taintToString(obj); s != "" {
+							strs = append(strs, s)
+						}
+					}
+				}
+				if len(strs) > 0 {
+					g["taints"] = strs
+				}
 			}
 			// MachineDeployment names are chart-derived (typically <cluster>-<group>); match by suffix.
 			for mdName, entry := range live {
