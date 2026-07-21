@@ -18,7 +18,7 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.5
 	github.com/modelcontextprotocol/go-sdk v1.6.1
-	github.com/nyaruka/phonenumbers v1.8.0
+	github.com/nyaruka/phonenumbers v1.8.1
 	github.com/rabbitmq/amqp091-go v1.12.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/shopspring/decimal v1.4.0
