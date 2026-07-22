@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { ExternalLink, KeyRound, Pencil, Plus, ScrollText, Trash2 } from "lucide-react"
+import { Copy, ExternalLink, KeyRound, Pencil, Plus, ScrollText, Terminal, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
@@ -41,6 +41,15 @@ type AuditEvent = {
   resourceDisplayName?: string
   outcome?: string
   actor?: { displayName?: string; ipAddress?: string }
+}
+
+// GET /user/api-keys — a Personal Access Token (secret stripped; the plaintext token is only ever
+// returned once, from the create response).
+type ApiKey = {
+  id: string
+  description?: string
+  createdAt?: string
+  lastUsedAt?: string
 }
 
 const AUDIT_LIMIT = 25
@@ -111,6 +120,46 @@ export default function AccountPage() {
     },
     onError: (e: Error) => toast.error(e.message),
   })
+
+  // API tokens (PATs) — GET/POST/DELETE /user/api-keys (enveloped). A token authenticates the
+  // client API + the client MCP toolset (e.g. a Terraform module) as this user; the secret is
+  // shown exactly once at create time.
+  const tokens = useQuery({
+    queryKey: ["api-keys"],
+    queryFn: () => apiFetch<ApiKey[]>("/user/api-keys"),
+  })
+  const [tokenCreateOpen, setTokenCreateOpen] = useState(false)
+  const [tokenDesc, setTokenDesc] = useState("")
+  const [newToken, setNewToken] = useState<{ id: string; token: string } | null>(null)
+  const [tokenDeleting, setTokenDeleting] = useState<ApiKey | null>(null)
+  const createToken = useMutation({
+    mutationFn: () =>
+      apiFetch<{ id: string; token: string }>("/user/api-keys", {
+        method: "POST",
+        body: { description: tokenDesc.trim() },
+      }),
+    onSuccess: (res) => {
+      setTokenCreateOpen(false)
+      setTokenDesc("")
+      setNewToken({ id: res.id, token: res.token })
+      void qc.invalidateQueries({ queryKey: ["api-keys"] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+  const deleteToken = useMutation({
+    mutationFn: (t: ApiKey) => apiFetch(`/user/api-keys/${encodeURIComponent(t.id)}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Token revoked")
+      setTokenDeleting(null)
+      void qc.invalidateQueries({ queryKey: ["api-keys"] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+  const copyToken = async () => {
+    if (!newToken) return
+    await navigator.clipboard.writeText(newToken.token)
+    toast.success("Token copied to clipboard")
+  }
 
   const customInfo = Object.entries(details?.customInfo ?? {})
   const fullName = [details?.firstName, details?.lastName].filter(Boolean).join(" ")
@@ -202,6 +251,59 @@ export default function AccountPage() {
                 </a>
               </Button>
             </div>
+          </Card>
+
+          <Card className="gap-0 overflow-hidden py-0">
+            <div className="flex items-center justify-between border-b px-5 py-2.5">
+              <span className="text-eyebrow">API tokens</span>
+              <Button size="sm" variant="ghost" onClick={() => setTokenCreateOpen(true)}>
+                <Plus className="size-4" /> Create token
+              </Button>
+            </div>
+            <p className="px-5 pt-4 text-sm text-muted-foreground">
+              Personal access tokens authenticate the API and the MCP endpoint as you — for scripts,
+              CI, or a Terraform module — without an interactive login. Send as{" "}
+              <span className="font-mono text-xs">Authorization: Bearer &lt;token&gt;</span>.
+            </p>
+            {tokens.isLoading ? (
+              <Skeleton className="m-5 h-16" />
+            ) : tokens.error ? (
+              <p className="p-5 text-sm text-muted-foreground">{(tokens.error as Error).message}</p>
+            ) : !tokens.data?.length ? (
+              <p className="p-5 text-sm text-muted-foreground">
+                No API tokens yet. Create one to authenticate without SSO — the secret is shown only once.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Description</TableHead>
+                    <TableHead>Token ID</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {tokens.data.map((t) => (
+                    <TableRow key={t.id}>
+                      <TableCell className="font-medium">{t.description || "—"}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{t.id}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{fmtDate(t.createdAt)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Revoke token ${t.description || t.id}`}
+                          onClick={() => setTokenDeleting(t)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </Card>
 
           <Card className="gap-0 overflow-hidden py-0">
@@ -412,6 +514,82 @@ export default function AccountPage() {
               disabled={deleteInfo.isPending}
             >
               {deleteInfo.isPending ? "Deleting…" : "Delete entry"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={tokenCreateOpen} onOpenChange={setTokenCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create API token</DialogTitle>
+            <DialogDescription>
+              Authenticates the API and MCP as you. Give it a description so you can tell it apart later.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <Label htmlFor="token-desc">Description</Label>
+            <Input
+              id="token-desc"
+              value={tokenDesc}
+              onChange={(e) => setTokenDesc(e.target.value)}
+              placeholder="terraform / laptop / ci"
+              maxLength={200}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTokenCreateOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => createToken.mutate()} disabled={!tokenDesc.trim() || createToken.isPending}>
+              {createToken.isPending ? "Creating…" : "Create token"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!newToken} onOpenChange={(o) => !o && setNewToken(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save your API token</DialogTitle>
+            <DialogDescription>
+              This is the only time the token is shown — copy it now. Send it as{" "}
+              <span className="font-mono text-xs">Authorization: Bearer &lt;token&gt;</span>.
+            </DialogDescription>
+          </DialogHeader>
+          <pre className="max-h-32 overflow-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs break-all whitespace-pre-wrap">
+            {newToken?.token}
+          </pre>
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Terminal className="size-3.5 shrink-0" /> Works for both the REST API and the MCP endpoint.
+          </p>
+          <DialogFooter>
+            <Button onClick={() => void copyToken()}>
+              <Copy className="size-4" /> Copy token
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!tokenDeleting} onOpenChange={(o) => !o && setTokenDeleting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Revoke API token</DialogTitle>
+            <DialogDescription>
+              Revoke <span className="font-medium">{tokenDeleting?.description || tokenDeleting?.id}</span>?
+              Anything using it will stop working immediately. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTokenDeleting(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => tokenDeleting && deleteToken.mutate(tokenDeleting)}
+              disabled={deleteToken.isPending}
+            >
+              <Trash2 className="size-4" /> {deleteToken.isPending ? "Revoking…" : "Revoke token"}
             </Button>
           </DialogFooter>
         </DialogContent>

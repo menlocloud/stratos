@@ -114,6 +114,13 @@ on("GET /features", () => ({ data: features }))
 on("POST /user", () => ({ data: {} }))
 on("POST /user/custom-info/:key", () => ({ data: {} }))
 on("DELETE /user/custom-info/:key", () => ({ data: {} }))
+on("GET /user/api-keys", () => ({
+  data: [{ id: "pk" + "a".repeat(32), description: "terraform", createdAt: "2026-07-01T00:00:00Z" }],
+}))
+on("POST /user/api-keys", () => ({
+  data: { id: "pk" + "b".repeat(32), token: "pk" + "b".repeat(32) + ".sk" + "c".repeat(40), description: "new", createdAt: "2026-07-23T00:00:00Z" },
+}))
+on("DELETE /user/api-keys/:id", () => ({ data: {} }))
 
 on("GET /search/:pid", () => {
   const servers = db.cloud
