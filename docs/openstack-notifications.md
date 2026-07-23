@@ -123,7 +123,14 @@ Configuration is all environment variables (see the manifest and the
 [package doc](../cmd/notifier/main.go)): `RABBITMQ_URL` **or**
 `RABBITMQ_ADDRESSES`+`RABBITMQ_USERNAME`+`RABBITMQ_PASSWORD` for the source,
 `TARGET_URL`+`TARGET_SECRET` for the sink, and optional `RABBITMQ_EXCHANGES` /
-`RABBITMQ_QUEUE` / `RABBITMQ_TOPIC` / `RABBITMQ_PREFETCH` / `PORT`.
+`RABBITMQ_QUEUE` / `RABBITMQ_QUEUE_TYPE` / `RABBITMQ_TOPIC` / `RABBITMQ_PREFETCH` / `PORT`.
+
+**Quorum-queue clusters.** The bridge declares its queue as `classic` by default. If your
+RabbitMQ enforces quorum queues (e.g. kolla-ansible with `om_enable_rabbitmq_quorum_queues`, whose
+deploy precheck fails with *"stratos-notifier is a non-quorum queue"*), set
+`RABBITMQ_QUEUE_TYPE=quorum`. A queue's type is immutable, so if the queue already exists as classic,
+delete it first (`rabbitmqctl delete_queue stratos-notifier`) — the bridge recreates it as quorum on
+next start. Quorum queues need RabbitMQ 3.8+ and a clustered broker.
 
 Run **one bridge per (cloud, region)** — the Notifier URI is region-scoped. The
 bridge exposes `/healthz` on `PORT` (default 7476) for liveness/readiness, and

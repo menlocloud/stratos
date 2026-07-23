@@ -1,6 +1,8 @@
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestSplitCSV(t *testing.T) {
 	got := splitCSV(" nova, neutron ,,cinder ")
@@ -45,5 +47,36 @@ func TestLoadConfig_RequiresTargetAndBroker(t *testing.T) {
 	t.Setenv("RABBITMQ_URL", "")
 	if _, err := loadConfig(); err == nil {
 		t.Errorf("missing broker should error")
+	}
+}
+
+func TestQueueType(t *testing.T) {
+	t.Setenv("RABBITMQ_URL", "amqp://u:p@host:5672/")
+	t.Setenv("TARGET_URL", "https://cloud/api/v1/notifications/svc/RegionOne")
+	t.Setenv("TARGET_SECRET", "s3cret")
+
+	// Default is classic → nil args (RabbitMQ default queue type).
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatalf("default config errored: %v", err)
+	}
+	if c.queueType != "classic" || c.queueArgs() != nil {
+		t.Errorf("default queueType=%q args=%v, want classic/nil", c.queueType, c.queueArgs())
+	}
+
+	// quorum → x-queue-type=quorum (case-insensitive input).
+	t.Setenv("RABBITMQ_QUEUE_TYPE", "Quorum")
+	c, err = loadConfig()
+	if err != nil {
+		t.Fatalf("quorum config errored: %v", err)
+	}
+	if c.queueType != "quorum" || c.queueArgs()["x-queue-type"] != "quorum" {
+		t.Errorf("quorum queueType=%q args=%v", c.queueType, c.queueArgs())
+	}
+
+	// An unknown type is rejected (fail fast, not silently classic).
+	t.Setenv("RABBITMQ_QUEUE_TYPE", "stream")
+	if _, err := loadConfig(); err == nil {
+		t.Errorf("unknown RABBITMQ_QUEUE_TYPE should error")
 	}
 }
