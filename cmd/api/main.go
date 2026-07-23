@@ -122,7 +122,7 @@ func run() error {
 	// Audit pipeline (async writer; client read endpoints). Handlers emit events
 	// after a successful mutation; the org/account audit handlers serve the log.
 	auditSvc := audit.NewService(audit.NewRepo(pg), log)
-	acct := account.NewHandler(users, auditSvc)
+	acct := account.NewHandler(users, auditSvc, pg.C("client_api_keys"))
 
 	// Organization slice (+ minimal billing-profile stub for org create).
 	orgRepo := org.NewRepo(pg)
@@ -384,6 +384,22 @@ func run() error {
 		return doc.SecretKey, true
 	}
 	authn.SetHmacLookup(hmacLookup)
+
+	// Client PAT verification: resolve `Bearer pk.sk` tokens from the client_api_keys collection
+	// (SEPARATE from admin hmac_keys — a client PAT can never resolve on the Admin-API SigV4 path).
+	// Returns the secret half + the owning user's sub, which becomes the request principal.
+	clientKeyLookup := func(r *http.Request, keyID string) (string, string, bool) {
+		var doc struct {
+			SecretKey string `json:"secretKey"`
+			Sub       string `json:"sub"`
+		}
+		found, err := pg.C("client_api_keys").FindOne(r.Context(), pgdoc.M{"_id": keyID}, &doc)
+		if err != nil || !found {
+			return "", "", false
+		}
+		return doc.SecretKey, doc.Sub, true
+	}
+	authn.SetClientKeyLookup(clientKeyLookup)
 
 	// Cloud client (dev bootstrap from OpenStack env). Authenticated in the background
 	// (non-fatal, like OIDC) so startup never blocks on the cloud. Used by the /debug/cloud

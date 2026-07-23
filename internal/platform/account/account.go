@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/menlocloud/stratos/internal/pgdoc"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/internal/platform/user"
 	"github.com/menlocloud/stratos/pkg/httpx"
@@ -17,9 +18,12 @@ import (
 type Handler struct {
 	users *user.Repo
 	audit *audit.Service
+	pat   *pgdoc.Store // client_api_keys collection — self-service API tokens (see account_apikeys.go)
 }
 
-func NewHandler(users *user.Repo, a *audit.Service) *Handler { return &Handler{users: users, audit: a} }
+func NewHandler(users *user.Repo, a *audit.Service, pat *pgdoc.Store) *Handler {
+	return &Handler{users: users, audit: a, pat: pat}
+}
 
 // Routes mounts the account/user endpoints under the /api/v1 group.
 func (h *Handler) Routes(r chi.Router) {
@@ -30,6 +34,10 @@ func (h *Handler) Routes(r chi.Router) {
 	r.Get("/account/details", h.accountDetails)
 	r.Post("/account/name", h.updateName)
 	r.Get("/account/audit", h.accountAudit)
+	// Self-service API tokens (PATs) — auth the client API + client MCP toolset without SSO.
+	r.Get("/user/api-keys", h.listAPIKeys)
+	r.Post("/user/api-keys", h.createAPIKey)
+	r.Delete("/user/api-keys/{id}", h.deleteAPIKey)
 }
 
 // accountAudit serves the user's own audit log:

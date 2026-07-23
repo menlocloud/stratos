@@ -150,6 +150,27 @@ func (h *Handler) cloudResourceList(w http.ResponseWriter, r *http.Request) {
 	case cloud.TypeSecurityGroup:
 		h.listSecurityGroups(w, r, proj)
 		return
+	case cloud.TypeKeypair:
+		// KEYPAIR is a USER-scoped identity resource (blank projectId — see providers/write.go),
+		// so FindAllByProjectID below never returns it. List by user (same uid the create path
+		// stamps on cr.UserID), like resourceStats counts it.
+		uid := u.ID
+		if uid == "" {
+			uid = u.Sub
+		}
+		kps, err := h.cloud.FindAllByUserID(r.Context(), uid)
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		out := make([]cloud.CloudResource, 0, len(kps))
+		for _, cr := range kps {
+			if cr.Type == cloud.TypeKeypair {
+				out = append(out, cr)
+			}
+		}
+		httpx.List(w, out)
+		return
 	}
 	resources, err := h.cloud.FindAllByProjectID(r.Context(), proj.ID)
 	if err != nil {

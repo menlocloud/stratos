@@ -29,10 +29,11 @@ type Realm struct {
 }
 
 type Authenticator struct {
-	log        *slog.Logger
-	mu         sync.RWMutex
-	realms     []Realm
-	hmacLookup HmacKeyLookup // hmac_keys resolver for SigV4 (Admin API) — see sigv4.go
+	log             *slog.Logger
+	mu              sync.RWMutex
+	realms          []Realm
+	hmacLookup      HmacKeyLookup   // hmac_keys resolver for SigV4 (Admin API) — see sigv4.go
+	clientKeyLookup ClientKeyLookup // client_api_keys resolver for `Bearer pk.sk` PATs — see clientkey.go
 }
 
 func New(log *slog.Logger) *Authenticator {
@@ -149,6 +150,10 @@ func (a *Authenticator) authenticate(r *http.Request) (*httpx.RequestContext, bo
 	switch {
 	case strings.HasPrefix(authz, "Bearer "):
 		raw := strings.TrimPrefix(authz, "Bearer ")
+		// A `Bearer pk.sk` client PAT (see clientkey.go) — a real JWT never matches this shape.
+		if m := clientKeyRe.FindStringSubmatch(raw); m != nil {
+			return a.verifyClientKey(r, m[1], m[2])
+		}
 		return a.verifyJWT(r, raw)
 	case strings.HasPrefix(authz, "AWS4-HMAC-SHA256"):
 		return a.verifySigV4(r, authz)
