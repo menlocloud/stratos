@@ -37,3 +37,50 @@ func TestToolRegistryIntegrity(t *testing.T) {
 		}
 	}
 }
+
+// TestToolAnnotations checks the read/write hint classification and its safety invariant: a tool
+// annotated readOnly must never map to a mutating HTTP method (a "read" that secretly deletes would
+// mislead an agent into auto-running it), and every write must carry an explicit destructiveHint.
+func TestToolAnnotations(t *testing.T) {
+	cases := []struct {
+		d                                 toolDef
+		readOnly, destructive, idempotent bool
+	}{
+		{toolDef{name: "list_servers", method: "POST"}, true, false, false}, // a POST that only lists is still a read
+		{toolDef{name: "get_project", method: "GET"}, true, false, false},
+		{toolDef{name: "search_audit_log", method: "POST"}, true, false, false},
+		{toolDef{name: "delete_user", method: "DELETE"}, false, true, false},
+		{toolDef{name: "reject_bank_transfer", method: "POST"}, false, true, false},
+		{toolDef{name: "create_project", method: "POST"}, false, false, false}, // additive
+		{toolDef{name: "update_project", method: "PUT"}, false, false, true},   // idempotent
+		{toolDef{name: "set_project_quota", method: "POST"}, false, false, true},
+	}
+	for _, c := range cases {
+		a := toolAnnotations(c.d)
+		if a.ReadOnlyHint != c.readOnly {
+			t.Errorf("%s: readOnly=%v want %v", c.d.name, a.ReadOnlyHint, c.readOnly)
+		}
+		if c.readOnly {
+			continue
+		}
+		if a.DestructiveHint == nil || *a.DestructiveHint != c.destructive {
+			t.Errorf("%s: destructive=%v want %v", c.d.name, a.DestructiveHint, c.destructive)
+		}
+		if a.IdempotentHint != c.idempotent {
+			t.Errorf("%s: idempotent=%v want %v", c.d.name, a.IdempotentHint, c.idempotent)
+		}
+	}
+
+	for _, defs := range [][]toolDef{adminAllTools(), clientTools} {
+		for _, d := range defs {
+			a := toolAnnotations(d)
+			if a.ReadOnlyHint {
+				if d.method == "DELETE" || d.method == "PUT" {
+					t.Errorf("%s: annotated readOnly but method=%s (a read must not mutate)", d.name, d.method)
+				}
+			} else if a.DestructiveHint == nil {
+				t.Errorf("%s: write tool missing explicit destructiveHint", d.name)
+			}
+		}
+	}
+}

@@ -200,7 +200,7 @@ func (h *Handler) register(srv *sdk.Server, d toolDef) {
 	if len(required) > 0 {
 		schema["required"] = required
 	}
-	srv.AddTool(&sdk.Tool{Name: d.name, Description: d.desc, InputSchema: schema},
+	srv.AddTool(&sdk.Tool{Name: d.name, Description: d.desc, InputSchema: schema, Annotations: toolAnnotations(d)},
 		func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 			var args map[string]any
 			if len(req.Params.Arguments) > 0 {
@@ -223,6 +223,33 @@ func (h *Handler) register(srv *sdk.Server, d toolDef) {
 			}
 			return res, nil
 		})
+}
+
+// toolAnnotations derives the MCP behavioural hints (readOnly / destructive / idempotent) from the
+// tool's verb + HTTP method, so an agent can tell a read from a write without calling it. Reads are
+// a GET or a list_/get_/search_ tool — note the resource-list tools are POST (/resource?type=…) yet
+// pure reads, so the name is the reliable signal, not the method. For writes the MCP spec defaults
+// destructiveHint to true, so we state it explicitly: a DELETE or delete_/remove_/reject_ tool is
+// destructive; a create/update is additive (destructive=false); a PUT or set_/update_ tool is
+// idempotent. (Verified in tools_registry_test.go: no read-named tool mutates, no write-named GET.)
+func toolAnnotations(d toolDef) *sdk.ToolAnnotations {
+	if d.method == "GET" || hasAnyPrefix(d.name, "list_", "get_", "search_") {
+		return &sdk.ToolAnnotations{ReadOnlyHint: true}
+	}
+	destructive := d.method == "DELETE" || hasAnyPrefix(d.name, "delete_", "remove_", "reject_")
+	return &sdk.ToolAnnotations{
+		DestructiveHint: &destructive,
+		IdempotentHint:  d.method == "PUT" || hasAnyPrefix(d.name, "set_", "update_"),
+	}
+}
+
+func hasAnyPrefix(s string, prefixes ...string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // dispatch runs the tool's REST call through the full router in-process, so
