@@ -16,6 +16,11 @@
 //	RABBITMQ_PASSWORD   (required unless RABBITMQ_URL carries it)
 //	RABBITMQ_EXCHANGES  comma list, default "nova,neutron,cinder,glance,heat,magnum,manila,designate"
 //	RABBITMQ_QUEUE      durable queue name, default "stratos-notifier"
+//	RABBITMQ_QUEUE_TYPE "classic" (default) or "quorum". Set "quorum" on clusters that enforce
+//	                    quorum queues (e.g. kolla-ansible om_enable_rabbitmq_quorum_queues); a
+//	                    classic queue fails those clusters' precheck. A queue's type is immutable —
+//	                    if the queue already exists as a different type, delete it first
+//	                    (rabbitmqctl delete_queue stratos-notifier) before switching.
 //	RABBITMQ_TOPIC      binding key, default "notifications.#"
 //	RABBITMQ_PREFETCH   in-flight messages, default 20
 //	TARGET_URL          the Stratos Notifier URI (required)
@@ -73,8 +78,11 @@ func main() {
 		log.Error("open channel", "err", err)
 		os.Exit(1)
 	}
-	if _, err := ch.QueueDeclare(cfg.queue, true, false, false, false, nil); err != nil {
-		log.Error("declare queue", "err", err)
+	if _, err := ch.QueueDeclare(cfg.queue, true, false, false, false, cfg.queueArgs()); err != nil {
+		// A type mismatch with an already-existing queue is a 406 PRECONDITION_FAILED — surface the
+		// fix (a queue's x-queue-type is immutable; the old queue must be deleted first).
+		log.Error("declare queue", "err", err, "queueType", cfg.queueType,
+			"hint", "if '"+cfg.queue+"' already exists with a different type, delete it first: rabbitmqctl delete_queue "+cfg.queue)
 		os.Exit(1)
 	}
 	bindExchanges(conn, cfg, log)
@@ -198,6 +206,7 @@ type config struct {
 	password     string
 	exchanges    []string
 	queue        string
+	queueType    string // "classic" (default) or "quorum"
 	bindingKey   string
 	prefetch     int
 	targetURL    string
@@ -211,6 +220,7 @@ func loadConfig() (config, error) {
 		username:     envOr("RABBITMQ_USERNAME", "openstack"),
 		password:     os.Getenv("RABBITMQ_PASSWORD"),
 		queue:        envOr("RABBITMQ_QUEUE", "stratos-notifier"),
+		queueType:    strings.ToLower(envOr("RABBITMQ_QUEUE_TYPE", "classic")),
 		bindingKey:   envOr("RABBITMQ_TOPIC", "notifications.#"),
 		exchanges:    splitCSV(envOr("RABBITMQ_EXCHANGES", "nova,neutron,cinder,glance,heat,magnum,manila,designate")),
 		targetURL:    os.Getenv("TARGET_URL"),
@@ -231,7 +241,21 @@ func loadConfig() (config, error) {
 	if len(c.exchanges) == 0 {
 		return c, fmt.Errorf("RABBITMQ_EXCHANGES is empty")
 	}
+	if c.queueType != "classic" && c.queueType != "quorum" {
+		return c, fmt.Errorf("RABBITMQ_QUEUE_TYPE must be classic or quorum, got %q", c.queueType)
+	}
 	return c, nil
+}
+
+// queueArgs returns the QueueDeclare arguments for the configured queue type: a quorum queue sets
+// x-queue-type=quorum (required on clusters that enforce quorum queues, e.g. kolla-ansible with
+// om_enable_rabbitmq_quorum_queues); classic uses nil (the RabbitMQ default). The queue is already
+// declared durable + non-exclusive + non-auto-delete, which quorum queues require.
+func (c config) queueArgs() amqp.Table {
+	if c.queueType == "quorum" {
+		return amqp.Table{"x-queue-type": "quorum"}
+	}
+	return nil
 }
 
 // dial connects using RABBITMQ_URL if set, else tries each host:port in RABBITMQ_ADDRESSES until

@@ -53,6 +53,12 @@ spec:
             #   value: "amqp://openstack:pass@rabbit:5672/%2f"
             - name: RABBITMQ_QUEUE
               value: "stratos-notifier"
+            # "classic" (default) or "quorum". Set "quorum" if your cluster enforces quorum queues
+            # (e.g. kolla-ansible om_enable_rabbitmq_quorum_queues) — a classic queue fails its
+            # precheck. A queue's type is immutable: if "stratos-notifier" already exists as classic,
+            # delete it first (rabbitmqctl delete_queue stratos-notifier) before switching.
+            - name: RABBITMQ_QUEUE_TYPE
+              value: "classic"
             - name: RABBITMQ_EXCHANGES
               value: "nova,neutron,cinder,glance,heat,magnum,manila,designate"
             - name: RABBITMQ_TOPIC
