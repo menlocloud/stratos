@@ -157,8 +157,12 @@ export default function AccountPage() {
   })
   const copyToken = async () => {
     if (!newToken) return
-    await navigator.clipboard.writeText(newToken.token)
-    toast.success("Token copied to clipboard")
+    try {
+      await navigator.clipboard.writeText(newToken.token)
+      toast.success("Token copied to clipboard")
+    } catch {
+      toast.error("Couldn't copy — select the token and copy it manually")
+    }
   }
 
   const customInfo = Object.entries(details?.customInfo ?? {})

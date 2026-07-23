@@ -49,7 +49,9 @@ func (a *Authenticator) verifyClientKey(r *http.Request, pk, sk string) (*httpx.
 		}
 	}
 	a.mu.RUnlock()
-	if lookup == nil {
+	// Fail closed: no resolver, or the main (client) realm hasn't been discovered yet — a PAT must
+	// not authenticate with an empty issuer (it would escape the intended main-realm scoping).
+	if lookup == nil || issuer == "" {
 		return nil, false
 	}
 	secret, sub, ok := lookup(r, pk)

@@ -68,6 +68,22 @@ func TestClientKeyRegexIsolatesJWT(t *testing.T) {
 	}
 }
 
+// Before the main (client) realm is discovered, a PAT must fail closed rather than authenticate
+// with an empty issuer (which would escape main-realm scoping).
+func TestVerifyClientKeyNoMainRealmRejected(t *testing.T) {
+	pk := "pk" + strings.Repeat("a", 32)
+	sk := "sk" + strings.Repeat("b", 40)
+	a := New(slog.Default()) // realms never set → no "main" realm
+	a.SetClientKeyLookup(func(_ *http.Request, id string) (string, string, bool) {
+		return sk, "user-sub-123", id == pk
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/account/details", nil)
+	req.Header.Set("Authorization", "Bearer "+pk+"."+sk)
+	if _, ok := a.authenticate(req); ok {
+		t.Fatal("PAT accepted with no main realm configured")
+	}
+}
+
 // An empty sub from the lookup (orphaned key) must be rejected even if the secret matches.
 func TestVerifyClientKeyEmptySubRejected(t *testing.T) {
 	pk := "pk" + strings.Repeat("d", 32)

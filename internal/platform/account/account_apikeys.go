@@ -31,8 +31,8 @@ import (
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
 
-const patCollection = "client_api_keys"
-
+// maxPATDescription caps the free-text label. The collection (client_api_keys) is bound at wiring
+// time via pg.C(...) — see cmd/api/main.go and account.NewHandler.
 const maxPATDescription = 200
 
 // apiKeyView is the safe projection returned by list/create — the secret half is NEVER included
@@ -112,11 +112,16 @@ func (h *Handler) deleteAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	if _, err := h.pat.DeleteOne(r.Context(), pgdoc.M{"_id": id, "sub": u.Sub}); err != nil {
+	deleted, err := h.pat.DeleteOne(r.Context(), pgdoc.M{"_id": id, "sub": u.Sub})
+	if err != nil {
 		httpx.Err(w, http.StatusInternalServerError, 500, "internal.error")
 		return
 	}
-	h.apiKeyAudit(u, audit.ActionDelete, id)
+	// Only audit a real revoke — an unknown / not-owned id is a silent no-op, so it must not emit
+	// (and can't be used to spam the security log).
+	if deleted {
+		h.apiKeyAudit(u, audit.ActionDelete, id)
+	}
 	httpx.OK(w, map[string]any{})
 }
 
