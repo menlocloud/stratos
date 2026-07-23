@@ -18,6 +18,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud/providers"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
 	"github.com/menlocloud/stratos/internal/platform/rbac"
+	"github.com/menlocloud/stratos/internal/platform/user"
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
 
@@ -313,6 +314,30 @@ func (h *Handler) ownedResource(ctx context.Context, resourceID string, proj *Pr
 		return nil, false
 	}
 	return cr, true
+}
+
+// ownedKeypair resolves a USER-scoped KEYPAIR (blank projectId — see providers/write.go, where
+// create stamps userId instead) and authorizes it by the caller's user id, so a user can only act
+// on their OWN keypair. This is the identity-resource analogue of resourceOwnedBy: keypairs never
+// carry a projectId, so the project-scoped gate can never match them.
+func (h *Handler) ownedKeypair(ctx context.Context, resourceID string, u *user.User) (*cloud.CloudResource, bool) {
+	cr, _ := h.cloud.FindByID(ctx, resourceID)
+	uid := u.ID
+	if uid == "" {
+		uid = u.Sub
+	}
+	if !keypairOwnedByUser(cr, uid) {
+		return nil, false
+	}
+	return cr, true
+}
+
+// keypairOwnedByUser is the user-scoped ownership gate for KEYPAIR: a keypair carries no projectId
+// and belongs to the user that minted it, so authorize strictly by a non-empty userId match (a
+// blank uid must never match, else it would authorize across users).
+func keypairOwnedByUser(cr *cloud.CloudResource, uid string) bool {
+	return cr != nil && cr.Type == cloud.TypeKeypair && cr.ProjectID == "" &&
+		uid != "" && cr.UserID == uid
 }
 
 // imageVisibleTo is the §27 glance-image filter, applied in EVERY listImages branch: an image is
@@ -854,7 +879,14 @@ func (h *Handler) cloudDelete(w http.ResponseWriter, r *http.Request) {
 	// externalId — never fall back to the raw param, or a caller could delete another project's
 	// resource (WriteService.Delete resolves by {serviceId, externalId} with no project filter).
 	resourceID := chi.URLParam(r, "resourceId")
-	if cr, ok := h.ownedResource(r.Context(), resourceID, proj); ok {
+	// A project-owned cache row, OR a USER-scoped KEYPAIR (blank projectId — see providers/write.go),
+	// which resourceOwnedBy can't match; authorize the latter by the caller's user id so a user only
+	// ever deletes their own. Either way WriteService.Delete keys on {serviceId, externalId}.
+	cr, owned := h.ownedResource(r.Context(), resourceID, proj)
+	if !owned {
+		cr, owned = h.ownedKeypair(r.Context(), resourceID, u)
+	}
+	if owned {
 		// Delete against the resource's OWN service (see cloudAction) — a header-resolved id could name
 		// the other object-store backend, and WriteService.Delete keys on {serviceId, externalId}.
 		if cr.ServiceID != "" {
