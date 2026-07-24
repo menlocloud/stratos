@@ -17,7 +17,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 import { ArrowLeft, Keyboard, Maximize, RefreshCw, SendHorizontal } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
@@ -100,12 +100,16 @@ function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: strin
   const [attempt, setAttempt] = useState(0)
   const [text, setText] = useState("")
   const [typing, setTyping] = useState(false)
+  const [sent, setSent] = useState(0)
+  const cancelRef = useRef(false)
+  const charCount = text.replace(/\r\n?/g, "\n").length
 
   const { serviceId, region } = cloud
 
   useEffect(() => {
     let cancelled = false
     let rfb: RFB | null = null
+    let observer: ResizeObserver | null = null
     setState("connecting")
     setMessage("")
 
@@ -118,7 +122,11 @@ function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: strin
         rfb.scaleViewport = true
         rfb.background = "#000"
         rfb.addEventListener("connect", () => {
-          if (!cancelled) setState("connected")
+          if (cancelled) return
+          setState("connected")
+          // Recompute now that the canvas exists — at construction time the container may still
+          // have been mid-layout (zero height), which scales the framebuffer to nothing.
+          if (rfbRef.current) rfbRef.current.scaleViewport = true
         })
         rfb.addEventListener("disconnect", (e: Event) => {
           if (cancelled) return
@@ -139,6 +147,15 @@ function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: strin
           setMessage("This console requires a VNC password, which Stratos does not hold.")
         })
         rfbRef.current = rfb
+
+        // noVNC only re-scales on a WINDOW resize. When the CONTAINER changes size instead
+        // (initial layout settling, tab switch, sidebar toggle) the viewport keeps a stale scale
+        // and the screen stays blank — which is why entering and leaving fullscreen appeared to
+        // "fix" it. Re-assigning scaleViewport runs noVNC's setter, which recomputes immediately.
+        observer = new ResizeObserver(() => {
+          if (rfbRef.current) rfbRef.current.scaleViewport = true
+        })
+        observer.observe(screenRef.current)
       } catch (err) {
         if (cancelled) return
         setState("error")
@@ -148,6 +165,7 @@ function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: strin
 
     return () => {
       cancelled = true
+      observer?.disconnect()
       try {
         rfb?.disconnect()
       } catch {
@@ -158,19 +176,30 @@ function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: strin
   }, [pid, resourceId, serviceId, region, attempt])
 
   // The framebuffer has no clipboard to paste into (a bare tty has no agent), so type the text in
-  // as key events. A small gap between keys keeps a slow tty from dropping characters.
+  // as key events. Multi-line is supported: a newline just presses Enter. A small gap between keys
+  // keeps a slow tty from dropping characters, which makes a long script slow — hence the progress
+  // readout and Cancel.
   const sendText = useCallback(async () => {
     const rfb = rfbRef.current
     if (!rfb || !text) return
+    // Normalise CRLF/CR so a script pasted from Windows doesn't press Enter twice per line.
+    const chars = Array.from(text.replace(/\r\n?/g, "\n"))
+    cancelRef.current = false
     setTyping(true)
+    setSent(0)
     try {
-      for (const ch of text) {
-        if (ch === "\n" || ch === "\r") rfb.sendKey(0xff0d, "Enter")
+      for (let i = 0; i < chars.length; i++) {
+        // Bail out on Cancel, or if the socket went away mid-script.
+        if (cancelRef.current || !rfbRef.current) break
+        const ch = chars[i]
+        if (ch === "\n") rfb.sendKey(0xff0d, "Enter")
         else if (ch === "\t") rfb.sendKey(0xff09, "Tab")
         else rfb.sendKey(ch.codePointAt(0)!, null)
+        // Throttle the progress state — one re-render per character would churn for a long script.
+        if (i % 10 === 0 || i === chars.length - 1) setSent(i + 1)
         await sleep(12)
       }
-      setText("")
+      if (!cancelRef.current) setText("")
     } finally {
       setTyping(false)
     }
@@ -212,27 +241,46 @@ function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: strin
         ) : null}
       </div>
 
-      <form
-        className="flex items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault()
-          void sendText()
-        }}
-      >
-        <Input
+      <div className="grid gap-2">
+        <Textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Type text to send to the console (Enter sends it as keystrokes)…"
+          rows={3}
+          className="font-mono text-xs"
+          placeholder={"Paste a command or a whole script — every line is typed in, newlines press Enter.\nCtrl+Enter to send."}
           disabled={state !== "connected" || typing}
           aria-label="Text to send to the console"
+          onKeyDown={(e) => {
+            // Enter inserts a newline (this is a script box); Ctrl/Cmd+Enter sends.
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault()
+              void sendText()
+            }
+          }}
         />
-        <Button type="submit" size="sm" disabled={state !== "connected" || typing || !text}>
-          <SendHorizontal className="size-4" /> {typing ? "Sending…" : "Send"}
-        </Button>
-      </form>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => void sendText()} disabled={state !== "connected" || typing || !text}>
+            <SendHorizontal className="size-4" /> {typing ? "Sending…" : "Send"}
+          </Button>
+          {typing ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => (cancelRef.current = true)}>
+                Cancel
+              </Button>
+              <span className="font-mono text-xs tabular-nums text-muted-foreground" aria-live="polite">
+                {sent}/{charCount} chars
+              </span>
+            </>
+          ) : text ? (
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">{charCount} chars</span>
+          ) : null}
+        </div>
+      </div>
       <p className="text-xs text-muted-foreground">
-        The graphical console is a framebuffer, so text cannot be selected or copied out of it. Use
-        the Serial tab for command work — it is a real terminal with native copy and paste.
+        The graphical console is a framebuffer, so text cannot be selected or copied out of it, and
+        typed-in keystrokes have no flow control — a long script can drop characters on a busy
+        guest. For anything more than a couple of lines use the Serial tab: it is a real terminal
+        with native copy and paste.
       </p>
     </div>
   )
