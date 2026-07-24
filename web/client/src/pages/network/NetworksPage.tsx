@@ -7,6 +7,7 @@ import { MoreHorizontal, Network, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -21,7 +22,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProject, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudScope, useProject, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 export function networkName(r: CloudResource): string {
@@ -43,11 +44,13 @@ export default function NetworksPage() {
   const scope = useCloudScope(pid)
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, refetch, isFetching, error } = useCloudList(pid, "NETWORK")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "NETWORK")
   // Hidden external picker → show only the project's own private networks (drop shared/external infra).
   const netsVisible = useProject(pid).project?.publicNetworksVisible === true
   const rows = useMemo(
-    () => (netsVisible ? (data ?? []) : (data ?? []).filter(isPrivateNetwork)),
+    () => (netsVisible ? data : data.filter(isPrivateNetwork)),
     [data, netsVisible],
   )
   const [createOpen, setCreateOpen] = useState(false)
@@ -228,14 +231,23 @@ export default function NetworksPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={rows}
-          isLoading={isLoading}
-          error={error ? (error as Error) : null}
-          searchPlaceholder="Search networks…"
-          onRowClick={(r) => navigate(`/p/${pid}/networks/${r.id}`)}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={rows}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+            onRowClick={(r) => navigate(`/p/${pid}/networks/${r.id}`)}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={rows.length}
+            noun="network"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

@@ -9,6 +9,7 @@ import { Copy, Download, KeyRound, MoreHorizontal, Plus, RefreshCw, Trash2 } fro
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -21,7 +22,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudScope, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 function keypairName(r: CloudResource): string {
@@ -35,7 +36,9 @@ export default function KeypairsPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
-  const { data, isLoading, error, refetch, isFetching } = useCloudList(pid, "KEYPAIR")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "KEYPAIR")
 
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
@@ -165,7 +168,7 @@ export default function KeypairsPage() {
         }
       />
 
-      {!isLoading && !error && !data?.length ? (
+      {!isLoading && !error && !data.length ? (
         <EmptyState
           icon={KeyRound}
           title="No key pairs yet"
@@ -177,13 +180,22 @@ export default function KeypairsPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={error ? (error as Error) : null}
-          searchPlaceholder="Search key pairs…"
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="key pair"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

@@ -7,6 +7,7 @@ import { Globe, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -19,7 +20,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudScope, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 function zoneDomain(r: CloudResource): string {
@@ -41,7 +42,9 @@ export default function DnsZonesPage() {
   const scope = useCloudScope(pid)
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, refetch, isFetching, error } = useCloudList(pid, "DNS_ZONE")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "DNS_ZONE")
 
   const [createOpen, setCreateOpen] = useState(false)
   const [domain, setDomain] = useState("")
@@ -183,7 +186,7 @@ export default function DnsZonesPage() {
         }
       />
 
-      {!isLoading && !error && !data?.length ? (
+      {!isLoading && !error && !data.length ? (
         <EmptyState
           icon={Globe}
           title="No DNS zones yet"
@@ -195,14 +198,23 @@ export default function DnsZonesPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={error ? (error as Error) : null}
-          searchPlaceholder="Search DNS zones…"
-          onRowClick={(r) => navigate(`/p/${pid}/dns/${r.id}`)}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+            onRowClick={(r) => navigate(`/p/${pid}/dns/${r.id}`)}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="DNS zone"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

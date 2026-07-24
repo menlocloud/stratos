@@ -19,8 +19,9 @@ import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
+import { LoadMore } from "@/components/load-more"
 import { apiFetch } from "@/lib/api"
-import { useCloudList, useCloudScope, useProject, useProjectId, usePublicNetworks } from "@/lib/hooks"
+import { useCloudCursorList, useCloudList, useCloudScope, useProject, useProjectId, usePublicNetworks } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 function fipAddress(r: CloudResource): string {
@@ -34,7 +35,9 @@ export default function FloatingIPsPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
-  const { data, isLoading, refetch, isFetching, error } = useCloudList(pid, "FLOATING_IP")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "FLOATING_IP")
   const { data: ports } = useCloudList(pid, "PORT")
   const [createOpen, setCreateOpen] = useState(false)
   const [toDelete, setToDelete] = useState<CloudResource | null>(null)
@@ -193,7 +196,7 @@ export default function FloatingIPsPage() {
         }
       />
 
-      {!isLoading && !error && !data?.length ? (
+      {!isLoading && !error && !data.length ? (
         <EmptyState
           icon={Globe}
           title="No floating IPs"
@@ -205,13 +208,22 @@ export default function FloatingIPsPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={error ? (error as Error) : null}
-          searchPlaceholder="Search floating IPs…"
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="floating IP"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
