@@ -1285,8 +1285,17 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 	resourceID := chi.URLParam(r, "resourceId")
 	cr, ok := h.ownedResource(r.Context(), resourceID, proj)
 	if !ok {
-		h.fail(w, httpx.NotFound("Resource not found"))
-		return
+		// Security-groups / ports / floating-ips are live-listed (never cached), so the FE holds their
+		// neutron externalId — FindByID misses and the cache gate would 404 every rule action. Resolve
+		// them live, tenant-scoped, exactly like cloudGet: a live hit proves the id belongs to THIS
+		// project (the §5 project-binding), and another tenant's externalId returns nil → still 404.
+		if cc, okc := h.tryTenantClient(r.Context(), proj, svcID); okc {
+			cr = liveResolveByExternalID(r.Context(), cc, resourceID, svcID, h.regionFor(proj, svcID), proj.ID)
+		}
+		if cr == nil {
+			h.fail(w, httpx.NotFound("Resource not found"))
+			return
+		}
 	}
 	// The action targets THIS resource, so it must run against the service the resource actually lives on
 	// — not whatever x-service-id the request happened to carry. Swift and ceph-s3 object stores run side
@@ -1359,6 +1368,45 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		httpx.OK(w, map[string]any{"result": rules})
+		return
+	case "ADD_RULE":
+		// SECURITY_GROUP detail: add an ingress/egress rule. Security groups are live-listed (never
+		// cached), so act through the tenant client directly — like LIST_RULES — instead of the
+		// cache-keyed WriteService, which would 404 on the (uncached) group.
+		cc, ok := h.tryTenantClient(r.Context(), proj, svcID)
+		if !ok {
+			httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud client not ready")
+			return
+		}
+		if _, err := cc.CreateSecGroupRule(r.Context(), client.CreateSecGroupRuleOpts{
+			SecGroupID:     externalID,
+			Direction:      strAny(req.Data["direction"]),
+			EtherType:      strAny(req.Data["etherType"]),
+			Protocol:       strAny(req.Data["protocol"]),
+			PortRangeMin:   intAny(req.Data["portRangeMin"]),
+			PortRangeMax:   intAny(req.Data["portRangeMax"]),
+			RemoteIPPrefix: strAny(req.Data["remoteIpPrefix"]),
+			RemoteGroupID:  strAny(req.Data["remoteGroupId"]),
+		}); err != nil {
+			h.fail(w, err)
+			return
+		}
+		h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", req.Action, cr)
+		httpx.OK(w, map[string]any{"result": map[string]any{}})
+		return
+	case "DELETE_RULE":
+		// SECURITY_GROUP detail: remove a rule by id (same live, tenant-scoped path as ADD_RULE).
+		cc, ok := h.tryTenantClient(r.Context(), proj, svcID)
+		if !ok {
+			httpx.Err(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "cloud client not ready")
+			return
+		}
+		if err := cc.DeleteSecGroupRule(r.Context(), strAny(req.Data["ruleId"])); err != nil {
+			h.fail(w, err)
+			return
+		}
+		h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", req.Action, cr)
+		httpx.OK(w, map[string]any{"result": map[string]any{}})
 		return
 	case "GET_MEMBERS":
 		// SERVER_GROUP detail: the member servers (GET_MEMBERS). The nova group
