@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
 import { fmtDate, fmtDateTime, fmtMoney } from "@/lib/format"
-import { useBillingSummary, useProjectId } from "@/lib/hooks"
+import { useBillingSummary, useCursorList, useProjectId } from "@/lib/hooks"
 import type { Bill, Transaction } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -143,12 +143,12 @@ function BillsTab({ pid, bp }: { pid: string; bp: string }) {
 }
 
 function TransactionsTab({ bp }: { bp: string }) {
-  // The list is query-param based: GET /collect-transactions?billingProfileId=
-  // (the /collect-transactions/{id} path route is the single-by-id read).
-  const { data: txns, isLoading, error } = useQuery({
-    queryKey: ["collect-transactions", bp],
-    queryFn: () => apiFetch<Transaction[]>(`/collect-transactions?billingProfileId=${bp}`),
-  })
+  // Keyset-paged (BE-driven): GET /collect-transactions?billingProfileId=&limit=&after=
+  // → newest-first pages walked via "Load more". (The /collect-transactions/{id} path
+  // route is the single-by-id read.)
+  const {
+    rows: txns, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCursorList<Transaction>(["collect-transactions", bp], `/collect-transactions?billingProfileId=${bp}`)
 
   const columns = useMemo<ColumnDef<Transaction, any>[]>(
     () => [
@@ -211,17 +211,46 @@ function TransactionsTab({ bp }: { bp: string }) {
     [bp],
   )
 
-  if (!isLoading && !error && !txns?.length) {
+  if (!isLoading && !error && !txns.length) {
     return <EmptyState icon={Receipt} title="No transactions yet" hint="Deposits and bill payments appear here." />
   }
   return (
-    <DataTable
-      columns={columns}
-      data={txns}
-      isLoading={isLoading}
-      error={error as Error | null}
-      getRowId={(t) => t.id}
-    />
+    <>
+      <DataTable
+        columns={columns}
+        data={txns}
+        isLoading={isLoading}
+        error={error as Error | null}
+        pagination={false}
+        getRowId={(t) => t.id}
+      />
+      <LoadMore
+        hasNextPage={hasNextPage}
+        isFetching={isFetchingNextPage}
+        onClick={() => void fetchNextPage()}
+        count={txns.length}
+        noun="transaction"
+      />
+    </>
+  )
+}
+
+// Shared "Load more" footer for keyset-paged (cursor) lists.
+function LoadMore({
+  hasNextPage, isFetching, onClick, count, noun,
+}: { hasNextPage?: boolean; isFetching: boolean; onClick: () => void; count: number; noun: string }) {
+  if (count === 0) return null
+  return (
+    <div className="mt-4 flex flex-col items-center gap-2">
+      {hasNextPage ? (
+        <Button variant="outline" onClick={onClick} disabled={isFetching}>
+          {isFetching ? "Loading…" : "Load more"}
+        </Button>
+      ) : null}
+      <p className="font-mono text-xs text-muted-foreground">
+        {count} {noun}{count === 1 ? "" : "s"} loaded{hasNextPage ? "" : " · end"}
+      </p>
+    </div>
   )
 }
 
