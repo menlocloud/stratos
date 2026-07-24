@@ -17,6 +17,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/providers"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/rbac"
 	"github.com/menlocloud/stratos/internal/platform/user"
 	"github.com/menlocloud/stratos/pkg/httpx"
@@ -159,6 +160,19 @@ func (h *Handler) cloudResourceList(w http.ResponseWriter, r *http.Request) {
 		if uid == "" {
 			uid = u.Sub
 		}
+		pg, ok := paging.FromRequest(w, r)
+		if !ok {
+			return
+		}
+		if pg.Active {
+			kps, next, prev, err := h.cloud.PageByUserAndType(r.Context(), uid, cloud.TypeKeypair, pg)
+			if err != nil {
+				h.fail(w, err)
+				return
+			}
+			httpx.CursorList(w, kps, pg.Limit, next, prev)
+			return
+		}
 		kps, err := h.cloud.FindAllByUserID(r.Context(), uid)
 		if err != nil {
 			h.fail(w, err)
@@ -171,6 +185,22 @@ func (h *Handler) cloudResourceList(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		httpx.List(w, out)
+		return
+	}
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	if pg.Active {
+		out, next, prev, err := h.cloud.PageByProjectAndType(r.Context(), proj.ID, typ, pg)
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		if typ == cloud.TypeServer {
+			h.enrichServerFlavors(r, proj, out)
+		}
+		httpx.CursorList(w, out, pg.Limit, next, prev)
 		return
 	}
 	resources, err := h.cloud.FindAllByProjectID(r.Context(), proj.ID)
@@ -187,16 +217,42 @@ func (h *Handler) cloudResourceList(w http.ResponseWriter, r *http.Request) {
 	}
 	// SERVER rows bind data.server.flavor.{vcpus,ram} → without specs the list shows
 	// "undefined CPU, NaN GB RAM". Best-effort enrich each cached server's flavor live.
-	if typ == cloud.TypeServer && len(out) > 0 {
-		if cc, ok := h.tryTenantClient(r.Context(), proj, h.resolveServiceID(r, proj)); ok {
-			for i := range out {
-				if srv, isMap := out[i].Data["server"].(map[string]any); isMap {
-					enrichServerFlavor(r.Context(), cc, srv)
-				}
+	if typ == cloud.TypeServer {
+		h.enrichServerFlavors(r, proj, out)
+	}
+	httpx.List(w, out)
+}
+
+// enrichServerFlavors best-effort resolves each cached server's flavor specs live (see
+// enrichServerFlavor) — the list otherwise shows "undefined CPU, NaN GB RAM".
+func (h *Handler) enrichServerFlavors(r *http.Request, proj *Project, out []cloud.CloudResource) {
+	if len(out) == 0 {
+		return
+	}
+	if cc, ok := h.tryTenantClient(r.Context(), proj, h.resolveServiceID(r, proj)); ok {
+		for i := range out {
+			if srv, isMap := out[i].Data["server"].(map[string]any); isMap {
+				enrichServerFlavor(r.Context(), cc, srv)
 			}
 		}
 	}
-	httpx.List(w, out)
+}
+
+// emitCloudList writes a live-listed cloud-resource slice, keyset-paged in memory (cursor on id,
+// newest-first-ish) when a paging param is present, else the full list (back-compat). The provider
+// returns the whole per-region collection per call, so paging happens after materialization.
+func (h *Handler) emitCloudList(w http.ResponseWriter, r *http.Request, out []cloud.CloudResource) {
+	pg, err := paging.Parse(r.URL.Query())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	if !pg.Active {
+		httpx.List(w, out)
+		return
+	}
+	page, next, prev := paging.KeysetSlice(out, pg, func(c cloud.CloudResource) string { return c.ID })
+	httpx.CursorList(w, page, pg.Limit, next, prev)
 }
 
 // listPorts live-lists the project's Neutron ports as PORT CloudResources.
@@ -218,7 +274,7 @@ func (h *Handler) listPorts(w http.ResponseWriter, r *http.Request, proj *Projec
 			}
 		}
 	}
-	httpx.List(w, out)
+	h.emitCloudList(w, r, out)
 }
 
 // listFloatingIPs live-lists the project's Neutron floating IPs as FLOATING_IP CloudResources.
@@ -257,7 +313,7 @@ func (h *Handler) listFloatingIPs(w http.ResponseWriter, r *http.Request, proj *
 			}
 		}
 	}
-	httpx.List(w, out)
+	h.emitCloudList(w, r, out)
 }
 
 // listSecurityGroups live-lists the project's Neutron security groups as SECURITY_GROUP
@@ -278,7 +334,7 @@ func (h *Handler) listSecurityGroups(w http.ResponseWriter, r *http.Request, pro
 			}
 		}
 	}
-	httpx.List(w, out)
+	h.emitCloudList(w, r, out)
 }
 
 // liveCreatedAt maps the live object's own created_at (neutron/glance RFC3339) onto the DTO —
@@ -461,7 +517,7 @@ func (h *Handler) listImages(w http.ResponseWriter, r *http.Request, proj *Proje
 			}
 		}
 	}
-	httpx.List(w, out)
+	h.emitCloudList(w, r, out)
 }
 
 // cloudGet handles GET /api/v1/project/{id}/cloud/{resourceId} → the

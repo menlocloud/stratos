@@ -145,6 +145,23 @@ export interface DataTableProps<TData> {
   pageSize?: number
   skeletonRows?: number
   className?: string
+  /**
+   * Server-side (BE-driven) pagination — opt-in. When set, `data` is treated as ONE
+   * server page: the table disables client sort/search/pagination and drives page
+   * navigation (and optional search) through these callbacks. `total` is the server
+   * row count; page controls derive from it. Omit for the default client-side mode.
+   * ponytail: admin-only for now (offset lists); mirror into the client copy when a
+   * client page needs offset paging.
+   */
+  server?: {
+    pageIndex: number
+    pageSize: number
+    total: number
+    onPageChange: (pageIndex: number) => void
+    onPageSizeChange?: (pageSize: number) => void
+    search?: string
+    onSearchChange?: (q: string) => void
+  }
 }
 
 export function DataTable<TData>({
@@ -163,24 +180,47 @@ export function DataTable<TData>({
   pageSize = DEFAULT_PAGE_SIZE,
   skeletonRows = 5,
   className,
+  server,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>(initialSorting)
   const [globalFilter, setGlobalFilter] = useState("")
   const isDesktopTable = useDesktopTableLayout()
 
+  const manual = !!server
   const rows = data ?? (EMPTY as TData[])
   const paginationEnabled = pagination && pageSize > 0
   const initialPageSize = pageSize > 0 ? pageSize : DEFAULT_PAGE_SIZE
   const table = useReactTable({
     data: rows,
     columns,
-    state: { sorting, globalFilter },
+    state: {
+      sorting,
+      globalFilter,
+      ...(manual ? { pagination: { pageIndex: server!.pageIndex, pageSize: server!.pageSize } } : {}),
+    },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    ...(paginationEnabled
+    // Server mode renders the given page verbatim — no client sort/filter/paginate
+    // models (they would re-order/slice a single page and lie about the dataset).
+    ...(manual
+      ? {
+          manualPagination: true,
+          manualSorting: true,
+          manualFiltering: true,
+          rowCount: server!.total,
+          onPaginationChange: (updater) => {
+            const prev = { pageIndex: server!.pageIndex, pageSize: server!.pageSize }
+            const next = typeof updater === "function" ? updater(prev) : updater
+            if (next.pageIndex !== prev.pageIndex) server!.onPageChange(next.pageIndex)
+            if (next.pageSize !== prev.pageSize) server!.onPageSizeChange?.(next.pageSize)
+          },
+        }
+      : {
+          getSortedRowModel: getSortedRowModel(),
+          getFilteredRowModel: getFilteredRowModel(),
+        }),
+    ...(paginationEnabled && !manual
       ? {
           getPaginationRowModel: getPaginationRowModel(),
           initialState: { pagination: { pageSize: initialPageSize } },
@@ -204,7 +244,8 @@ export function DataTable<TData>({
   const hasToolbar =
     Boolean(toolbar) || Boolean(searchPlaceholder) || (!isDesktopTable && sortableColumns.length > 0)
   const currentSort = sorting[0]
-  const filteredRowCount = table.getFilteredRowModel().rows.length
+  // Server mode has no client filter model — the total is authoritative.
+  const filteredRowCount = manual ? server!.total : table.getFilteredRowModel().rows.length
   const pageState = table.getState().pagination
   const pageCount = Math.max(table.getPageCount(), 1)
   const pageIndex = Math.min(pageState.pageIndex, pageCount - 1)
@@ -339,8 +380,12 @@ export function DataTable<TData>({
             <div className="relative w-full max-w-xs">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                value={globalFilter}
+                value={manual ? (server!.search ?? "") : globalFilter}
                 onChange={(e) => {
+                  if (manual) {
+                    server!.onSearchChange?.(e.target.value)
+                    return
+                  }
                   setGlobalFilter(e.target.value)
                   if (paginationEnabled) table.setPageIndex(0)
                 }}

@@ -6,6 +6,7 @@ import { FileCode2, Layers, MoreHorizontal, Pause, Play, Plus, RefreshCw, Trash2
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -25,7 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch, type CloudScope } from "@/lib/api"
 import { fmtDateTime, timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudScope, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 function stackName(r: CloudResource): string {
@@ -67,7 +68,10 @@ export default function StacksPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
-  const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "STACK")
+  const {
+    rows: data, isLoading, isError, error, refetch, isFetching,
+    hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "STACK")
 
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
@@ -214,7 +218,7 @@ export default function StacksPage() {
         }
       />
 
-      {!isLoading && !isError && !data?.length ? (
+      {!isLoading && !isError && !data.length ? (
         <EmptyState
           icon={Layers}
           title="No stacks yet"
@@ -226,15 +230,24 @@ export default function StacksPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={(error as Error | null) ?? null}
-          searchPlaceholder="Search stacks…"
-          onRowClick={(r) => setDetailsFor(r)}
-          getRowId={(r) => r.id}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+            onRowClick={(r) => setDetailsFor(r)}
+            getRowId={(r) => r.id}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="stack"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

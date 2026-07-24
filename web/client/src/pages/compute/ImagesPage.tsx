@@ -12,6 +12,7 @@ import { HardDrive, MoreHorizontal, RefreshCw, Trash2, Upload } from "lucide-rea
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -23,7 +24,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudScope, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 const gb = (bytes?: number) => (bytes ? (bytes / 1073741824).toFixed(2) : "0.00")
@@ -70,7 +71,10 @@ export default function ImagesPage() {
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
 
-  const mine = useCloudList(pid, "IMAGE")
+  const {
+    rows: mineData, isLoading: mineLoading, refetch: mineRefetch, isFetching: mineFetching,
+    error: mineError, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "IMAGE")
   const pub = useQuery({
     queryKey: ["bulk-action", pid, "PUBLIC_IMAGES", scope?.serviceId, scope?.region],
     queryFn: () =>
@@ -203,13 +207,13 @@ export default function ImagesPage() {
             variant="outline"
             size="sm"
             onClick={() => {
-              void mine.refetch()
+              void mineRefetch()
               void pub.refetch()
             }}
-            disabled={mine.isFetching || pub.isFetching}
+            disabled={mineFetching || pub.isFetching}
             aria-label="Refresh"
           >
-            <RefreshCw className={mine.isFetching || pub.isFetching ? "size-4 animate-spin" : "size-4"} />
+            <RefreshCw className={mineFetching || pub.isFetching ? "size-4 animate-spin" : "size-4"} />
           </Button>
         }
       />
@@ -221,20 +225,29 @@ export default function ImagesPage() {
         </TabsList>
 
         <TabsContent value="mine" className="mt-4">
-          {!mine.isLoading && !mine.error && !mine.data?.length ? (
+          {!mineLoading && !mineError && !mineData.length ? (
             <EmptyState
               icon={HardDrive}
               title="No images yet"
               hint="Server snapshots and images you upload will show up here."
             />
           ) : (
-            <DataTable
-              columns={mineColumns}
-              data={mine.data}
-              isLoading={mine.isLoading}
-              error={mine.error as Error | null}
-              searchPlaceholder="Search images…"
-            />
+            <>
+              <DataTable
+                columns={mineColumns}
+                data={mineData}
+                isLoading={mineLoading}
+                error={mineError as Error | null}
+                pagination={false}
+              />
+              <LoadMore
+                hasNextPage={hasNextPage}
+                isFetching={isFetchingNextPage}
+                onClick={() => void fetchNextPage()}
+                count={mineData.length}
+                noun="image"
+              />
+            </>
           )}
         </TabsContent>
 

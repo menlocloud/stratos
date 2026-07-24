@@ -6,6 +6,7 @@ import { Camera, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -18,7 +19,7 @@ import {
 } from "@/components/ui/select"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 // The API stores the live snapshot under data.volumeSnapshot (data.snapshot is not used).
@@ -30,7 +31,9 @@ export default function SnapshotsPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
-  const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "VOLUME_SNAPSHOT")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "VOLUME_SNAPSHOT")
   const volumes = useCloudList(pid, "VOLUME")
   const volumesData = volumes.data
 
@@ -154,7 +157,7 @@ export default function SnapshotsPage() {
         }
       />
 
-      {!isLoading && !isError && !data?.length ? (
+      {!isLoading && !data.length ? (
         <EmptyState
           icon={Camera}
           title="No snapshots yet"
@@ -166,13 +169,22 @@ export default function SnapshotsPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={isError ? (error as Error) : null}
-          searchPlaceholder="Search snapshots…"
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="snapshot"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

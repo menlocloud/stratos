@@ -45,24 +45,32 @@ export function resourceCreatedAt(cr: CloudResourceRow): string | undefined {
   return (cr.info?.createdAt as string) ?? (cr.createdAt as string)
 }
 
+const PAGE_SIZE = 25
+
+// The cloud-resource type facet is now server-side (?type=), so the dropdown options are a fixed
+// enum (they can't be derived from a single server page). Mirror internal/cloud resource types.
+const RESOURCE_TYPES = [
+  "SERVER", "VOLUME", "VOLUME_SNAPSHOT", "IMAGE", "NETWORK", "PORT", "ROUTER", "FLOATING_IP",
+  "SECURITY_GROUP", "KEYPAIR", "SERVER_GROUP", "LOAD_BALANCER", "DNS_ZONE", "BARBICAN_SECRET",
+  "STACK", "BUCKET", "SHARE",
+]
+
 export default function CloudResourcesPage() {
   const navigate = useNavigate()
-  const { data, isLoading, isError, error, refetch, isFetching } =
-    useAdminList<CloudResourceRow>("/admin/cloud-resource")
-  const rows = data?.data ?? []
   const [type, setType] = useState("ALL")
+  const [pageIndex, setPageIndex] = useState(0)
+  const listPath = `/admin/cloud-resource?limit=${PAGE_SIZE}&offset=${pageIndex * PAGE_SIZE}${
+    type === "ALL" ? "" : `&type=${type}`
+  }`
+  const { data, isLoading, isError, error, refetch, isFetching } =
+    useAdminList<CloudResourceRow>(listPath)
+  const rows = data?.data ?? []
+  const total = data?.paging?.total ?? 0
 
-  const types = useMemo(
-    () => Array.from(new Set(rows.map((r) => r.type as string).filter(Boolean))).sort(),
-    [rows],
-  )
-
-  // Type filter is semantic (exact match on r.type); free-text search is the
-  // DataTable's built-in global filter over the accessor values.
-  const filtered = useMemo(
-    () => (type === "ALL" ? rows : rows.filter((r) => r.type === type)),
-    [rows, type],
-  )
+  const onTypeChange = (t: string) => {
+    setType(t)
+    setPageIndex(0) // a new facet resets to the first page
+  }
 
   const columns = useMemo<ColumnDef<CloudResourceRow, any>[]>(
     () => [
@@ -151,7 +159,7 @@ export default function CloudResourcesPage() {
         }
       />
 
-      {!isLoading && !isError && !rows.length ? (
+      {!isLoading && !isError && total === 0 ? (
         <EmptyState
           icon={Cloud}
           title="No cloud resources"
@@ -160,32 +168,27 @@ export default function CloudResourcesPage() {
       ) : (
         <DataTable
           columns={columns}
-          data={filtered}
+          data={rows}
           isLoading={isLoading}
           error={isError ? (error as Error) : null}
-          searchPlaceholder="Search by name, ID, project…"
           onRowClick={(r) => r.id && navigate(`/clients/cloud-resources/${r.id}`)}
           getRowId={(r) => (r.id as string) ?? (r.externalId as string) ?? ""}
-          pageSize={25}
+          pageSize={PAGE_SIZE}
+          server={{ pageIndex, pageSize: PAGE_SIZE, total, onPageChange: setPageIndex }}
           toolbar={
-            <>
-              <Select value={type} onValueChange={setType}>
-                <SelectTrigger className="h-9 w-48" aria-label="Filter by type">
-                  <SelectValue placeholder="All types" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All types</SelectItem>
-                  {types.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t.toLowerCase().replace(/_/g, " ")}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span className="ml-auto text-sm tabular-nums text-muted-foreground">
-                {filtered.length} of {rows.length}
-              </span>
-            </>
+            <Select value={type} onValueChange={onTypeChange}>
+              <SelectTrigger className="h-9 w-48" aria-label="Filter by type">
+                <SelectValue placeholder="All types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All types</SelectItem>
+                {RESOURCE_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t.toLowerCase().replace(/_/g, " ")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           }
         />
       )}

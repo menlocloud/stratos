@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
 import { useParams } from "react-router-dom"
 import { apiFetch, apiFetchEnvelope, type CloudScope } from "./api"
 import type {
@@ -78,6 +78,18 @@ export function useCloudList(pid: string, type: string, extraQuery = "") {
       }),
     enabled: !!pid && !!scope,
   })
+}
+
+// Keyset-paged cloud-resource list (POST /project/{pid}/resource?type=X) — the BE-paged
+// twin of useCloudList for the big fleet lists (servers, volumes, …). "Load more" via
+// paging.nextMarker. Use useCloudList (full) for secondary lookup lists a page joins against.
+export function useCloudCursorList(pid: string, type: string, extraQuery = "") {
+  const scope = useCloudScope(pid)
+  return useCursorList<CloudResource>(
+    ["cloud", pid, type, extraQuery],
+    `/project/${pid}/resource?type=${type}${extraQuery}`,
+    { method: "POST", cloud: scope, enabled: !!pid && !!scope },
+  )
 }
 
 // External (router:external) networks the project may allocate public IPs from —
@@ -197,6 +209,32 @@ export function useFeatures() {
     queryFn: () => apiFetch<string[]>("/features"),
     staleTime: 300_000,
   })
+}
+
+// Keyset (cursor) list — the BE-paged read for churny/append-only lists (ledgers,
+// bills, cloud resources). Walks server pages via paging.nextMarker and flattens
+// them into `rows` for a "Load more" footer. `path` is WITHOUT paging params; the
+// hook appends ?limit=&after=. Newest-first (the server default). See AuditPage for
+// the rationale that keyset lists don't offer client sort/filter over partial data.
+export function useCursorList<T = unknown>(
+  key: readonly unknown[],
+  path: string,
+  opts?: { enabled?: boolean; limit?: number; method?: string; cloud?: CloudScope },
+) {
+  const limit = opts?.limit ?? 50
+  const q = useInfiniteQuery({
+    queryKey: [...key, "cursor", limit],
+    queryFn: ({ pageParam }) => {
+      const sep = path.includes("?") ? "&" : "?"
+      const url = `${path}${sep}limit=${limit}${pageParam ? `&after=${encodeURIComponent(pageParam as string)}` : ""}`
+      return apiFetchEnvelope<T[]>(url, { method: opts?.method, cloud: opts?.cloud })
+    },
+    initialPageParam: "",
+    getNextPageParam: (last) => (last.paging as { nextMarker?: string } | undefined)?.nextMarker ?? undefined,
+    enabled: opts?.enabled ?? true,
+  })
+  const rows = q.data?.pages.flatMap((p) => p.data ?? []) ?? []
+  return { ...q, rows }
 }
 
 // Ensures the project is bootstrapped (keystone tenant) — fire-and-forget on entry.

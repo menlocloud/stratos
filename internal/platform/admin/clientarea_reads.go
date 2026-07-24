@@ -16,6 +16,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/pgdoc"
 	"github.com/menlocloud/stratos/internal/platform/billing"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 	"github.com/menlocloud/stratos/pkg/httpx"
 	"github.com/shopspring/decimal"
@@ -68,6 +69,12 @@ func (r *Repo) ListRawSorted(ctx context.Context, collection, field string, dir 
 	return out, nil
 }
 
+// ListRawSortedPage is the offset-paged variant of ListRawSorted (page window + total). Paginating
+// here also bounds the per-row N+1 hydration in the admin list handlers to one page.
+func (r *Repo) ListRawSortedPage(ctx context.Context, collection, field string, dir int, p paging.Params) ([]pgdoc.M, int64, error) {
+	return paging.Offset[pgdoc.M](ctx, r.c(collection), pgdoc.M{}, []pgdoc.SortKey{sortKeyFor(field, dir)}, p)
+}
+
 // projectAdminList returns every project enriched for the admin table: the project doc + the
 // joined `organization` + usedVcpus/usedRam/usedBlockStorage (computed cloud usage — 0 with no
 // live metrics), sorted createdAt DESC. NB despite the name, only organization is joined here
@@ -76,7 +83,11 @@ func (h *Handler) projectAdminList(w http.ResponseWriter, r *http.Request) {
 	if !h.require(w, r, "admin:project:read") {
 		return
 	}
-	projects, err := h.repo.ListRawSorted(r.Context(), "project", "createdAt", -1)
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	projects, total, err := h.listRawSortedMaybePaged(r.Context(), "project", "createdAt", -1, pg)
 	if httpx.WriteError(w, err) {
 		return
 	}
@@ -94,6 +105,41 @@ func (h *Handler) projectAdminList(w http.ResponseWriter, r *http.Request) {
 		sd["usedBlockStorage"] = 0
 		out = append(out, sd)
 	}
+	emitAdminList(w, pg, out, total)
+}
+
+// listRawSortedMaybePaged returns one page (+ total) when pg is active, else the full sorted list
+// (total = len) — the shared read behind the admin client-area list handlers. emitAdminList picks
+// the matching envelope.
+func (h *Handler) listRawSortedMaybePaged(ctx context.Context, collection, field string, dir int, pg paging.Params) ([]pgdoc.M, int64, error) {
+	if pg.Active {
+		return h.repo.ListRawSortedPage(ctx, collection, field, dir, pg)
+	}
+	rows, err := h.repo.ListRawSorted(ctx, collection, field, dir)
+	return rows, int64(len(rows)), err
+}
+
+// listRawFilteredSortedMaybePaged is listRawSortedMaybePaged with a WHERE filter (server-side
+// facet filtering, e.g. the admin cloud-resource type dropdown) — one page (+ total) when active,
+// else the full filtered list.
+func (h *Handler) listRawFilteredSortedMaybePaged(ctx context.Context, collection string, filter pgdoc.M, field string, dir int, pg paging.Params) ([]pgdoc.M, int64, error) {
+	if pg.Active {
+		return paging.Offset[pgdoc.M](ctx, h.repo.c(collection), filter, []pgdoc.SortKey{sortKeyFor(field, dir)}, pg)
+	}
+	rows := []pgdoc.M{}
+	if err := h.repo.c(collection).Find(ctx, filter, &rows, pgdoc.Sort(sortKeyFor(field, dir))); err != nil {
+		return nil, 0, err
+	}
+	return rows, int64(len(rows)), nil
+}
+
+// emitAdminList writes the offset envelope (data + paging{limit,offset,total}) when paging is
+// active, else the plain list — keeping un-migrated admin pages byte-compatible.
+func emitAdminList(w http.ResponseWriter, pg paging.Params, out []pgdoc.M, total int64) {
+	if pg.Active {
+		httpx.Page(w, out, paging.OffsetPaging(pg, total))
+		return
+	}
 	httpx.List(w, out)
 }
 
@@ -103,7 +149,11 @@ func (h *Handler) billAdminList(w http.ResponseWriter, r *http.Request) {
 	if !h.require(w, r, "admin:bill:read") {
 		return
 	}
-	bills, err := h.repo.ListRawSorted(r.Context(), "bill", "createdAt", -1)
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	bills, total, err := h.listRawSortedMaybePaged(r.Context(), "bill", "createdAt", -1, pg)
 	if httpx.WriteError(w, err) {
 		return
 	}
@@ -118,7 +168,7 @@ func (h *Handler) billAdminList(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, sd)
 	}
-	httpx.List(w, out)
+	emitAdminList(w, pg, out, total)
 }
 
 // billingProfileAdminList returns every billing profile for the admin table: the profile doc +
@@ -129,7 +179,11 @@ func (h *Handler) billingProfileAdminList(w http.ResponseWriter, r *http.Request
 	if !h.require(w, r, "admin:billing_profile:read") {
 		return
 	}
-	profiles, err := h.repo.ListRawSorted(r.Context(), "billingProfile", "_id", -1)
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	profiles, total, err := h.listRawSortedMaybePaged(r.Context(), "billingProfile", "_id", -1, pg)
 	if httpx.WriteError(w, err) {
 		return
 	}
@@ -169,7 +223,7 @@ func (h *Handler) billingProfileAdminList(w http.ResponseWriter, r *http.Request
 		sd["forecastedMonthEnd"] = forecast
 		out = append(out, sd)
 	}
-	httpx.List(w, out)
+	emitAdminList(w, pg, out, total)
 }
 
 // billFinancialOverview builds the bill financial overview: recompute net (product

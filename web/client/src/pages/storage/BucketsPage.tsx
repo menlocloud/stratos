@@ -7,6 +7,7 @@ import { Database, FolderOpen, MoreHorizontal, Plus, RefreshCw, Settings } from 
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -23,7 +24,7 @@ import {
 } from "@/components/ui/select"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useProjectId } from "@/lib/hooks"
 import { BACKEND_LABEL, bucketBackend, isS3Location, useBucketLocations } from "@/lib/objectstore"
 import type { CloudResource, Location } from "@/lib/types"
 import { BucketSettingsDialog } from "./BucketSettingsDialog"
@@ -47,7 +48,9 @@ export default function BucketsPage() {
   const pid = useProjectId()
   const qc = useQueryClient()
   const navigate = useNavigate()
-  const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "BUCKET")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "BUCKET")
   // Swift and S3 are separate stores with separate bucket sets — the user picks which one to create in.
   const { locations: rawLocations } = useBucketLocations(pid)
   // Show S3 (Ceph) first and default to it when a project has it: devs reach for S3 far more often than
@@ -210,7 +213,7 @@ export default function BucketsPage() {
         }
       />
 
-      {!isLoading && !isError && !data?.length ? (
+      {!isLoading && !data.length ? (
         <EmptyState
           icon={Database}
           title="No buckets yet"
@@ -222,14 +225,23 @@ export default function BucketsPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={isError ? (error as Error) : null}
-          searchPlaceholder="Search buckets…"
-          onRowClick={(r) => navigate(`/p/${pid}/object-storage/${r.id}`)}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+            onRowClick={(r) => navigate(`/p/${pid}/object-storage/${r.id}`)}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="bucket"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

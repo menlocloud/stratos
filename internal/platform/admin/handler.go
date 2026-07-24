@@ -14,6 +14,7 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/billing"
 	"github.com/menlocloud/stratos/internal/platform/catalog"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/platformconfig"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 	"github.com/menlocloud/stratos/internal/platform/rbac"
@@ -537,13 +538,28 @@ func (h *Handler) listRaw(key, collection string) http.HandlerFunc {
 		if !h.require(w, r, key) {
 			return
 		}
-		items, err := h.repo.ListRaw(r.Context(), collection)
-		if httpx.WriteError(w, err) {
+		pg, ok := paging.FromRequest(w, r)
+		if !ok {
 			return
 		}
 		// Shape each doc to the API JSON the domains serialize (_id→id, drop _class). The Go
 		// domains never emit _id/_class, so a raw passthrough diverges + breaks the admin UI's
 		// id-keyed row tracking / detail links.
+		if pg.Active {
+			items, total, err := h.repo.ListRawPage(r.Context(), collection, pg)
+			if httpx.WriteError(w, err) {
+				return
+			}
+			for i := range items {
+				shapeDoc(items[i])
+			}
+			httpx.Page(w, items, paging.OffsetPaging(pg, total))
+			return
+		}
+		items, err := h.repo.ListRaw(r.Context(), collection)
+		if httpx.WriteError(w, err) {
+			return
+		}
 		for i := range items {
 			shapeDoc(items[i])
 		}
@@ -1265,10 +1281,20 @@ func (h *Handler) cloudResourcesAll(w http.ResponseWriter, r *http.Request) {
 	if !h.require(w, r, "admin:cloud_resource:read") {
 		return
 	}
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
 	// Newest first (sort _id DESC), join each resource to its project (matched by id, keeping
 	// {id,name}), drop resources with no matching project, then reduce. Build the shape:
-	// {id,data,createdAt,externalId,info,region,type,serviceId,project:{id,name}}.
-	resources, err := h.repo.ListRawSorted(r.Context(), "cloudResource", "_id", -1)
+	// {id,data,createdAt,externalId,info,region,type,serviceId,project:{id,name}}. Paging the
+	// window also bounds the per-row project join to one page. Optional ?type= filter (the admin
+	// table's resource-type dropdown, applied server-side).
+	filter := pgdoc.M{}
+	if t := r.URL.Query().Get("type"); t != "" {
+		filter["type"] = t
+	}
+	resources, total, err := h.listRawFilteredSortedMaybePaged(r.Context(), "cloudResource", filter, "_id", -1, pg)
 	if httpx.WriteError(w, err) {
 		return
 	}
@@ -1294,6 +1320,12 @@ func (h *Handler) cloudResourcesAll(w http.ResponseWriter, r *http.Request) {
 		}
 		keep["project"] = pgdoc.M{"id": idToString(proj["_id"]), "name": proj["name"]}
 		out = append(out, keep)
+	}
+	// total counts every cloudResource row; the rare project-less/unmatched rows dropped above make
+	// the last page slightly short of `total` — acceptable for the admin table.
+	if pg.Active {
+		httpx.Page(w, out, paging.OffsetPaging(pg, total))
+		return
 	}
 	httpx.OK(w, out)
 }

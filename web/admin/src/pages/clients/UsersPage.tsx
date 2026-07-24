@@ -41,6 +41,7 @@ export type AdminUser = {
 }
 
 const LIST_PATH = "/admin/user"
+const PAGE_SIZE = 50
 
 export function userDisplayName(u: AdminUser): string {
   return [u.firstName, u.lastName].filter(Boolean).join(" ") || "—"
@@ -49,7 +50,10 @@ export function userDisplayName(u: AdminUser): string {
 export default function UsersPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, isFetching, error, refetch } = useAdminList<AdminUser>(LIST_PATH)
+  // BE-paged (offset): GET /admin/user?limit=&offset= → { data:[page], paging:{total} }.
+  const [pageIndex, setPageIndex] = useState(0)
+  const listPath = `${LIST_PATH}?limit=${PAGE_SIZE}&offset=${pageIndex * PAGE_SIZE}`
+  const { data, isLoading, isFetching, error, refetch } = useAdminList<AdminUser>(listPath)
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({ email: "", firstName: "", lastName: "" })
   const [projectIds, setProjectIds] = useState<string[]>([])
@@ -59,8 +63,10 @@ export default function UsersPage() {
   const projects = useAdminList<{ id?: string; name?: string }>("/admin/project", createOpen)
 
   const users = data?.data ?? []
+  const total = data?.paging?.total ?? 0
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["admin-list", LIST_PATH] })
+  // Paged list keys on the full (param-bearing) path, so invalidate the whole admin-list family.
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["admin-list"] })
 
   // POST /admin/user (user.go userCreate) — body {firstName, lastName, email, projectIds?}.
   // projectIds fan out as best-effort project invites server-side.
@@ -186,7 +192,7 @@ export default function UsersPage() {
         }
       />
 
-      {!isLoading && !error && users.length === 0 ? (
+      {!isLoading && !error && total === 0 ? (
         <EmptyState
           icon={Users}
           title="No users yet"
@@ -203,9 +209,10 @@ export default function UsersPage() {
           data={users}
           isLoading={isLoading}
           error={error as Error | null}
-          searchPlaceholder="Search users…"
+          pageSize={PAGE_SIZE}
           onRowClick={(u) => u.id && navigate(`/clients/users/${u.id}`)}
           getRowId={(u) => u.id ?? u.sub ?? u.email ?? ""}
+          server={{ pageIndex, pageSize: PAGE_SIZE, total, onPageChange: setPageIndex }}
         />
       )}
 
