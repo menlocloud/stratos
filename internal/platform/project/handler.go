@@ -224,6 +224,10 @@ func (h *Handler) Routes(r chi.Router) {
 	r.Post("/openstack/{id}/image/{imageId}/upload", h.cloudImageUpload)
 	// Download: GET /download/{token} streams a cloud object (whitelisted; token=auth).
 	r.Get("/download/{token}", h.cloudObjectDownload)
+	// Console: GET /console/{token}/websockify reverse-proxies the VNC WebSocket to the
+	// project's novncproxy (whitelisted; token=auth — a bearer can't ride a WS handshake).
+	// Keeps the OpenStack console service off the public internet.
+	r.Get("/console/{token}/websockify", h.cloudConsoleProxy)
 	// Collection-level action: catalog actions for the create wizard
 	// (PUBLIC_IMAGES, LIST_AVAILABILITY_ZONES) — must precede no static segment so it doesn't
 	// collide with /{resourceId}/action (chi: static "action" wins over the {resourceId} param).

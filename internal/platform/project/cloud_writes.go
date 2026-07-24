@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"time"
 
@@ -1778,6 +1780,10 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, map[string]any{"result": logs})
 		return
 	case "REMOTECONTROL":
+		// Nova hands back a noVNC URL on the novncproxy host. We do NOT surface that to the
+		// browser — it would require exposing an internal OpenStack service to the internet.
+		// Instead mint a short-lived console token carrying the nova URL and return OUR proxied
+		// WebSocket endpoint; the client renders noVNC itself against it (see cloudConsoleProxy).
 		var console map[string]any
 		if cc, ok := h.tryTenantClient(r.Context(), proj, svcID); ok {
 			if rc, err := cc.GetVNCConsole(r.Context(), externalID); err == nil {
@@ -1787,7 +1793,29 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		httpx.OK(w, map[string]any{"result": console})
+		novncURL := strAny(console["url"])
+		if novncURL == "" {
+			h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "no console URL returned"))
+			return
+		}
+		if h.downloads == nil {
+			h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "console not configured"))
+			return
+		}
+		tok, err := h.downloads.CreateWithTTL(r.Context(), &cloud.CloudDownload{
+			Type: cloud.DownloadTypeConsole, ServiceID: svcID, ProjectID: proj.ID, ExternalID: externalID,
+			Metadata: map[string]string{"consoleUrl": novncURL},
+		}, cloud.ConsoleTokenTTL)
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", req.Action, cr)
+		httpx.OK(w, map[string]any{"result": map[string]any{
+			"protocol": console["protocol"],
+			"type":     console["type"],
+			"url":      h.consoleWebsocketURL(tok.ID),
+		}})
 		return
 	case "REBUILD":
 		// Server REBUILD onto an image (rebuild). FE: data{imageId|imageRef|
@@ -2075,6 +2103,87 @@ func (h *Handler) cloudObjectDownload(w http.ResponseWriter, r *http.Request) {
 	default:
 		h.fail(w, httpx.NewError(http.StatusNotImplemented, http.StatusNotImplemented, "download type not supported"))
 	}
+}
+
+// consoleWebsocketURL builds the PUBLIC endpoint the browser's noVNC client connects to.
+// apiBaseURL is http(s); noVNC requires a ws(s) scheme.
+func (h *Handler) consoleWebsocketURL(token string) string {
+	base := strings.TrimRight(h.apiBaseURL, "/")
+	switch {
+	case strings.HasPrefix(base, "https://"):
+		base = "wss://" + strings.TrimPrefix(base, "https://")
+	case strings.HasPrefix(base, "http://"):
+		base = "ws://" + strings.TrimPrefix(base, "http://")
+	}
+	return base + "/api/v1/console/" + token + "/websockify"
+}
+
+// consoleBackend derives the novncproxy WebSocket target from the nova console URL. Nova returns
+// e.g. https://host:6080/vnc_lite.html?path=%3Ftoken%3D<uuid>, where the `path` query is what
+// noVNC appends to that origin for its socket (usually "?token=<uuid>").
+func consoleBackend(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("console: unparseable nova url %q", raw)
+	}
+	p := u.Query().Get("path")
+	if p == "" {
+		// Some deployments hand back the token directly rather than a `path` blob.
+		p = "?token=" + u.Query().Get("token")
+	}
+	path, rawQuery := p, ""
+	if i := strings.Index(p, "?"); i >= 0 {
+		path, rawQuery = p[:i], p[i+1:]
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return &url.URL{Scheme: u.Scheme, Host: u.Host, Path: path, RawQuery: rawQuery}, nil
+}
+
+// cloudConsoleProxy reverse-proxies the VNC WebSocket to the project's novncproxy. Whitelisted —
+// the console token IS the auth (same model as the download route: a bearer header cannot ride on
+// a WebSocket handshake). This is what keeps the OpenStack console service OFF the public
+// internet: the browser only ever talks to Stratos. httputil.ReverseProxy carries the HTTP/1.1
+// Upgrade through natively.
+func (h *Handler) cloudConsoleProxy(w http.ResponseWriter, r *http.Request) {
+	if h.downloads == nil {
+		h.fail(w, httpx.NotFound("Console not found"))
+		return
+	}
+	tok, err := h.downloads.ByID(r.Context(), chi.URLParam(r, "token"))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	// Type check keeps a download token from being replayed as a console token (and vice versa).
+	if tok == nil || tok.Type != cloud.DownloadTypeConsole {
+		h.fail(w, httpx.NotFound("Console not found"))
+		return
+	}
+	backend, err := consoleBackend(tok.Metadata["consoleUrl"])
+	if err != nil {
+		slog.Warn("console token carries an unusable nova url", "err", err)
+		httpx.Err(w, http.StatusBadGateway, http.StatusBadGateway, "console backend unavailable")
+		return
+	}
+	// ponytail: default transport (TLS verified). The novncproxy already serves a
+	// browser-trusted cert today; add an insecure escape hatch only if a region needs it.
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme, req.URL.Host = backend.Scheme, backend.Host
+			req.URL.Path, req.URL.RawQuery = backend.Path, backend.RawQuery
+			req.Host = backend.Host
+			// novncproxy may enforce [console] allowed_origins; present as same-origin so the
+			// operator never has to allow-list the Stratos hostname.
+			req.Header.Set("Origin", backend.Scheme+"://"+backend.Host)
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			slog.Warn("console proxy failed", "err", err)
+			httpx.Err(w, http.StatusBadGateway, http.StatusBadGateway, "console backend unavailable")
+		},
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 // cloudImageUpload handles POST /{projectId}/image/{imageId}/upload

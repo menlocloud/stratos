@@ -32,11 +32,19 @@ func hashToken(t string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// CloudDownload.Type values — only the Swift-object path is wired.
+// CloudDownload.Type values. The Swift-object path streams bytes; the CONSOLE type carries a
+// server's nova noVNC URL so the whitelisted console route can reverse-proxy the VNC WebSocket
+// (see cloudConsoleProxy) — the object-download handler rejects any non-download type.
 const (
 	DownloadTypeSwiftObject = "OPENSTACK_SWIFT_BUCKET"
 	DownloadTypeS3Object    = "OPENSTACK_S3_OBJECT"
+	DownloadTypeConsole     = "OPENSTACK_CONSOLE"
 )
+
+// ConsoleTokenTTL bounds a console token's life. Nova's own console token is short-lived
+// ([consoleauth] token_ttl, 600s by default), so a longer Stratos token would outlive the
+// backend session it fronts.
+const ConsoleTokenTTL = 10 * time.Minute
 
 // CloudDownload is the cloudDownload collection document.
 type CloudDownload struct {
@@ -61,8 +69,14 @@ func NewDownloadRepo(db *pgdoc.DB) *DownloadRepo {
 // crypto-random token; the returned d.ID carries the RAW token (the public download token) — it is
 // never stored, so a DB read cannot reconstruct a usable token.
 func (r *DownloadRepo) Create(ctx context.Context, d *CloudDownload) (*CloudDownload, error) {
+	return r.CreateWithTTL(ctx, d, time.Hour)
+}
+
+// CreateWithTTL is Create with an explicit lifetime — console tokens front a short-lived nova
+// console session and use ConsoleTokenTTL rather than the download default.
+func (r *DownloadRepo) CreateWithTTL(ctx context.Context, d *CloudDownload, ttl time.Duration) (*CloudDownload, error) {
 	now := time.Now().UTC()
-	exp := now.Add(time.Hour)
+	exp := now.Add(ttl)
 	d.CreatedAt = &now
 	d.ExpiresAt = &exp
 	raw, err := randomToken()

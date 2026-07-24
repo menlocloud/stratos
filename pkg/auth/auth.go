@@ -68,6 +68,8 @@ var publicPrefix = []string{
 	"/mcp", // MCP endpoint — auth enforced by the MCP handler (see publicExact note)
 	"/api/v1/auth/",
 	"/api/v1/download/",
+	"/api/v1/console/", // VNC console WebSocket proxy — the console token is the auth
+
 	"/api/v1/notifications/",
 	"/api/v1/callbacks/",
 	"/api/v1/admin/onboarding/",

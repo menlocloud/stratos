@@ -112,16 +112,11 @@ export function ServerDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  // REMOTECONTROL → result = nova remote_console {protocol,type,url} → open the noVNC url.
-  const vnc = useMutation({
-    mutationFn: () => actionFetch<{ url?: string }>(pid, resourceId, scope, "REMOTECONTROL"),
-    onSuccess: (d) => {
-      const url = d?.result?.url
-      if (url) window.open(url, "_blank", "noopener")
-      else toast.error("No console URL returned")
-    },
-    onError: (e: Error) => toast.error(e.message),
-  })
+  // Console opens OUR page (it renders noVNC against Stratos' proxied WebSocket and mints its own
+  // token on mount) — nova's novncproxy URL is never handed to the browser, so that service stays
+  // off the public internet. New tab: a console wants its own window.
+  const openConsole = () =>
+    window.open(`/p/${pid}/servers/${resourceId}/console`, "_blank", "noopener")
 
   const del = useMutation({
     mutationFn: () => apiFetch(`/project/${pid}/cloud/${resourceId}`, { method: "DELETE", cloud: scope }),
@@ -278,7 +273,7 @@ export function ServerDetailPage() {
                 >
                   Set password
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => vnc.mutate()}>Console (VNC)</DropdownMenuItem>
+                <DropdownMenuItem onClick={openConsole}>Console (VNC)</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onClick={() => setDialog("delete")}>
                   <Trash2 className="size-4" /> Delete

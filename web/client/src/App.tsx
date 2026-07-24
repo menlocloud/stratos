@@ -54,6 +54,10 @@ export default function App() {
           <Route path="servers" element={<ServersPage />} />
           <Route path="servers/new" element={lazyPage(() => import("@/pages/servers/CreateServerPage"))} />
           <Route path="servers/:resourceId" element={<ServerDetailPage />} />
+          <Route
+            path="servers/:resourceId/console"
+            element={lazyPage(() => import("@/pages/servers/ServerConsolePage"))}
+          />
           <Route path="server-groups" element={lazyPage(() => import("@/pages/compute/ServerGroupsPage"))} />
           <Route path="keypairs" element={lazyPage(() => import("@/pages/compute/KeypairsPage"))} />
           <Route path="images" element={lazyPage(() => import("@/pages/compute/ImagesPage"))} />
