@@ -27,8 +27,8 @@ export default function ServerConsolePage() {
   const rfbRef = useRef<RFB | null>(null)
   const [state, setState] = useState<ConsoleState>("connecting")
   const [message, setMessage] = useState("")
-  // Bumping this re-runs the connect effect (Reconnect mints a fresh token — the old one is
-  // short-lived and single-session).
+  // Bumping this re-runs the connect effect. Reconnect mints a fresh token rather than reusing the
+  // old one; tokens stay valid until they expire (10m server-side), they are not single-use.
   const [attempt, setAttempt] = useState(0)
 
   const name = (server?.data?.server?.name as string) ?? server?.name ?? resourceId
@@ -157,8 +157,14 @@ export default function ServerConsolePage() {
 }
 
 function StatusDot({ state }: { state: ConsoleState }) {
-  const label =
-    state === "connected" ? "Connected" : state === "connecting" ? "Connecting…" : "Disconnected"
+  // Distinct wording per state — the dot colour alone doesn't reach assistive tech, and a clean
+  // disconnect reads very differently from a failure.
+  const label = {
+    connected: "Connected",
+    connecting: "Connecting…",
+    disconnected: "Disconnected",
+    error: "Connection failed",
+  }[state]
   return (
     <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
       <span

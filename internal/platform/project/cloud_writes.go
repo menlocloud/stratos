@@ -2126,10 +2126,20 @@ func consoleBackend(raw string) (*url.URL, error) {
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("console: unparseable nova url %q", raw)
 	}
+	// Only ever proxy to an HTTP(S) origin — anything else is a malformed/unexpected console URL
+	// and would surface as an opaque "unsupported protocol scheme" from the transport.
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("console: unsupported nova url scheme %q", u.Scheme)
+	}
 	p := u.Query().Get("path")
 	if p == "" {
-		// Some deployments hand back the token directly rather than a `path` blob.
-		p = "?token=" + u.Query().Get("token")
+		// Some deployments hand back the token directly rather than a `path` blob. Without either
+		// there is nothing to authenticate the socket with, so refuse rather than proxy "?token=".
+		tok := u.Query().Get("token")
+		if tok == "" {
+			return nil, fmt.Errorf("console: nova url carries neither a path nor a token")
+		}
+		p = "?token=" + tok
 	}
 	path, rawQuery := p, ""
 	if i := strings.Index(p, "?"); i >= 0 {
@@ -2174,6 +2184,12 @@ func (h *Handler) cloudConsoleProxy(w http.ResponseWriter, r *http.Request) {
 			req.URL.Scheme, req.URL.Host = backend.Scheme, backend.Host
 			req.URL.Path, req.URL.RawQuery = backend.Path, backend.RawQuery
 			req.Host = backend.Host
+			// The console token in the URL is the ONLY intended credential. This endpoint shares an
+			// origin with the API, so the browser attaches its Stratos cookies to the handshake —
+			// never forward the caller's session/bearer down to the OpenStack console service.
+			for _, h := range []string{"Authorization", "Cookie", "X-Api-Key"} {
+				req.Header.Del(h)
+			}
 			// novncproxy may enforce [console] allowed_origins; present as same-origin so the
 			// operator never has to allow-list the Stratos hostname.
 			req.Header.Set("Origin", backend.Scheme+"://"+backend.Host)

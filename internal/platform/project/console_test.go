@@ -38,10 +38,20 @@ func TestConsoleBackend(t *testing.T) {
 		})
 	}
 
-	if _, err := consoleBackend("::not a url::"); err == nil {
-		t.Fatal("expected an error for an unparseable url")
+	bad := []struct{ name, raw string }{
+		{"unparseable", "::not a url::"},
+		{"empty", ""},
+		// Only http(s) origins are proxyable.
+		{"non-http scheme", "file://host/vnc.html?token=abc"},
+		{"ws scheme", "ws://host:6080/?token=abc"},
+		// Neither a path blob nor a token → nothing would authenticate the socket.
+		{"no path and no token", "https://host:6080/vnc_lite.html"},
 	}
-	if _, err := consoleBackend(""); err == nil {
-		t.Fatal("expected an error for an empty url")
+	for _, c := range bad {
+		t.Run("reject/"+c.name, func(t *testing.T) {
+			if _, err := consoleBackend(c.raw); err == nil {
+				t.Fatalf("expected an error for %q", c.raw)
+			}
+		})
 	}
 }
