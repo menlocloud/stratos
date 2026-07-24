@@ -1793,29 +1793,22 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		novncURL := strAny(console["url"])
-		if novncURL == "" {
-			h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "no console URL returned"))
-			return
+		h.emitProxiedConsole(w, r, u, proj, cr, svcID, externalID, req.Action, console)
+		return
+	case "SERIAL_CONSOLE":
+		// Serial is a plain text stream (the guest's ttyS0), so the client can render it in a real
+		// terminal with native copy/paste — the thing a VNC framebuffer can never offer. Proxied
+		// exactly like VNC; nova hands back a ws(s):// URL here instead of an http(s) page.
+		var console map[string]any
+		if cc, ok := h.tryTenantClient(r.Context(), proj, svcID); ok {
+			if rc, err := cc.GetSerialConsole(r.Context(), externalID); err == nil {
+				console = rc
+			} else {
+				h.fail(w, err)
+				return
+			}
 		}
-		if h.downloads == nil {
-			h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "console not configured"))
-			return
-		}
-		tok, err := h.downloads.CreateWithTTL(r.Context(), &cloud.CloudDownload{
-			Type: cloud.DownloadTypeConsole, ServiceID: svcID, ProjectID: proj.ID, ExternalID: externalID,
-			Metadata: map[string]string{"consoleUrl": novncURL},
-		}, cloud.ConsoleTokenTTL)
-		if err != nil {
-			h.fail(w, err)
-			return
-		}
-		h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", req.Action, cr)
-		httpx.OK(w, map[string]any{"result": map[string]any{
-			"protocol": console["protocol"],
-			"type":     console["type"],
-			"url":      h.consoleWebsocketURL(tok.ID),
-		}})
+		h.emitProxiedConsole(w, r, u, proj, cr, svcID, externalID, req.Action, console)
 		return
 	case "REBUILD":
 		// Server REBUILD onto an image (rebuild). FE: data{imageId|imageRef|
@@ -2105,6 +2098,46 @@ func (h *Handler) cloudObjectDownload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// emitProxiedConsole turns a nova remote_console ({protocol,type,url}) into the response the
+// client gets: a short-lived console token plus OUR proxied WebSocket endpoint. Nova's console
+// host is never surfaced to the browser — that is what keeps it off the public internet.
+// Shared by the VNC (REMOTECONTROL) and SERIAL (SERIAL_CONSOLE) actions.
+func (h *Handler) emitProxiedConsole(
+	w http.ResponseWriter, r *http.Request, u *user.User, proj *Project, cr *cloud.CloudResource,
+	svcID, externalID, action string, console map[string]any,
+) {
+	novaURL := strAny(console["url"])
+	if novaURL == "" {
+		h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "no console URL returned"))
+		return
+	}
+	if h.downloads == nil {
+		h.fail(w, httpx.NewError(http.StatusServiceUnavailable, http.StatusServiceUnavailable, "console not configured"))
+		return
+	}
+	// Fail fast on a console URL we could never proxy, rather than handing the client a token
+	// whose socket would 502 on connect.
+	if _, err := consoleBackend(novaURL); err != nil {
+		slog.Warn("nova returned an unusable console url", "err", err)
+		httpx.Err(w, http.StatusBadGateway, http.StatusBadGateway, "console backend unavailable")
+		return
+	}
+	tok, err := h.downloads.CreateWithTTL(r.Context(), &cloud.CloudDownload{
+		Type: cloud.DownloadTypeConsole, ServiceID: svcID, ProjectID: proj.ID, ExternalID: externalID,
+		Metadata: map[string]string{"consoleUrl": novaURL},
+	}, cloud.ConsoleTokenTTL)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_ACTION", action, cr)
+	httpx.OK(w, map[string]any{"result": map[string]any{
+		"protocol": console["protocol"],
+		"type":     console["type"],
+		"url":      h.consoleWebsocketURL(tok.ID),
+	}})
+}
+
 // consoleWebsocketURL builds the PUBLIC endpoint the browser's noVNC client connects to.
 // apiBaseURL is http(s); noVNC requires a ws(s) scheme.
 func (h *Handler) consoleWebsocketURL(token string) string {
@@ -2126,9 +2159,18 @@ func consoleBackend(raw string) (*url.URL, error) {
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("console: unparseable nova url %q", raw)
 	}
-	// Only ever proxy to an HTTP(S) origin — anything else is a malformed/unexpected console URL
-	// and would surface as an opaque "unsupported protocol scheme" from the transport.
-	if u.Scheme != "http" && u.Scheme != "https" {
+	// Normalise to the transport's scheme: the VNC console arrives as an http(s) page URL, the
+	// SERIAL console as a ws(s) socket URL, and ReverseProxy dials http(s) in both cases (it
+	// performs the Upgrade itself). Anything else is a malformed/unexpected console URL and would
+	// surface as an opaque "unsupported protocol scheme" from the transport.
+	scheme := u.Scheme
+	switch scheme {
+	case "http", "https":
+	case "ws":
+		scheme = "http"
+	case "wss":
+		scheme = "https"
+	default:
 		return nil, fmt.Errorf("console: unsupported nova url scheme %q", u.Scheme)
 	}
 	p := u.Query().Get("path")
@@ -2148,7 +2190,7 @@ func consoleBackend(raw string) (*url.URL, error) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	return &url.URL{Scheme: u.Scheme, Host: u.Host, Path: path, RawQuery: rawQuery}, nil
+	return &url.URL{Scheme: scheme, Host: u.Host, Path: path, RawQuery: rawQuery}, nil
 }
 
 // cloudConsoleProxy reverse-proxies the VNC WebSocket to the project's novncproxy. Whitelisted —

@@ -1,69 +1,118 @@
-// VNC console. The browser NEVER talks to the OpenStack novncproxy: REMOTECONTROL mints a
-// short-lived console token and returns Stratos' own wss:// endpoint, which reverse-proxies the
-// VNC WebSocket server-side (see cloudConsoleProxy). That keeps nova's console service off the
-// public internet — only Stratos needs to be reachable.
+// Server console. The browser NEVER talks to the OpenStack console services: each action mints a
+// short-lived token and returns Stratos' own wss:// endpoint, which reverse-proxies the socket
+// server-side (see cloudConsoleProxy). That keeps nova's novncproxy/serialproxy off the public
+// internet — only Stratos needs to be reachable.
 //
-// noVNC is rendered here rather than iframing nova's vnc_lite.html, so there is exactly one thing
-// to proxy (the socket) and no asset-path rewriting.
+// Two consoles, because they solve different problems:
+//   Graphical (VNC) — a framebuffer. Shows boot/BIOS output, but the screen is pixels: there is no
+//     text to select, and the VNC clipboard needs a guest agent that a bare tty does not have. So
+//     pasting is done by SYNTHESISING KEYSTROKES ("Send text").
+//   Serial — a plain text stream (the guest's ttyS0) rendered in a real terminal, so selection,
+//     copy and paste are native. This is the one to use for command work.
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import RFB from "@novnc/novnc"
-import { ArrowLeft, Keyboard, Maximize, RefreshCw } from "lucide-react"
+import { Terminal } from "@xterm/xterm"
+import { FitAddon } from "@xterm/addon-fit"
+import "@xterm/xterm/css/xterm.css"
+import { ArrowLeft, Keyboard, Maximize, RefreshCw, SendHorizontal } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch } from "@/lib/api"
 import { useCloudResource, useCloudScope, useProjectId } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
 
 type ConsoleState = "connecting" | "connected" | "disconnected" | "error"
+type Scope = { serviceId: string; region: string }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// POST the console action and return the Stratos-proxied socket URL.
+async function fetchConsoleURL(pid: string, resourceId: string, cloud: Scope, action: string) {
+  const res = await apiFetch<{ result?: { url?: string } }>(
+    `/project/${pid}/cloud/${resourceId}/action`,
+    { method: "POST", body: { action }, cloud },
+  )
+  const url = res?.result?.url
+  if (!url) throw new Error("No console URL returned.")
+  return url
+}
 
 export default function ServerConsolePage() {
   const pid = useProjectId()
   const { resourceId = "" } = useParams()
   const scope = useCloudScope(pid)
   const { data: server } = useCloudResource(pid, resourceId)
+  const [tab, setTab] = useState("vnc")
 
+  // useCloudScope builds a fresh object every render, so the console effects depend on these
+  // primitives instead — depending on the object reconnects the socket on EVERY render.
+  const serviceId = scope?.serviceId
+  const region = scope?.region
+  const ready = Boolean(pid && resourceId && serviceId && region)
+
+  const name = (server?.data?.server?.name as string) ?? server?.name ?? resourceId
+
+  return (
+    <div className="flex min-h-0 flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="outline" size="sm" asChild>
+          <Link to={`/p/${pid}/servers/${resourceId}`}>
+            <ArrowLeft className="size-4" /> Back
+          </Link>
+        </Button>
+        <div className="min-w-0">
+          <div className="text-eyebrow">Console</div>
+          <div className="truncate font-medium">{name}</div>
+        </div>
+      </div>
+
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="vnc">Graphical (VNC)</TabsTrigger>
+          <TabsTrigger value="serial">Serial</TabsTrigger>
+        </TabsList>
+
+        {/* Mount-gated so only the visible console holds a socket open. */}
+        <TabsContent value="vnc" className="mt-3">
+          {ready && tab === "vnc" ? (
+            <VncConsole pid={pid} resourceId={resourceId} cloud={{ serviceId: serviceId!, region: region! }} />
+          ) : null}
+        </TabsContent>
+        <TabsContent value="serial" className="mt-3">
+          {ready && tab === "serial" ? (
+            <SerialConsole pid={pid} resourceId={resourceId} cloud={{ serviceId: serviceId!, region: region! }} />
+          ) : null}
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+// ── Graphical (VNC) ──────────────────────────────────────────────────────────────────────────
+function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: string; cloud: Scope }) {
   const screenRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<RFB | null>(null)
   const [state, setState] = useState<ConsoleState>("connecting")
   const [message, setMessage] = useState("")
-  // Bumping this re-runs the connect effect. Reconnect mints a fresh token rather than reusing the
-  // old one; tokens stay valid until they expire (10m server-side), they are not single-use.
   const [attempt, setAttempt] = useState(0)
+  const [text, setText] = useState("")
+  const [typing, setTyping] = useState(false)
 
-  const name = (server?.data?.server?.name as string) ?? server?.name ?? resourceId
-
-  // useCloudScope builds a fresh {serviceId, region} object on every render, so depending on the
-  // object itself would re-run this effect on EVERY render — tearing the socket down and
-  // reconnecting forever (the console never leaves "Connecting…"). Depend on the primitives and
-  // rebuild the scope inside.
-  const serviceId = scope?.serviceId
-  const region = scope?.region
+  const { serviceId, region } = cloud
 
   useEffect(() => {
-    if (!pid || !resourceId || !serviceId || !region) return
-    const cloud = { serviceId, region }
     let cancelled = false
     let rfb: RFB | null = null
-
     setState("connecting")
     setMessage("")
 
     void (async () => {
       try {
-        // REMOTECONTROL returns OUR proxied wss:// endpoint, not nova's novncproxy URL.
-        const res = await apiFetch<{ result?: { url?: string } }>(
-          `/project/${pid}/cloud/${resourceId}/action`,
-          { method: "POST", body: { action: "REMOTECONTROL" }, cloud },
-        )
-        const url = res?.result?.url
-        if (cancelled) return
-        if (!url) {
-          setState("error")
-          setMessage("No console URL returned.")
-          return
-        }
-        if (!screenRef.current) return
+        const url = await fetchConsoleURL(pid, resourceId, { serviceId, region }, "REMOTECONTROL")
+        if (cancelled || !screenRef.current) return
 
         rfb = new RFB(screenRef.current, url)
         rfb.scaleViewport = true
@@ -82,8 +131,8 @@ export default function ServerConsolePage() {
           setState("error")
           setMessage((e as CustomEvent<{ reason?: string }>).detail?.reason ?? "Security handshake failed.")
         })
-        // A password-protected VNC server would otherwise sit silently at "Connecting…" waiting for
-        // credentials we never supply (nova's proxy normally authenticates via the token instead).
+        // A password-protected VNC server would otherwise sit silently at "Connecting…" waiting
+        // for credentials we never supply (nova's proxy authenticates via the token instead).
         rfb.addEventListener("credentialsrequired", () => {
           if (cancelled) return
           setState("error")
@@ -99,8 +148,6 @@ export default function ServerConsolePage() {
 
     return () => {
       cancelled = true
-      // Always tear the socket down on unmount/reconnect — a stray RFB keeps the proxied
-      // WebSocket (and the nova console session behind it) open.
       try {
         rfb?.disconnect()
       } catch {
@@ -110,34 +157,34 @@ export default function ServerConsolePage() {
     }
   }, [pid, resourceId, serviceId, region, attempt])
 
-  const fullscreen = useCallback(() => {
-    void screenRef.current?.requestFullscreen?.()
-  }, [])
+  // The framebuffer has no clipboard to paste into (a bare tty has no agent), so type the text in
+  // as key events. A small gap between keys keeps a slow tty from dropping characters.
+  const sendText = useCallback(async () => {
+    const rfb = rfbRef.current
+    if (!rfb || !text) return
+    setTyping(true)
+    try {
+      for (const ch of text) {
+        if (ch === "\n" || ch === "\r") rfb.sendKey(0xff0d, "Enter")
+        else if (ch === "\t") rfb.sendKey(0xff09, "Tab")
+        else rfb.sendKey(ch.codePointAt(0)!, null)
+        await sleep(12)
+      }
+      setText("")
+    } finally {
+      setTyping(false)
+    }
+  }, [text])
 
   return (
-    <div className="flex min-h-0 flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" size="sm" asChild>
-          <Link to={`/p/${pid}/servers/${resourceId}`}>
-            <ArrowLeft className="size-4" /> Back
-          </Link>
-        </Button>
-        <div className="min-w-0">
-          <div className="text-eyebrow">Console</div>
-          <div className="truncate font-medium">{name}</div>
-        </div>
-
-        <div className="ml-auto flex items-center gap-2">
-          <StatusDot state={state} />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => rfbRef.current?.sendCtrlAltDel()}
-            disabled={state !== "connected"}
-          >
+        <StatusDot state={state} />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => rfbRef.current?.sendCtrlAltDel()} disabled={state !== "connected"}>
             <Keyboard className="size-4" /> Ctrl+Alt+Del
           </Button>
-          <Button variant="outline" size="sm" onClick={fullscreen} disabled={state !== "connected"}>
+          <Button variant="outline" size="sm" onClick={() => void screenRef.current?.requestFullscreen?.()} disabled={state !== "connected"}>
             <Maximize className="size-4" /> Fullscreen
           </Button>
           <Button variant="outline" size="sm" onClick={() => setAttempt((n) => n + 1)}>
@@ -146,16 +193,13 @@ export default function ServerConsolePage() {
         </div>
       </div>
 
-      <div className="relative min-h-[60vh] flex-1 overflow-hidden rounded-xl border bg-black">
-        {/* noVNC renders its canvas into this element. */}
+      <div className="relative min-h-[55vh] flex-1 overflow-hidden rounded-xl border bg-black">
         <div ref={screenRef} className="size-full" />
-
         {state === "connecting" ? (
           <div className="absolute inset-0 grid place-items-center bg-black/80 p-6">
             <Skeleton className="h-8 w-48" />
           </div>
         ) : null}
-
         {state === "error" || state === "disconnected" ? (
           <div className="absolute inset-0 grid place-items-center bg-black/80 p-6 text-center">
             <div className="space-y-3">
@@ -167,6 +211,165 @@ export default function ServerConsolePage() {
           </div>
         ) : null}
       </div>
+
+      <form
+        className="flex items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void sendText()
+        }}
+      >
+        <Input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Type text to send to the console (Enter sends it as keystrokes)…"
+          disabled={state !== "connected" || typing}
+          aria-label="Text to send to the console"
+        />
+        <Button type="submit" size="sm" disabled={state !== "connected" || typing || !text}>
+          <SendHorizontal className="size-4" /> {typing ? "Sending…" : "Send"}
+        </Button>
+      </form>
+      <p className="text-xs text-muted-foreground">
+        The graphical console is a framebuffer, so text cannot be selected or copied out of it. Use
+        the Serial tab for command work — it is a real terminal with native copy and paste.
+      </p>
+    </div>
+  )
+}
+
+// ── Serial ───────────────────────────────────────────────────────────────────────────────────
+function SerialConsole({ pid, resourceId, cloud }: { pid: string; resourceId: string; cloud: Scope }) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const [state, setState] = useState<ConsoleState>("connecting")
+  const [message, setMessage] = useState("")
+  const [attempt, setAttempt] = useState(0)
+
+  const { serviceId, region } = cloud
+
+  useEffect(() => {
+    let cancelled = false
+    let ws: WebSocket | null = null
+    let term: Terminal | null = null
+    let observer: ResizeObserver | null = null
+    setState("connecting")
+    setMessage("")
+
+    void (async () => {
+      try {
+        const url = await fetchConsoleURL(pid, resourceId, { serviceId, region }, "SERIAL_CONSOLE")
+        if (cancelled || !hostRef.current) return
+
+        term = new Terminal({
+          convertEol: true,
+          cursorBlink: true,
+          fontSize: 13,
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          theme: { background: "#000000" },
+        })
+        const fit = new FitAddon()
+        term.loadAddon(fit)
+        term.open(hostRef.current)
+        fit.fit()
+
+        // Ctrl+C / Ctrl+V belong to the guest shell (SIGINT / literal), so copy & paste use the
+        // terminal convention of Ctrl+Shift+C / Ctrl+Shift+V.
+        term.attachCustomKeyEventHandler((e) => {
+          if (!e.ctrlKey || !e.shiftKey || e.type !== "keydown") return true
+          if (e.key === "C" || e.key === "c") {
+            const sel = term?.getSelection()
+            if (sel) void navigator.clipboard?.writeText(sel)
+            return false
+          }
+          if (e.key === "V" || e.key === "v") {
+            void navigator.clipboard?.readText().then((t) => {
+              if (t && ws?.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(t))
+            })
+            return false
+          }
+          return true
+        })
+
+        observer = new ResizeObserver(() => {
+          try {
+            fit.fit()
+          } catch {
+            /* container not laid out yet */
+          }
+        })
+        observer.observe(hostRef.current)
+
+        // nova-serialproxy speaks websockify's binary sub-protocol.
+        ws = new WebSocket(url, ["binary"])
+        ws.binaryType = "arraybuffer"
+        ws.onopen = () => {
+          if (!cancelled) setState("connected")
+        }
+        ws.onmessage = (e: MessageEvent) => {
+          if (!term) return
+          if (typeof e.data === "string") term.write(e.data)
+          else term.write(new Uint8Array(e.data as ArrayBuffer))
+        }
+        ws.onerror = () => {
+          if (cancelled) return
+          setState("error")
+          setMessage("Serial console connection failed. Is the serial console enabled for this region?")
+        }
+        ws.onclose = () => {
+          if (cancelled) return
+          setState((s) => (s === "error" ? s : "disconnected"))
+          setMessage((m) => m || "Serial session ended.")
+        }
+        term.onData((d) => {
+          if (ws?.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(d))
+        })
+      } catch (err) {
+        if (cancelled) return
+        setState("error")
+        setMessage((err as Error).message)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      observer?.disconnect()
+      try {
+        ws?.close()
+      } catch {
+        /* already closed */
+      }
+      term?.dispose()
+    }
+  }, [pid, resourceId, serviceId, region, attempt])
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusDot state={state} />
+        <div className="ml-auto">
+          <Button variant="outline" size="sm" onClick={() => setAttempt((n) => n + 1)}>
+            <RefreshCw className={cn("size-4", state === "connecting" && "animate-spin")} /> Reconnect
+          </Button>
+        </div>
+      </div>
+
+      <div className="relative min-h-[55vh] overflow-hidden rounded-xl border bg-black p-2">
+        <div ref={hostRef} className="size-full min-h-[52vh]" />
+        {state === "error" || state === "disconnected" ? (
+          <div className="absolute inset-0 grid place-items-center bg-black/80 p-6 text-center">
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">{message || "Serial console unavailable."}</p>
+              <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>
+                <RefreshCw className="size-4" /> Reconnect
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Select text to copy with Ctrl+Shift+C, paste with Ctrl+Shift+V — plain Ctrl+C still goes to
+        the guest as SIGINT. Press Enter if the login prompt has not been drawn yet.
+      </p>
     </div>
   )
 }
