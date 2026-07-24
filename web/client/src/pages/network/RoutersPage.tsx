@@ -6,6 +6,7 @@ import { MoreHorizontal, Plus, RefreshCw, Route, Settings2, Trash2 } from "lucid
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -26,7 +27,7 @@ import {
 } from "@/components/ui/sheet"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProject, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudList, useCloudScope, useProject, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 import { networkName } from "./NetworksPage"
 
@@ -48,7 +49,9 @@ export default function RoutersPage() {
   const qc = useQueryClient()
   // publicNetworksVisible=false → hide the gateway picker; the server auto-picks the external network.
   const netsVisible = useProject(pid).project?.publicNetworksVisible === true
-  const { data, isLoading, refetch, isFetching, error } = useCloudList(pid, "ROUTER")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "ROUTER")
   const { data: networks } = useCloudList(pid, "NETWORK")
   const { data: ports } = useCloudList(pid, "PORT")
   const [createOpen, setCreateOpen] = useState(false)
@@ -60,7 +63,7 @@ export default function RoutersPage() {
   // Manage sheet — keep the id (not the row object) so the sheet re-renders fresh data after
   // a mutation invalidates the list.
   const [manageId, setManageId] = useState<string | null>(null)
-  const manage = (data ?? []).find((x) => x.id === manageId) ?? null
+  const manage = data.find((x) => x.id === manageId) ?? null
   const [addSubnet, setAddSubnet] = useState(NONE)
   const [gwNet, setGwNet] = useState(NONE)
   const [confirmClearGw, setConfirmClearGw] = useState(false)
@@ -239,7 +242,7 @@ export default function RoutersPage() {
         }
       />
 
-      {!isLoading && !error && !data?.length ? (
+      {!isLoading && !error && !data.length ? (
         <EmptyState
           icon={Route}
           title="No routers yet"
@@ -251,14 +254,23 @@ export default function RoutersPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={error ? (error as Error) : null}
-          searchPlaceholder="Search routers…"
-          onRowClick={(r) => setManageId(r.id)}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+            onRowClick={(r) => setManageId(r.id)}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="router"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

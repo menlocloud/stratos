@@ -39,6 +39,7 @@ import (
 	"github.com/menlocloud/stratos/internal/pgdoc"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/internal/platform/billing"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/user"
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
@@ -168,7 +169,11 @@ func (h *Handler) organizationList(w http.ResponseWriter, r *http.Request) {
 	if !h.require(w, r, "admin:organization:read") {
 		return
 	}
-	orgs, err := h.repo.ListRaw(r.Context(), "organization")
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	orgs, total, err := h.listRawSortedMaybePaged(r.Context(), "organization", "_id", -1, pg)
 	if httpx.WriteError(w, err) {
 		return
 	}
@@ -180,7 +185,7 @@ func (h *Handler) organizationList(w http.ResponseWriter, r *http.Request) {
 		}
 		dtos = append(dtos, dto)
 	}
-	httpx.List(w, dtos)
+	emitAdminList(w, pg, dtos, total)
 }
 
 // organizationByID returns the rich OrganizationDto, or

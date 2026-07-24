@@ -40,6 +40,7 @@ type Project = {
 }
 
 const LIST_PATH = "/admin/project"
+const PAGE_SIZE = 50
 
 // Confirmable row actions: POST /admin/project/{id}/{status} (ENABLED|DISABLED, projectmut.go
 // projectUpdateStatus) and POST /admin/project/{id}/sync (projectmut.go projectSync).
@@ -66,10 +67,14 @@ const actionCopy: Record<PendingAction["kind"], { title: string; verb: string; h
 export default function ProjectsPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, isFetching, error, refetch } = useAdminList<Project>(LIST_PATH)
+  // BE-paged (offset): GET /admin/project?limit=&offset= → { data:[page], paging:{total} }.
+  const [pageIndex, setPageIndex] = useState(0)
+  const listPath = `${LIST_PATH}?limit=${PAGE_SIZE}&offset=${pageIndex * PAGE_SIZE}`
+  const { data, isLoading, isFetching, error, refetch } = useAdminList<Project>(listPath)
   const [pending, setPending] = useState<PendingAction | null>(null)
 
   const projects = data?.data ?? []
+  const total = data?.paging?.total ?? 0
 
   const runAction = useMutation({
     mutationFn: ({ project, kind }: PendingAction) =>
@@ -80,7 +85,8 @@ export default function ProjectsPage() {
     onSuccess: (_d, v) => {
       toast.success(v.kind === "sync" ? "Project synced" : `Project ${v.kind.toLowerCase()}`)
       setPending(null)
-      qc.invalidateQueries({ queryKey: ["admin-list", LIST_PATH] })
+      // Paged list keys on the full (param-bearing) path, so invalidate the whole admin-list family.
+      qc.invalidateQueries({ queryKey: ["admin-list"] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -219,7 +225,7 @@ export default function ProjectsPage() {
         }
       />
 
-      {!isLoading && !error && projects.length === 0 ? (
+      {!isLoading && !error && total === 0 ? (
         <EmptyState icon={FolderKanban} title="No projects yet" hint="Projects appear when clients create them." />
       ) : (
         <DataTable
@@ -227,9 +233,10 @@ export default function ProjectsPage() {
           data={projects}
           isLoading={isLoading}
           error={error as Error | null}
-          searchPlaceholder="Search projects…"
+          pageSize={PAGE_SIZE}
           onRowClick={(p) => p.id && navigate(`/clients/projects/${p.id}`)}
           getRowId={(p) => p.id ?? p.name ?? ""}
+          server={{ pageIndex, pageSize: PAGE_SIZE, total, onPageChange: setPageIndex }}
         />
       )}
 

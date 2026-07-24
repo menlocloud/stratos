@@ -6,6 +6,7 @@ import { FolderTree, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -24,7 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiFetch, type CloudScope } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudScope, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 function share(r: CloudResource): Record<string, any> {
@@ -50,7 +51,9 @@ export default function SharesPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
-  const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "SHARE")
+  const {
+    rows: data, isLoading, isError, error, refetch, isFetching, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "SHARE")
 
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({ name: "", protocol: "NFS", size: "1" })
@@ -178,7 +181,7 @@ export default function SharesPage() {
         }
       />
 
-      {!isLoading && !isError && !data?.length ? (
+      {!isLoading && !isError && !data.length ? (
         <EmptyState
           icon={FolderTree}
           title="No shares yet"
@@ -190,14 +193,23 @@ export default function SharesPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={isError ? (error as Error) : null}
-          searchPlaceholder="Search shares…"
-          onRowClick={(r) => setManageFor(r)}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+            onRowClick={(r) => setManageFor(r)}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="share"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

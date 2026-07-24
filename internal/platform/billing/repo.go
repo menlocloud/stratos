@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/menlocloud/stratos/internal/pgdoc"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 	"github.com/menlocloud/stratos/pkg/textcrypt"
 )
@@ -114,6 +115,11 @@ func (r *Repo) BillsByBillingProfile(ctx context.Context, bpID string) ([]pricin
 	return findTyped[pricing.Bill](ctx, r.bills, pgdoc.M{"billingProfileId": bpID})
 }
 
+// BillsPage is the keyset-paged variant of BillsByBillingProfile (cursor on _id, newest-first).
+func (r *Repo) BillsPage(ctx context.Context, bpID string, p paging.Params) ([]pricing.Bill, *string, *string, error) {
+	return paging.Keyset(ctx, r.bills, pgdoc.M{"billingProfileId": bpID}, p, func(b pricing.Bill) string { return b.ID })
+}
+
 // SentBills returns a profile's bills in status SENT — the
 // collect cron's per-bill work-list.
 func (r *Repo) SentBills(ctx context.Context, bpID string) ([]pricing.Bill, error) {
@@ -163,6 +169,16 @@ func (r *Repo) CollectTransactionsByBillingProfile(ctx context.Context, bpID str
 	}
 	return findTyped[pricing.CollectTransaction](ctx, r.collects, filter,
 		pgdoc.Sort(pgdoc.DescK("createdAt", pgdoc.KTime)))
+}
+
+// CollectTransactionsPage is the keyset-paged variant of CollectTransactionsByBillingProfile
+// (same status filter, cursor on _id / newest-first) → page + next/prev markers.
+func (r *Repo) CollectTransactionsPage(ctx context.Context, bpID string, p paging.Params) ([]pricing.CollectTransaction, *string, *string, error) {
+	filter := pgdoc.M{
+		"billingProfileId": bpID,
+		"status":           pgdoc.M{"$in": []string{string(pricing.CollectTransactionStatusSuccess), string(pricing.CollectTransactionStatusFailed)}},
+	}
+	return paging.Keyset(ctx, r.collects, filter, p, func(t pricing.CollectTransaction) string { return t.ID })
 }
 
 // CollectTransactionByID loads one collect transaction by _id (admin by-id read). nil if absent.
@@ -303,6 +319,16 @@ func (r *Repo) ListAccountCreditTransactions(ctx context.Context, bpID string) (
 		pgdoc.Sort(pgdoc.DescK("createdAt", pgdoc.KTime)))
 }
 
+// ListAccountCreditTransactionsPage is the keyset-paged variant of ListAccountCreditTransactions
+// (same status filter, cursor on _id / newest-first).
+func (r *Repo) ListAccountCreditTransactionsPage(ctx context.Context, bpID string, p paging.Params) ([]AccountCreditTransaction, *string, *string, error) {
+	filter := pgdoc.M{
+		"billingProfileId": bpID,
+		"status":           pgdoc.M{"$in": []string{string(pricing.CollectTransactionStatusSuccess), string(pricing.CollectTransactionStatusFailed)}},
+	}
+	return paging.Keyset(ctx, r.credits, filter, p, func(t AccountCreditTransaction) string { return t.ID })
+}
+
 // AllAccountCreditTransactionsByProfile — a profile's account-credit transactions, newest first
 // (ALL statuses, unlike the client list). Empty for a no-txn profile.
 func (r *Repo) AllAccountCreditTransactionsByProfile(ctx context.Context, bpID string) ([]AccountCreditTransaction, error) {
@@ -320,6 +346,17 @@ func (r *Repo) AllAccountCreditTransactions(ctx context.Context) ([]AccountCredi
 // current-month payments insight.
 func (r *Repo) AllCollectTransactions(ctx context.Context) ([]pricing.CollectTransaction, error) {
 	return findTyped[pricing.CollectTransaction](ctx, r.collects, pgdoc.M{})
+}
+
+// AllCollectTransactionsOffset / AllAccountCreditTransactionsOffset — offset-paged platform-wide
+// ledgers (newest-first, + total) for the admin global transaction tables (numbered pages, like the
+// other admin lists).
+func (r *Repo) AllCollectTransactionsOffset(ctx context.Context, filter pgdoc.M, p paging.Params) ([]pricing.CollectTransaction, int64, error) {
+	return paging.Offset[pricing.CollectTransaction](ctx, r.collects, filter, nil, p)
+}
+
+func (r *Repo) AllAccountCreditTransactionsOffset(ctx context.Context, filter pgdoc.M, p paging.Params) ([]AccountCreditTransaction, int64, error) {
+	return paging.Offset[AccountCreditTransaction](ctx, r.credits, filter, nil, p)
 }
 
 // AllCollectTransactionsByProfile — all statuses, createdAt DESC.

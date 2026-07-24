@@ -6,6 +6,7 @@ import { CircleAlert, HardDrive, MoreHorizontal, Plus, RefreshCw } from "lucide-
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -22,7 +23,7 @@ import {
 } from "@/components/ui/select"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId, useProjectQuota } from "@/lib/hooks"
+import { useCloudCursorList, useCloudList, useCloudScope, useProjectId, useProjectQuota } from "@/lib/hooks"
 import { volumeCreateQuotaViolations } from "@/lib/quota"
 import type { CloudResource } from "@/lib/types"
 
@@ -51,7 +52,9 @@ export default function VolumesPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
-  const { data, isLoading, isError, error, refetch, isFetching } = useCloudList(pid, "VOLUME")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "VOLUME")
   const projectQuota = useProjectQuota(pid, scope)
 
   const { data: servers } = useCloudList(pid, "SERVER")
@@ -352,7 +355,7 @@ export default function VolumesPage() {
         }
       />
 
-      {!isLoading && !isError && !data?.length ? (
+      {!isLoading && !data.length ? (
         <EmptyState
           icon={HardDrive}
           title="No volumes yet"
@@ -364,13 +367,22 @@ export default function VolumesPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={isError ? (error as Error) : null}
-          searchPlaceholder="Search volumes…"
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="volume"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

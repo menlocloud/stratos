@@ -7,6 +7,7 @@ import { MoreHorizontal, Play, Plus, RefreshCw, RotateCw, Server, Square, Trash2
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -16,7 +17,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { apiFetch } from "@/lib/api"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudScope, useProjectId } from "@/lib/hooks"
 import { timeAgo } from "@/lib/format"
 import type { CloudResource } from "@/lib/types"
 
@@ -65,7 +66,9 @@ export function ServersPage() {
   const scope = useCloudScope(pid)
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, refetch, isFetching } = useCloudList(pid, "SERVER")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "SERVER")
   const [pending, setPending] = useState<PendingRow | null>(null)
 
   const invalidate = () =>
@@ -224,7 +227,7 @@ export function ServersPage() {
         }
       />
 
-      {!isLoading && !data?.length ? (
+      {!isLoading && !data.length ? (
         <EmptyState
           icon={Server}
           title="No servers yet"
@@ -238,13 +241,23 @@ export function ServersPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          searchPlaceholder="Search servers…"
-          onRowClick={(r) => navigate(`/p/${pid}/servers/${r.id}`)}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+            onRowClick={(r) => navigate(`/p/${pid}/servers/${r.id}`)}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="server"
+          />
+        </>
       )}
 
       <Dialog open={!!pending} onOpenChange={(o) => !o && setPending(null)}>

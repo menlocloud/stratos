@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/menlocloud/stratos/internal/pgdoc"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/rbac"
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
@@ -38,6 +39,11 @@ func (r *Repo) ListRaw(ctx context.Context, collection string) ([]pgdoc.M, error
 		return nil, err
 	}
 	return out, nil
+}
+
+// ListRawPage is the offset-paged variant of ListRaw (newest-first by _id) → page + total.
+func (r *Repo) ListRawPage(ctx context.Context, collection string, p paging.Params) ([]pgdoc.M, int64, error) {
+	return paging.Offset[pgdoc.M](ctx, r.c(collection), pgdoc.M{}, nil, p)
 }
 
 // FindBySub returns the adminPermission whose id equals the given sub.

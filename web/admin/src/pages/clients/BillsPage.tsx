@@ -36,9 +36,15 @@ function billClient(b: BillRow): string {
   )
 }
 
+const PAGE_SIZE = 50
+
 export default function BillsPage() {
-  const { data, isLoading, isError, error, refetch, isFetching } = useAdminList<BillRow>("/admin/bill")
+  // BE-paged (offset): GET /admin/bill?limit=&offset= → { data:[page], paging:{total} }.
+  const [pageIndex, setPageIndex] = useState(0)
+  const listPath = `/admin/bill?limit=${PAGE_SIZE}&offset=${pageIndex * PAGE_SIZE}`
+  const { data, isLoading, isError, error, refetch, isFetching } = useAdminList<BillRow>(listPath)
   const rows = data?.data ?? []
+  const total = data?.paging?.total ?? 0
   const [downloading, setDownloading] = useState<string | null>(null)
 
   // GET /admin/bill/download/{billId} → statement PDF (streamed) → blob download.
@@ -151,7 +157,7 @@ export default function BillsPage() {
         }
       />
 
-      {!isLoading && !isError && !rows.length ? (
+      {!isLoading && !isError && total === 0 ? (
         <EmptyState icon={Receipt} title="No bills yet" hint="Bills appear once usage charging runs." />
       ) : (
         <DataTable
@@ -159,10 +165,10 @@ export default function BillsPage() {
           data={rows}
           isLoading={isLoading}
           error={isError ? (error as Error) : null}
-          searchPlaceholder="Search bills…"
           getRowId={(b) => b.id}
           initialSorting={[{ id: "created", desc: true }]}
-          pageSize={25}
+          pageSize={PAGE_SIZE}
+          server={{ pageIndex, pageSize: PAGE_SIZE, total, onPageChange: setPageIndex }}
         />
       )}
     </>

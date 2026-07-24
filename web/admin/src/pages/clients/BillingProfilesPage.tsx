@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { RefreshCw, Wallet } from "lucide-react"
@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils"
 // GET /admin/billing-profile — shaped profile doc + computed financials
 // (balance/accountCredit/promotionalCredit/currentMonth/lastMonth/forecastedMonthEnd as JSON numbers).
 type BpRow = Record<string, any>
+
+const PAGE_SIZE = 50
 
 export function profileName(p: BpRow): string {
   const full = [p.firstName, p.lastName].filter(Boolean).join(" ")
@@ -39,8 +41,12 @@ function moneyCell(value: unknown, currency?: string) {
 
 export default function BillingProfilesPage() {
   const navigate = useNavigate()
-  const { data, isLoading, isError, error, refetch, isFetching } = useAdminList<BpRow>("/admin/billing-profile")
+  // BE-paged (offset): GET /admin/billing-profile?limit=&offset= → { data:[page], paging:{total} }.
+  const [pageIndex, setPageIndex] = useState(0)
+  const listPath = `/admin/billing-profile?limit=${PAGE_SIZE}&offset=${pageIndex * PAGE_SIZE}`
+  const { data, isLoading, isError, error, refetch, isFetching } = useAdminList<BpRow>(listPath)
   const rows = data?.data ?? []
+  const total = data?.paging?.total ?? 0
 
   const columns = useMemo<ColumnDef<BpRow, any>[]>(
     () => [
@@ -120,7 +126,7 @@ export default function BillingProfilesPage() {
         }
       />
 
-      {!isLoading && !isError && !rows.length ? (
+      {!isLoading && !isError && total === 0 ? (
         <EmptyState icon={Wallet} title="No billing profiles" hint="Profiles appear here once clients sign up." />
       ) : (
         <DataTable
@@ -128,10 +134,10 @@ export default function BillingProfilesPage() {
           data={rows}
           isLoading={isLoading}
           error={isError ? (error as Error) : null}
-          searchPlaceholder="Search billing profiles…"
           onRowClick={(p) => navigate(`/clients/billing-profiles/${p.id}`)}
           getRowId={(p) => p.id}
-          pageSize={25}
+          pageSize={PAGE_SIZE}
+          server={{ pageIndex, pageSize: PAGE_SIZE, total, onPageChange: setPageIndex }}
         />
       )}
     </>

@@ -7,6 +7,7 @@ import { MoreHorizontal, Plus, RefreshCw, Shield, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -18,7 +19,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { apiFetch } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudScope, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 function sgName(r: CloudResource): string {
@@ -37,7 +38,9 @@ export default function SecurityGroupsPage() {
   const scope = useCloudScope(pid)
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, refetch, isFetching, error } = useCloudList(pid, "SECURITY_GROUP")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "SECURITY_GROUP")
 
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
@@ -164,7 +167,7 @@ export default function SecurityGroupsPage() {
         }
       />
 
-      {!isLoading && !error && !data?.length ? (
+      {!isLoading && !error && !data.length ? (
         <EmptyState
           icon={Shield}
           title="No security groups yet"
@@ -176,14 +179,23 @@ export default function SecurityGroupsPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={error ? (error as Error) : null}
-          searchPlaceholder="Search security groups…"
-          onRowClick={(r) => navigate(`/p/${pid}/security-groups/${r.id}`)}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+            onRowClick={(r) => navigate(`/p/${pid}/security-groups/${r.id}`)}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="security group"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

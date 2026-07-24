@@ -6,6 +6,7 @@ import { KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,7 +21,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
 import { fmtDateTime, timeAgo } from "@/lib/format"
-import { useCloudList, useCloudScope, useProjectId } from "@/lib/hooks"
+import { useCloudCursorList, useCloudScope, useProjectId } from "@/lib/hooks"
 import type { CloudResource } from "@/lib/types"
 
 function secretName(r: CloudResource): string {
@@ -40,7 +41,9 @@ export default function SecretsPage() {
   const pid = useProjectId()
   const scope = useCloudScope(pid)
   const qc = useQueryClient()
-  const { data, isLoading, error, refetch, isFetching } = useCloudList(pid, "BARBICAN_SECRET")
+  const {
+    rows: data, isLoading, refetch, isFetching, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCloudCursorList(pid, "BARBICAN_SECRET")
 
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState("")
@@ -164,7 +167,7 @@ export default function SecretsPage() {
         }
       />
 
-      {!isLoading && !error && !data?.length ? (
+      {!isLoading && !error && !data.length ? (
         <EmptyState
           icon={KeyRound}
           title="No secrets yet"
@@ -176,14 +179,23 @@ export default function SecretsPage() {
           }
         />
       ) : (
-        <DataTable
-          columns={columns}
-          data={data}
-          isLoading={isLoading}
-          error={(error as Error | null) ?? null}
-          searchPlaceholder="Search secrets…"
-          getRowId={(r) => r.id}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={data}
+            isLoading={isLoading}
+            error={error as Error | null}
+            pagination={false}
+            getRowId={(r) => r.id}
+          />
+          <LoadMore
+            hasNextPage={hasNextPage}
+            isFetching={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            count={data.length}
+            noun="secret"
+          />
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
