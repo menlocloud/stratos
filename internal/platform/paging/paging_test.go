@@ -87,6 +87,38 @@ func TestTrimBackward(t *testing.T) {
 	}
 }
 
+// KeysetSlice: in-memory keyset over an unsorted slice (live-cloud lists).
+func TestKeysetSlice(t *testing.T) {
+	items := []string{"b", "e", "a", "d", "c"} // unsorted; DESC order = e,d,c,b,a
+
+	// page 1 (no cursor): limit 2 → e,d ; next=d
+	p1, next1, prev1 := KeysetSlice(items, Params{Limit: 2}, idOf)
+	if len(p1) != 2 || p1[0] != "e" || p1[1] != "d" {
+		t.Fatalf("page1=%v", p1)
+	}
+	if !eqPtr(next1, ptr("d")) || prev1 != nil {
+		t.Fatalf("next1=%v prev1=%v", next1, prev1)
+	}
+
+	// page 2 (after=d): id<d → c,b,a ; limit 2 → c,b ; next=b ; prev=c
+	p2, next2, prev2 := KeysetSlice(items, Params{Limit: 2, After: "d"}, idOf)
+	if len(p2) != 2 || p2[0] != "c" || p2[1] != "b" {
+		t.Fatalf("page2=%v", p2)
+	}
+	if !eqPtr(next2, ptr("b")) || !eqPtr(prev2, ptr("c")) {
+		t.Fatalf("next2=%v prev2=%v", next2, prev2)
+	}
+
+	// last page (after=b): id<b → a ; next=nil (no more)
+	p3, next3, _ := KeysetSlice(items, Params{Limit: 2, After: "b"}, idOf)
+	if len(p3) != 1 || p3[0] != "a" {
+		t.Fatalf("page3=%v", p3)
+	}
+	if next3 != nil {
+		t.Fatalf("next3=%v want nil", next3)
+	}
+}
+
 func TestParse(t *testing.T) {
 	must := func(raw string) Params {
 		p, err := Parse(mustValues(t, raw))

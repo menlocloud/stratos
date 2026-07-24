@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/menlocloud/stratos/internal/pgdoc"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 )
 
 // Repo is the `cloudResource` persistence + sync layer (+ the `cloudResourceHistory`
@@ -186,6 +187,25 @@ func (r *Repo) FindAllByProjectID(ctx context.Context, projectID string) ([]Clou
 
 func (r *Repo) FindAllByUserID(ctx context.Context, userID string) ([]CloudResource, error) {
 	return r.findAll(ctx, pgdoc.M{"userId": userID})
+}
+
+// PageByProjectAndType keyset-pages a project's cached resources (optionally one type), cursor on
+// _id / newest-first — the BE-paged cloud-resource list (SERVER/VOLUME/… at scale).
+func (r *Repo) PageByProjectAndType(ctx context.Context, projectID, resourceType string, p paging.Params) ([]CloudResource, *string, *string, error) {
+	filter := pgdoc.M{"projectId": projectID}
+	if resourceType != "" {
+		filter["type"] = resourceType
+	}
+	return paging.Keyset(ctx, r.resources, filter, p, func(c CloudResource) string { return c.ID })
+}
+
+// PageByUserAndType keyset-pages a user-scoped resource type (KEYPAIR carries userId, blank projectId).
+func (r *Repo) PageByUserAndType(ctx context.Context, userID, resourceType string, p paging.Params) ([]CloudResource, *string, *string, error) {
+	filter := pgdoc.M{"userId": userID}
+	if resourceType != "" {
+		filter["type"] = resourceType
+	}
+	return paging.Keyset(ctx, r.resources, filter, p, func(c CloudResource) string { return c.ID })
 }
 
 // FindByProjectAndService returns the

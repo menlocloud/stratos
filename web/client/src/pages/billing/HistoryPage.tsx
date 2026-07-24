@@ -6,6 +6,7 @@ import { Download, FileText, Receipt } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader, sortableRightHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
+import { LoadMore } from "@/components/load-more"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -239,25 +240,6 @@ function TransactionsTab({ bp }: { bp: string }) {
         noun="transaction"
       />
     </>
-  )
-}
-
-// Shared "Load more" footer for keyset-paged (cursor) lists.
-function LoadMore({
-  hasNextPage, isFetching, onClick, count, noun,
-}: { hasNextPage?: boolean; isFetching: boolean; onClick: () => void; count: number; noun: string }) {
-  if (count === 0) return null
-  return (
-    <div className="mt-4 flex flex-col items-center gap-2">
-      {hasNextPage ? (
-        <Button variant="outline" onClick={onClick} disabled={isFetching}>
-          {isFetching ? "Loading…" : "Load more"}
-        </Button>
-      ) : null}
-      <p className="font-mono text-xs text-muted-foreground">
-        {count} {noun}{count === 1 ? "" : "s"} loaded{hasNextPage ? "" : " · end"}
-      </p>
-    </div>
   )
 }
 

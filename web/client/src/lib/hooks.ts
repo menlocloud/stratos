@@ -80,6 +80,18 @@ export function useCloudList(pid: string, type: string, extraQuery = "") {
   })
 }
 
+// Keyset-paged cloud-resource list (POST /project/{pid}/resource?type=X) — the BE-paged
+// twin of useCloudList for the big fleet lists (servers, volumes, …). "Load more" via
+// paging.nextMarker. Use useCloudList (full) for secondary lookup lists a page joins against.
+export function useCloudCursorList(pid: string, type: string, extraQuery = "") {
+  const scope = useCloudScope(pid)
+  return useCursorList<CloudResource>(
+    ["cloud", pid, type, extraQuery],
+    `/project/${pid}/resource?type=${type}${extraQuery}`,
+    { method: "POST", cloud: scope, enabled: !!pid && !!scope },
+  )
+}
+
 // External (router:external) networks the project may allocate public IPs from —
 // already filtered by the project's allow-list server-side.
 export type PublicNetwork = { id: string; name: string }

@@ -12,6 +12,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 
 	"github.com/menlocloud/stratos/internal/pgdoc"
@@ -163,6 +164,40 @@ func Offset[T any](ctx context.Context, col *pgdoc.Store, filter pgdoc.M, sort [
 		return nil, 0, err
 	}
 	return out, total, nil
+}
+
+// KeysetSlice paginates an already-materialized slice by a cursor on idOf, sorting DESC by id
+// (newest-first when ids are time-prefixed). Forward-only "Load more": After keeps id < cursor.
+// For live-cloud lists the provider returns the whole collection per call, so this pages it in
+// memory (cheap — already materialized; tolerate cross-page drift, same as the audit UX).
+func KeysetSlice[T any](items []T, p Params, idOf func(T) string) ([]T, *string, *string) {
+	limit := p.Limit
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	sorted := make([]T, len(items))
+	copy(sorted, items)
+	sort.SliceStable(sorted, func(i, j int) bool { return idOf(sorted[i]) > idOf(sorted[j]) })
+	if p.After != "" {
+		kept := make([]T, 0, len(sorted))
+		for _, it := range sorted {
+			if idOf(it) < p.After {
+				kept = append(kept, it)
+			}
+		}
+		sorted = kept
+	}
+	var next, prev *string
+	if p.After != "" && len(sorted) > 0 {
+		id := idOf(sorted[0])
+		prev = &id
+	}
+	if len(sorted) > limit {
+		id := idOf(sorted[limit-1])
+		next = &id
+		sorted = sorted[:limit]
+	}
+	return sorted, next, prev
 }
 
 // OffsetPaging builds the httpx.Paging for an offset page.
