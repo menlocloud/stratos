@@ -33,8 +33,16 @@ export default function ServerConsolePage() {
 
   const name = (server?.data?.server?.name as string) ?? server?.name ?? resourceId
 
+  // useCloudScope builds a fresh {serviceId, region} object on every render, so depending on the
+  // object itself would re-run this effect on EVERY render — tearing the socket down and
+  // reconnecting forever (the console never leaves "Connecting…"). Depend on the primitives and
+  // rebuild the scope inside.
+  const serviceId = scope?.serviceId
+  const region = scope?.region
+
   useEffect(() => {
-    if (!pid || !resourceId || !scope) return
+    if (!pid || !resourceId || !serviceId || !region) return
+    const cloud = { serviceId, region }
     let cancelled = false
     let rfb: RFB | null = null
 
@@ -46,7 +54,7 @@ export default function ServerConsolePage() {
         // REMOTECONTROL returns OUR proxied wss:// endpoint, not nova's novncproxy URL.
         const res = await apiFetch<{ result?: { url?: string } }>(
           `/project/${pid}/cloud/${resourceId}/action`,
-          { method: "POST", body: { action: "REMOTECONTROL" }, cloud: scope },
+          { method: "POST", body: { action: "REMOTECONTROL" }, cloud },
         )
         const url = res?.result?.url
         if (cancelled) return
@@ -74,6 +82,13 @@ export default function ServerConsolePage() {
           setState("error")
           setMessage((e as CustomEvent<{ reason?: string }>).detail?.reason ?? "Security handshake failed.")
         })
+        // A password-protected VNC server would otherwise sit silently at "Connecting…" waiting for
+        // credentials we never supply (nova's proxy normally authenticates via the token instead).
+        rfb.addEventListener("credentialsrequired", () => {
+          if (cancelled) return
+          setState("error")
+          setMessage("This console requires a VNC password, which Stratos does not hold.")
+        })
         rfbRef.current = rfb
       } catch (err) {
         if (cancelled) return
@@ -93,7 +108,7 @@ export default function ServerConsolePage() {
       }
       rfbRef.current = null
     }
-  }, [pid, resourceId, scope, attempt])
+  }, [pid, resourceId, serviceId, region, attempt])
 
   const fullscreen = useCallback(() => {
     void screenRef.current?.requestFullscreen?.()

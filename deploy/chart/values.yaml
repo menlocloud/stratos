@@ -407,3 +407,18 @@ gateway:
     api: ""
     ui: ""
     admin: ""
+  # Extra annotations merged onto every rendered HTTPRoute (external-dns's hostname
+  # hint is always set).
+  annotations: {}
+  # Optional per-component Gateway API rule timeouts (HTTPRoute rules[].timeouts).
+  # UNSET by default, and that is the safe default: the VNC console holds a long-lived
+  # WebSocket through the `api` route, so a `request` timeout would cut the session.
+  # WebSocket upgrade itself needs no special config — it works through Gateway API as-is.
+  # Only if your Gateway drops IDLE upgraded connections (nginx-based data planes default
+  # to a 60s proxy read timeout) raise the backend read timeout on the api route:
+  #   timeouts:
+  #     api:
+  #       backendRequest: 3600s
+  # The Ingress path (ingress.enabled) gets the equivalent nginx-ingress proxy-read/send
+  # timeout annotations automatically — see templates/api/ingress.yaml.
+  timeouts: {}

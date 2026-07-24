@@ -18,6 +18,9 @@ metadata:
     # external-dns creates the A record from this hint; it does not derive DNS
     # names from HTTPRoute hostnames on its own.
     external-dns.alpha.kubernetes.io/hostname: {{ $host | quote }}
+    {{- with $.Values.gateway.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   parentRefs:
     {{- toYaml (required "gateway.parentRefs is required when gateway.enabled" $.Values.gateway.parentRefs) | nindent 4 }}
@@ -27,6 +30,15 @@ spec:
     - backendRefs:
         - name: {{ include "stratos.fullname" $ }}-{{ $comp }}
           port: {{ (index $.Values $comp).service.port }}
+      {{- /*
+        Per-rule Gateway API timeouts. Deliberately UNSET by default: the VNC console holds a
+        long-lived WebSocket through the api route, and a `request` timeout would cut the session.
+        See gateway.timeouts in values.yaml for when to set backendRequest.
+      */}}
+      {{- with index ($.Values.gateway.timeouts | default dict) $comp }}
+      timeouts:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
