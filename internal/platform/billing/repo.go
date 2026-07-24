@@ -115,6 +115,11 @@ func (r *Repo) BillsByBillingProfile(ctx context.Context, bpID string) ([]pricin
 	return findTyped[pricing.Bill](ctx, r.bills, pgdoc.M{"billingProfileId": bpID})
 }
 
+// BillsPage is the keyset-paged variant of BillsByBillingProfile (cursor on _id, newest-first).
+func (r *Repo) BillsPage(ctx context.Context, bpID string, p paging.Params) ([]pricing.Bill, *string, *string, error) {
+	return paging.Keyset(ctx, r.bills, pgdoc.M{"billingProfileId": bpID}, p, func(b pricing.Bill) string { return b.ID })
+}
+
 // SentBills returns a profile's bills in status SENT — the
 // collect cron's per-bill work-list.
 func (r *Repo) SentBills(ctx context.Context, bpID string) ([]pricing.Bill, error) {
@@ -312,6 +317,16 @@ func (r *Repo) ListAccountCreditTransactions(ctx context.Context, bpID string) (
 	}
 	return findTyped[AccountCreditTransaction](ctx, r.credits, filter,
 		pgdoc.Sort(pgdoc.DescK("createdAt", pgdoc.KTime)))
+}
+
+// ListAccountCreditTransactionsPage is the keyset-paged variant of ListAccountCreditTransactions
+// (same status filter, cursor on _id / newest-first).
+func (r *Repo) ListAccountCreditTransactionsPage(ctx context.Context, bpID string, p paging.Params) ([]AccountCreditTransaction, *string, *string, error) {
+	filter := pgdoc.M{
+		"billingProfileId": bpID,
+		"status":           pgdoc.M{"$in": []string{string(pricing.CollectTransactionStatusSuccess), string(pricing.CollectTransactionStatusFailed)}},
+	}
+	return paging.Keyset(ctx, r.credits, filter, p, func(t AccountCreditTransaction) string { return t.ID })
 }
 
 // AllAccountCreditTransactionsByProfile — a profile's account-credit transactions, newest first

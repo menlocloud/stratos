@@ -1,6 +1,5 @@
 import { useMemo } from "react"
 import { useNavigate } from "react-router-dom"
-import { useQuery } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import { Download, FileText, Receipt } from "lucide-react"
@@ -69,10 +68,9 @@ export default function HistoryPage() {
 
 function BillsTab({ pid, bp }: { pid: string; bp: string }) {
   const navigate = useNavigate()
-  const { data: bills, isLoading, error } = useQuery({
-    queryKey: ["bills", bp],
-    queryFn: () => apiFetch<Bill[]>(`/bill/${bp}`),
-  })
+  const {
+    rows: bills, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCursorList<Bill>(["bills", bp], `/bill/${bp}`)
 
   const columns = useMemo<ColumnDef<Bill, any>[]>(
     () => [
@@ -126,19 +124,28 @@ function BillsTab({ pid, bp }: { pid: string; bp: string }) {
     [],
   )
 
-  if (!isLoading && !error && !bills?.length) {
+  if (!isLoading && !error && !bills.length) {
     return <EmptyState icon={FileText} title="No bills yet" hint="Bills appear here once usage is charged." />
   }
   return (
-    <DataTable
-      columns={columns}
-      data={bills}
-      isLoading={isLoading}
-      error={error as Error | null}
-      pageSize={25}
-      onRowClick={(b) => navigate(`/p/${pid}/billing/history/bills/${b.id}`)}
-      getRowId={(b) => b.id}
-    />
+    <>
+      <DataTable
+        columns={columns}
+        data={bills}
+        isLoading={isLoading}
+        error={error as Error | null}
+        pagination={false}
+        onRowClick={(b) => navigate(`/p/${pid}/billing/history/bills/${b.id}`)}
+        getRowId={(b) => b.id}
+      />
+      <LoadMore
+        hasNextPage={hasNextPage}
+        isFetching={isFetchingNextPage}
+        onClick={() => void fetchNextPage()}
+        count={bills.length}
+        noun="bill"
+      />
+    </>
   )
 }
 
@@ -258,10 +265,12 @@ function LoadMore({
 // ponytail: no per-row receipt download — the Go download route is a deliberate 501 seam
 // (external invoice provider not implemented); add the button when the seam goes live.
 function AccountCreditsTab({ bp }: { bp: string }) {
-  const { data: txns, isLoading, error } = useQuery({
-    queryKey: ["account-credit-transactions", bp],
-    queryFn: () => apiFetch<Transaction[]>(`/account-credit-transactions?billingProfileId=${bp}`),
-  })
+  const {
+    rows: txns, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useCursorList<Transaction>(
+    ["account-credit-transactions", bp],
+    `/account-credit-transactions?billingProfileId=${bp}`,
+  )
 
   const columns = useMemo<ColumnDef<Transaction, any>[]>(
     () => [
@@ -315,18 +324,28 @@ function AccountCreditsTab({ bp }: { bp: string }) {
     [],
   )
 
-  if (!isLoading && !error && !txns?.length) {
+  if (!isLoading && !error && !txns.length) {
     return (
       <EmptyState icon={Receipt} title="No account-credit transactions" hint="Deposits and refunds appear here." />
     )
   }
   return (
-    <DataTable
-      columns={columns}
-      data={txns}
-      isLoading={isLoading}
-      error={error as Error | null}
-      getRowId={(t) => t.id}
-    />
+    <>
+      <DataTable
+        columns={columns}
+        data={txns}
+        isLoading={isLoading}
+        error={error as Error | null}
+        pagination={false}
+        getRowId={(t) => t.id}
+      />
+      <LoadMore
+        hasNextPage={hasNextPage}
+        isFetching={isFetchingNextPage}
+        onClick={() => void fetchNextPage()}
+        count={txns.length}
+        noun="transaction"
+      />
+    </>
   )
 }

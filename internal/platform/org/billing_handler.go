@@ -268,6 +268,24 @@ func (h *BillingHandler) bills(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	if pg.Active {
+		bills, next, prev, err := h.billing.BillsPage(r.Context(), bp.ID, pg)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		dtos, err := h.toBillDtos(r.Context(), bp, bills)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		httpx.CursorList(w, dtos, pg.Limit, next, prev)
+		return
+	}
 	bills, err := h.billing.BillsByBillingProfile(r.Context(), bp.ID)
 	if err != nil {
 		fail(w, err)
@@ -410,6 +428,19 @@ func (h *BillingHandler) accountCreditTransactions(w http.ResponseWriter, r *htt
 	}
 	bp, _, ok := h.requireBillingProfilePermission(w, r, u, r.URL.Query().Get("billingProfileId"), rbac.BillingProfileReadTransactions)
 	if !ok {
+		return
+	}
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	if pg.Active {
+		items, next, prev, err := h.billing.ListAccountCreditTransactionsPage(r.Context(), bp.ID, pg)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		httpx.CursorList(w, billing.AccountCreditTransactionsToDtos(items), pg.Limit, next, prev)
 		return
 	}
 	items, err := h.billing.ListAccountCreditTransactions(r.Context(), bp.ID)
