@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/menlocloud/stratos/internal/platform/billing"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
@@ -141,6 +142,22 @@ func (h *Handler) allAccountCreditTransactions(w http.ResponseWriter, r *http.Re
 	if !h.require(w, r, transactionReadPerm) {
 		return
 	}
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	if pg.Active {
+		credits, next, prev, err := h.billing.AllAccountCreditTransactionsPage(r.Context(), pg)
+		if httpx.WriteError(w, err) {
+			return
+		}
+		out := make([]adminTransactionDto, 0, len(credits))
+		for i := range credits {
+			out = append(out, mapAccountCreditToTransaction(&credits[i]))
+		}
+		httpx.CursorList(w, out, pg.Limit, next, prev)
+		return
+	}
 	credits, err := h.billing.AllAccountCreditTransactions(r.Context())
 	if httpx.WriteError(w, err) {
 		return
@@ -156,6 +173,22 @@ func (h *Handler) allAccountCreditTransactions(w http.ResponseWriter, r *http.Re
 // Financial → Collect transactions list), mapped to the merged DTO.
 func (h *Handler) allCollectTransactions(w http.ResponseWriter, r *http.Request) {
 	if !h.require(w, r, transactionReadPerm) {
+		return
+	}
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	if pg.Active {
+		collects, next, prev, err := h.billing.AllCollectTransactionsPage(r.Context(), pg)
+		if httpx.WriteError(w, err) {
+			return
+		}
+		out := make([]adminTransactionDto, 0, len(collects))
+		for i := range collects {
+			out = append(out, mapCollectToTransaction(&collects[i]))
+		}
+		httpx.CursorList(w, out, pg.Limit, next, prev)
 		return
 	}
 	collects, err := h.billing.AllCollectTransactions(r.Context())

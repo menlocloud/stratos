@@ -348,6 +348,16 @@ func (r *Repo) AllCollectTransactions(ctx context.Context) ([]pricing.CollectTra
 	return findTyped[pricing.CollectTransaction](ctx, r.collects, pgdoc.M{})
 }
 
+// AllCollectTransactionsPage / AllAccountCreditTransactionsPage — keyset-paged platform-wide
+// ledgers (cursor on _id / newest-first) for the admin global transaction lists.
+func (r *Repo) AllCollectTransactionsPage(ctx context.Context, p paging.Params) ([]pricing.CollectTransaction, *string, *string, error) {
+	return paging.Keyset(ctx, r.collects, pgdoc.M{}, p, func(t pricing.CollectTransaction) string { return t.ID })
+}
+
+func (r *Repo) AllAccountCreditTransactionsPage(ctx context.Context, p paging.Params) ([]AccountCreditTransaction, *string, *string, error) {
+	return paging.Keyset(ctx, r.credits, pgdoc.M{}, p, func(t AccountCreditTransaction) string { return t.ID })
+}
+
 // AllCollectTransactionsByProfile — all statuses, createdAt DESC.
 func (r *Repo) AllCollectTransactionsByProfile(ctx context.Context, bpID string) ([]pricing.CollectTransaction, error) {
 	return findTyped[pricing.CollectTransaction](ctx, r.collects, pgdoc.M{"billingProfileId": bpID},

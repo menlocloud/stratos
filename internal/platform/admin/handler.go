@@ -1281,10 +1281,15 @@ func (h *Handler) cloudResourcesAll(w http.ResponseWriter, r *http.Request) {
 	if !h.require(w, r, "admin:cloud_resource:read") {
 		return
 	}
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
 	// Newest first (sort _id DESC), join each resource to its project (matched by id, keeping
 	// {id,name}), drop resources with no matching project, then reduce. Build the shape:
-	// {id,data,createdAt,externalId,info,region,type,serviceId,project:{id,name}}.
-	resources, err := h.repo.ListRawSorted(r.Context(), "cloudResource", "_id", -1)
+	// {id,data,createdAt,externalId,info,region,type,serviceId,project:{id,name}}. Paging the
+	// window also bounds the per-row project join to one page.
+	resources, total, err := h.listRawSortedMaybePaged(r.Context(), "cloudResource", "_id", -1, pg)
 	if httpx.WriteError(w, err) {
 		return
 	}
@@ -1310,6 +1315,12 @@ func (h *Handler) cloudResourcesAll(w http.ResponseWriter, r *http.Request) {
 		}
 		keep["project"] = pgdoc.M{"id": idToString(proj["_id"]), "name": proj["name"]}
 		out = append(out, keep)
+	}
+	// total counts every cloudResource row; the rare project-less/unmatched rows dropped above make
+	// the last page slightly short of `total` — acceptable for the admin table.
+	if pg.Active {
+		httpx.Page(w, out, paging.OffsetPaging(pg, total))
+		return
 	}
 	httpx.OK(w, out)
 }
