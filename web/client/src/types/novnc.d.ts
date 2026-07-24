@@ -21,6 +21,8 @@ declare module "@novnc/novnc" {
     viewOnly: boolean
     focusOnClick: boolean
     background: string
+    /** Draw a dot when the remote cursor is invisible (a text console sends an empty sprite). */
+    showDotCursor: boolean
     disconnect(): void
     focus(): void
     blur(): void
