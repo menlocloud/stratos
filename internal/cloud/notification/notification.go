@@ -123,7 +123,9 @@ func (s *Service) SetLogger(l *slog.Logger) { s.log = l }
 
 func (s *Service) debug(msg string, args ...any) {
 	if s.log != nil {
-		s.log.Info("os-notification "+msg, args...)
+		// Debug, not Info: these are per-message "why we skipped this" traces on a bus that
+		// carries several messages a second, so at Info they bury the events that matter.
+		s.log.Debug("os-notification "+msg, args...)
 	}
 }
 
@@ -165,7 +167,19 @@ var metaByType = map[string]evMeta{
 // TypeForEvent maps the first dot-segment of event_type → CloudResourceType.
 // ok=false for an unmapped prefix (skip). compute disambiguates
 // SERVER vs BAREMETAL_SERVER via the payload instance_type + the bare-metal check.
+// hostLevelEvents describe a HOST, not a cloud resource, so they carry no resource id. They are
+// matched on the full event_type because the prefix switch below would otherwise map them to a
+// resource type (compute.* → SERVER) purely to drop them a step later. nova-compute emits
+// compute.metrics.update once per monitoring cycle per compute node, which makes it the
+// highest-volume event on the bus by a wide margin.
+var hostLevelEvents = map[string]bool{
+	"compute.metrics.update": true,
+}
+
 func TypeForEvent(msg OsloMessage, bareMeta BareMetalChecker) (string, bool) {
+	if hostLevelEvents[msg.EventType] {
+		return "", false
+	}
 	prefix, _, _ := strings.Cut(msg.EventType, ".")
 	switch prefix {
 	case "compute":

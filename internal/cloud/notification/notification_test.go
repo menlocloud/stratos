@@ -85,6 +85,9 @@ func TestTypeForEvent(t *testing.T) {
 		want     string
 		ok       bool
 	}{
+		// Host-level telemetry must NOT map to SERVER: it has no resource id, and nova-compute
+		// emits it every monitoring cycle on every compute node.
+		{"compute.metrics.update", "", "", false},
 		{"compute.instance.create.end", "", cloud.TypeServer, true},
 		{"compute.instance.create.end", "m1.small", cloud.TypeServer, true},
 		{"compute.instance.create.end", "baremetal.large", cloud.TypeBaremetalServer, true},
