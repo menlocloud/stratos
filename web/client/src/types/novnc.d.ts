@@ -25,6 +25,8 @@ declare module "@novnc/novnc" {
     focus(): void
     blur(): void
     sendCtrlAltDel(): void
+    /** Synthesise a key press. `code` may be null to send the keysym alone. */
+    sendKey(keysym: number, code?: string | null, down?: boolean): void
     machineReboot(): void
     clipboardPasteFrom(text: string): void
   }

@@ -25,6 +25,18 @@ func TestConsoleBackend(t *testing.T) {
 			raw:  "http://host:6080/vnc.html?token=xyz",
 			want: "http://host:6080/?token=xyz",
 		},
+		{
+			// Nova's SERIAL console hands back a socket URL, not a page. ReverseProxy dials
+			// http(s) and performs the Upgrade itself, so ws:// normalises to http://.
+			name: "serial ws url normalises to http",
+			raw:  "ws://host:6083/?token=ser1",
+			want: "http://host:6083/?token=ser1",
+		},
+		{
+			name: "serial wss url normalises to https",
+			raw:  "wss://host:6083/?token=ser2",
+			want: "https://host:6083/?token=ser2",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -41,9 +53,8 @@ func TestConsoleBackend(t *testing.T) {
 	bad := []struct{ name, raw string }{
 		{"unparseable", "::not a url::"},
 		{"empty", ""},
-		// Only http(s) origins are proxyable.
+		// Only http(s)/ws(s) origins are proxyable.
 		{"non-http scheme", "file://host/vnc.html?token=abc"},
-		{"ws scheme", "ws://host:6080/?token=abc"},
 		// Neither a path blob nor a token → nothing would authenticate the socket.
 		{"no path and no token", "https://host:6080/vnc_lite.html"},
 	}

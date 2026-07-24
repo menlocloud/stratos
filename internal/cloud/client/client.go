@@ -719,13 +719,27 @@ func (c *Client) GetRouter(ctx context.Context, id string) (map[string]any, erro
 }
 
 // GetVNCConsole opens a Nova remote VNC console for a server (nova remote-consoles)
-// and returns {url, type} — the client "Console" button opens result.url.
+// and returns {url, type} — the client renders noVNC against a Stratos-proxied socket.
 func (c *Client) GetVNCConsole(ctx context.Context, id string) (map[string]any, error) {
+	return c.remoteConsole(ctx, id, "vnc", "novnc")
+}
+
+// GetSerialConsole opens a Nova remote SERIAL console for a server. Unlike VNC this is a plain
+// text stream (the guest's ttyS0), so the client can render it in a real terminal with native
+// copy/paste. Nova returns a ws:// or wss:// URL here rather than an http(s) page.
+// Requires nova [serial_console] enabled + nova-serialproxy running.
+func (c *Client) GetSerialConsole(ctx context.Context, id string) (map[string]any, error) {
+	return c.remoteConsole(ctx, id, "serial", "serial")
+}
+
+// remoteConsole POSTs nova's remote-consoles action and returns the remote_console object
+// ({protocol, type, url}).
+func (c *Client) remoteConsole(ctx context.Context, id, protocol, typ string) (map[string]any, error) {
 	base, err := c.EndpointURL("compute")
 	if err != nil {
 		return nil, err
 	}
-	body := map[string]any{"remote_console": map[string]any{"protocol": "vnc", "type": "novnc"}}
+	body := map[string]any{"remote_console": map[string]any{"protocol": protocol, "type": typ}}
 	var resp struct {
 		RemoteConsole map[string]any `json:"remote_console"`
 	}
