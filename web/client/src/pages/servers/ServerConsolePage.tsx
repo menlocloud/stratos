@@ -121,6 +121,9 @@ function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: strin
         rfb = new RFB(screenRef.current, url)
         rfb.scaleViewport = true
         rfb.background = "#000"
+        // A text console ships an empty cursor sprite, and noVNC then hides the local pointer
+        // entirely — the pointer only reappeared after a click. Draw a dot instead.
+        rfb.showDotCursor = true
         rfb.addEventListener("connect", () => {
           if (cancelled) return
           setState("connected")
@@ -152,7 +155,16 @@ function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: strin
         // (initial layout settling, tab switch, sidebar toggle) the viewport keeps a stale scale
         // and the screen stays blank — which is why entering and leaving fullscreen appeared to
         // "fix" it. Re-assigning scaleViewport runs noVNC's setter, which recomputes immediately.
-        observer = new ResizeObserver(() => {
+        let lastW = 0
+        let lastH = 0
+        observer = new ResizeObserver((entries) => {
+          const box = entries[0]?.contentRect
+          // Only act on a REAL size change: re-running the setter on every observer callback
+          // re-applies the cursor and canvas style, which made the pointer flicker/vanish.
+          if (!box || box.width <= 0 || box.height <= 0) return
+          if (box.width === lastW && box.height === lastH) return
+          lastW = box.width
+          lastH = box.height
           if (rfbRef.current) rfbRef.current.scaleViewport = true
         })
         observer.observe(screenRef.current)
@@ -222,8 +234,14 @@ function VncConsole({ pid, resourceId, cloud }: { pid: string; resourceId: strin
         </div>
       </div>
 
-      <div className="relative min-h-[55vh] flex-1 overflow-hidden rounded-xl border bg-black">
-        <div ref={screenRef} className="size-full" />
+      {/*
+        The parent needs a DEFINITE height and the noVNC target an absolutely-positioned box.
+        With only `min-h-*` on the parent, the child's `height:100%` resolves against an `auto`
+        height — i.e. zero — so noVNC scaled the framebuffer to nothing and the console rendered
+        black. (Fullscreen gave the element a real size, which is why it appeared to fix itself.)
+      */}
+      <div className="relative h-[60vh] overflow-hidden rounded-xl border bg-black">
+        <div ref={screenRef} className="absolute inset-0" />
         {state === "connecting" ? (
           <div className="absolute inset-0 grid place-items-center bg-black/80 p-6">
             <Skeleton className="h-8 w-48" />
