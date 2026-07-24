@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/menlocloud/stratos/internal/pgdoc"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 	"github.com/menlocloud/stratos/pkg/textcrypt"
 )
@@ -163,6 +164,16 @@ func (r *Repo) CollectTransactionsByBillingProfile(ctx context.Context, bpID str
 	}
 	return findTyped[pricing.CollectTransaction](ctx, r.collects, filter,
 		pgdoc.Sort(pgdoc.DescK("createdAt", pgdoc.KTime)))
+}
+
+// CollectTransactionsPage is the keyset-paged variant of CollectTransactionsByBillingProfile
+// (same status filter, cursor on _id / newest-first) → page + next/prev markers.
+func (r *Repo) CollectTransactionsPage(ctx context.Context, bpID string, p paging.Params) ([]pricing.CollectTransaction, *string, *string, error) {
+	filter := pgdoc.M{
+		"billingProfileId": bpID,
+		"status":           pgdoc.M{"$in": []string{string(pricing.CollectTransactionStatusSuccess), string(pricing.CollectTransactionStatusFailed)}},
+	}
+	return paging.Keyset(ctx, r.collects, filter, p, func(t pricing.CollectTransaction) string { return t.ID })
 }
 
 // CollectTransactionByID loads one collect transaction by _id (admin by-id read). nil if absent.

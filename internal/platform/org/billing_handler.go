@@ -14,6 +14,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/platform/billing"
 	"github.com/menlocloud/stratos/internal/platform/order"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/payment"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 	"github.com/menlocloud/stratos/internal/platform/rbac"
@@ -455,6 +456,19 @@ func (h *BillingHandler) collectTransactions(w http.ResponseWriter, r *http.Requ
 	}
 	bp, _, ok := h.requireBillingProfilePermission(w, r, u, r.URL.Query().Get("billingProfileId"), rbac.BillingProfileReadTransactions)
 	if !ok {
+		return
+	}
+	pg, ok := paging.FromRequest(w, r)
+	if !ok {
+		return
+	}
+	if pg.Active {
+		txs, next, prev, err := h.billing.CollectTransactionsPage(r.Context(), bp.ID, pg)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		httpx.CursorList(w, billing.CollectTransactionsToDtos(txs), pg.Limit, next, prev)
 		return
 	}
 	txs, err := h.billing.CollectTransactionsByBillingProfile(r.Context(), bp.ID)

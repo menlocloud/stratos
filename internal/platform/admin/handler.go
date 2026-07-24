@@ -14,6 +14,7 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/billing"
 	"github.com/menlocloud/stratos/internal/platform/catalog"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
+	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/platformconfig"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 	"github.com/menlocloud/stratos/internal/platform/rbac"
@@ -537,13 +538,28 @@ func (h *Handler) listRaw(key, collection string) http.HandlerFunc {
 		if !h.require(w, r, key) {
 			return
 		}
-		items, err := h.repo.ListRaw(r.Context(), collection)
-		if httpx.WriteError(w, err) {
+		pg, ok := paging.FromRequest(w, r)
+		if !ok {
 			return
 		}
 		// Shape each doc to the API JSON the domains serialize (_id→id, drop _class). The Go
 		// domains never emit _id/_class, so a raw passthrough diverges + breaks the admin UI's
 		// id-keyed row tracking / detail links.
+		if pg.Active {
+			items, total, err := h.repo.ListRawPage(r.Context(), collection, pg)
+			if httpx.WriteError(w, err) {
+				return
+			}
+			for i := range items {
+				shapeDoc(items[i])
+			}
+			httpx.Page(w, items, paging.OffsetPaging(pg, total))
+			return
+		}
+		items, err := h.repo.ListRaw(r.Context(), collection)
+		if httpx.WriteError(w, err) {
+			return
+		}
 		for i := range items {
 			shapeDoc(items[i])
 		}
