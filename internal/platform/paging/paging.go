@@ -211,7 +211,9 @@ func OffsetPaging(p Params, total int64) httpx.Paging {
 }
 
 func cloneM(m pgdoc.M) pgdoc.M {
-	out := make(pgdoc.M, len(m)+1)
+	// Capacity is just a hint (the map grows as needed); use len(m) directly — len(m)+1 trips
+	// CodeQL's allocation-size-overflow and buys nothing.
+	out := make(pgdoc.M, len(m))
 	for k, v := range m {
 		out[k] = v
 	}
