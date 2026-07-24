@@ -203,11 +203,20 @@ export default function RolesPage() {
         enableSorting: false,
         cell: ({ row }) => {
           const role = row.original
-          // Built-ins are immutable platform roles — locked, no action menu.
+          // Built-ins are immutable platform roles — locked, no action menu. The actions column is
+          // icon-width (w-12) and breaks anywhere, so the word "Locked" wrapped mid-word ("Loc/ked");
+          // the Name column's "Built-in" badge already says it in words, so show the lock alone.
           if (role.builtIn) {
             return (
-              <div className="flex items-center justify-end gap-1.5 text-xs text-muted-foreground">
-                <Lock className="size-3.5" strokeWidth={1.5} /> Locked
+              <div className="flex items-center justify-end text-muted-foreground">
+                <Lock
+                  className="size-3.5"
+                  strokeWidth={1.5}
+                  role="img"
+                  aria-label="Locked — built-in role"
+                >
+                  <title>Locked — built-in role</title>
+                </Lock>
               </div>
             )
           }
