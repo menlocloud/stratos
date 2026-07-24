@@ -8,11 +8,22 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/shopspring/decimal"
 
+	"github.com/menlocloud/stratos/internal/pgdoc"
 	"github.com/menlocloud/stratos/internal/platform/billing"
 	"github.com/menlocloud/stratos/internal/platform/paging"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
+
+// txnFilter builds the admin transaction-list WHERE filter from the query (optional
+// ?billingProfileId= facet). Empty filter = all transactions.
+func txnFilter(r *http.Request) pgdoc.M {
+	f := pgdoc.M{}
+	if bp := r.URL.Query().Get("billingProfileId"); bp != "" {
+		f["billingProfileId"] = bp
+	}
+	return f
+}
 
 // transaction.go implements the transactions surface (/api/v1/admin/transactions). It has a
 // single endpoint — GET /{billingProfileId} — that returns the UNION of a billing profile's collect
@@ -147,7 +158,7 @@ func (h *Handler) allAccountCreditTransactions(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if pg.Active {
-		credits, next, prev, err := h.billing.AllAccountCreditTransactionsPage(r.Context(), pg)
+		credits, total, err := h.billing.AllAccountCreditTransactionsOffset(r.Context(), txnFilter(r), pg)
 		if httpx.WriteError(w, err) {
 			return
 		}
@@ -155,7 +166,7 @@ func (h *Handler) allAccountCreditTransactions(w http.ResponseWriter, r *http.Re
 		for i := range credits {
 			out = append(out, mapAccountCreditToTransaction(&credits[i]))
 		}
-		httpx.CursorList(w, out, pg.Limit, next, prev)
+		httpx.Page(w, out, paging.OffsetPaging(pg, total))
 		return
 	}
 	credits, err := h.billing.AllAccountCreditTransactions(r.Context())
@@ -180,7 +191,7 @@ func (h *Handler) allCollectTransactions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if pg.Active {
-		collects, next, prev, err := h.billing.AllCollectTransactionsPage(r.Context(), pg)
+		collects, total, err := h.billing.AllCollectTransactionsOffset(r.Context(), txnFilter(r), pg)
 		if httpx.WriteError(w, err) {
 			return
 		}
@@ -188,7 +199,7 @@ func (h *Handler) allCollectTransactions(w http.ResponseWriter, r *http.Request)
 		for i := range collects {
 			out = append(out, mapCollectToTransaction(&collects[i]))
 		}
-		httpx.CursorList(w, out, pg.Limit, next, prev)
+		httpx.Page(w, out, paging.OffsetPaging(pg, total))
 		return
 	}
 	collects, err := h.billing.AllCollectTransactions(r.Context())

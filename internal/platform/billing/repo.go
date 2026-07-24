@@ -348,14 +348,15 @@ func (r *Repo) AllCollectTransactions(ctx context.Context) ([]pricing.CollectTra
 	return findTyped[pricing.CollectTransaction](ctx, r.collects, pgdoc.M{})
 }
 
-// AllCollectTransactionsPage / AllAccountCreditTransactionsPage — keyset-paged platform-wide
-// ledgers (cursor on _id / newest-first) for the admin global transaction lists.
-func (r *Repo) AllCollectTransactionsPage(ctx context.Context, p paging.Params) ([]pricing.CollectTransaction, *string, *string, error) {
-	return paging.Keyset(ctx, r.collects, pgdoc.M{}, p, func(t pricing.CollectTransaction) string { return t.ID })
+// AllCollectTransactionsOffset / AllAccountCreditTransactionsOffset — offset-paged platform-wide
+// ledgers (newest-first, + total) for the admin global transaction tables (numbered pages, like the
+// other admin lists).
+func (r *Repo) AllCollectTransactionsOffset(ctx context.Context, filter pgdoc.M, p paging.Params) ([]pricing.CollectTransaction, int64, error) {
+	return paging.Offset[pricing.CollectTransaction](ctx, r.collects, filter, nil, p)
 }
 
-func (r *Repo) AllAccountCreditTransactionsPage(ctx context.Context, p paging.Params) ([]AccountCreditTransaction, *string, *string, error) {
-	return paging.Keyset(ctx, r.credits, pgdoc.M{}, p, func(t AccountCreditTransaction) string { return t.ID })
+func (r *Repo) AllAccountCreditTransactionsOffset(ctx context.Context, filter pgdoc.M, p paging.Params) ([]AccountCreditTransaction, int64, error) {
+	return paging.Offset[AccountCreditTransaction](ctx, r.credits, filter, nil, p)
 }
 
 // AllCollectTransactionsByProfile — all statuses, createdAt DESC.

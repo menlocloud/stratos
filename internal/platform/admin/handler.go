@@ -1288,8 +1288,13 @@ func (h *Handler) cloudResourcesAll(w http.ResponseWriter, r *http.Request) {
 	// Newest first (sort _id DESC), join each resource to its project (matched by id, keeping
 	// {id,name}), drop resources with no matching project, then reduce. Build the shape:
 	// {id,data,createdAt,externalId,info,region,type,serviceId,project:{id,name}}. Paging the
-	// window also bounds the per-row project join to one page.
-	resources, total, err := h.listRawSortedMaybePaged(r.Context(), "cloudResource", "_id", -1, pg)
+	// window also bounds the per-row project join to one page. Optional ?type= filter (the admin
+	// table's resource-type dropdown, applied server-side).
+	filter := pgdoc.M{}
+	if t := r.URL.Query().Get("type"); t != "" {
+		filter["type"] = t
+	}
+	resources, total, err := h.listRawFilteredSortedMaybePaged(r.Context(), "cloudResource", filter, "_id", -1, pg)
 	if httpx.WriteError(w, err) {
 		return
 	}

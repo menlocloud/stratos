@@ -119,6 +119,20 @@ func (h *Handler) listRawSortedMaybePaged(ctx context.Context, collection, field
 	return rows, int64(len(rows)), err
 }
 
+// listRawFilteredSortedMaybePaged is listRawSortedMaybePaged with a WHERE filter (server-side
+// facet filtering, e.g. the admin cloud-resource type dropdown) — one page (+ total) when active,
+// else the full filtered list.
+func (h *Handler) listRawFilteredSortedMaybePaged(ctx context.Context, collection string, filter pgdoc.M, field string, dir int, pg paging.Params) ([]pgdoc.M, int64, error) {
+	if pg.Active {
+		return paging.Offset[pgdoc.M](ctx, h.repo.c(collection), filter, []pgdoc.SortKey{sortKeyFor(field, dir)}, pg)
+	}
+	rows := []pgdoc.M{}
+	if err := h.repo.c(collection).Find(ctx, filter, &rows, pgdoc.Sort(sortKeyFor(field, dir))); err != nil {
+		return nil, 0, err
+	}
+	return rows, int64(len(rows)), nil
+}
+
 // emitAdminList writes the offset envelope (data + paging{limit,offset,total}) when paging is
 // active, else the plain list — keeping un-migrated admin pages byte-compatible.
 func emitAdminList(w http.ResponseWriter, pg paging.Params, out []pgdoc.M, total int64) {

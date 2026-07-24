@@ -35,15 +35,20 @@ type Org = {
 }
 
 const LIST_PATH = "/admin/organizations"
+const PAGE_SIZE = 50
 
 export default function OrganizationsPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, isFetching, error, refetch } = useAdminList<Org>(LIST_PATH)
+  // BE-paged (offset): GET /admin/organizations?limit=&offset= → { data:[page], paging:{total} }.
+  const [pageIndex, setPageIndex] = useState(0)
+  const listPath = `${LIST_PATH}?limit=${PAGE_SIZE}&offset=${pageIndex * PAGE_SIZE}`
+  const { data, isLoading, isFetching, error, refetch } = useAdminList<Org>(listPath)
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({ name: "", description: "" })
 
   const orgs = data?.data ?? []
+  const total = data?.paging?.total ?? 0
 
   // POST /admin/organizations (organization.go organizationCreate) — plain branch: {name, description}.
   const createOrg = useMutation({
@@ -56,7 +61,7 @@ export default function OrganizationsPage() {
       toast.success("Organization created")
       setCreateOpen(false)
       setForm({ name: "", description: "" })
-      qc.invalidateQueries({ queryKey: ["admin-list", LIST_PATH] })
+      qc.invalidateQueries({ queryKey: ["admin-list"] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -167,7 +172,7 @@ export default function OrganizationsPage() {
         }
       />
 
-      {!isLoading && !error && orgs.length === 0 ? (
+      {!isLoading && !error && total === 0 ? (
         <EmptyState
           icon={Building2}
           title="No organizations yet"
@@ -184,9 +189,10 @@ export default function OrganizationsPage() {
           data={orgs}
           isLoading={isLoading}
           error={error as Error | null}
-          searchPlaceholder="Search organizations…"
+          pageSize={PAGE_SIZE}
           onRowClick={(o) => o.id && navigate(`/clients/organizations/${o.id}`)}
           getRowId={(o) => o.id ?? o.name ?? ""}
+          server={{ pageIndex, pageSize: PAGE_SIZE, total, onPageChange: setPageIndex }}
         />
       )}
 

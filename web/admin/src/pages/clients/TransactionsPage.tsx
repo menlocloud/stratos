@@ -59,26 +59,41 @@ function BpCell({ id }: { id?: string }) {
   )
 }
 
+const PAGE_SIZE = 25
+
 export default function TransactionsPage() {
   const qc = useQueryClient()
   const [tab, setTab] = useTabParam("credits")
-  const profiles = useAdminList<Row>("/admin/billing-profile")
+  const profiles = useAdminList<Row>("/admin/billing-profile") // picker source — kept full (unpaged)
   const [selected, setSelected] = useState("") // "" = all profiles
+  const [creditsPage, setCreditsPage] = useState(0)
+  const [collectsPage, setCollectsPage] = useState(0)
 
-  // Load platform-wide, then filter client-side by the optional picker.
-  const credits = useAdminList<Row>("/admin/account-credit-transactions")
-  const collects = useAdminList<Row>("/admin/collect-transactions")
+  // Server-paged + server-filtered by the optional billing-profile picker (?billingProfileId=).
+  const bpParam = selected ? `&billingProfileId=${selected}` : ""
+  const credits = useAdminList<Row>(
+    `/admin/account-credit-transactions?limit=${PAGE_SIZE}&offset=${creditsPage * PAGE_SIZE}${bpParam}`,
+  )
+  const collects = useAdminList<Row>(
+    `/admin/collect-transactions?limit=${PAGE_SIZE}&offset=${collectsPage * PAGE_SIZE}${bpParam}`,
+  )
 
-  const filterByBp = (rows: Row[] | undefined) =>
-    (rows ?? []).filter((t) => !selected || t.billingProfileId === selected)
-  const creditRows = filterByBp(credits.data?.data)
-  const collectRows = filterByBp(collects.data?.data)
+  const creditRows = credits.data?.data ?? []
+  const collectRows = collects.data?.data ?? []
+  const creditTotal = credits.data?.paging?.total ?? 0
+  const collectTotal = collects.data?.paging?.total ?? 0
+
+  const onSelectBp = (v: string) => {
+    setSelected(v === "all" ? "" : v)
+    setCreditsPage(0) // a new profile filter resets both tabs to page 1
+    setCollectsPage(0)
+  }
 
   const sync = useMutation({
     mutationFn: (txnId: string) => apiFetch(`/admin/account-credit-transactions/${txnId}/sync`),
     onSuccess: () => {
       toast.success("Transaction re-synced with the gateway")
-      void qc.invalidateQueries({ queryKey: ["admin-list", "/admin/account-credit-transactions"] })
+      void qc.invalidateQueries({ queryKey: ["admin-list"] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -236,7 +251,7 @@ export default function TransactionsPage() {
         eyebrow="Clients"
         description="Every deposit and collect transaction across all billing profiles. Filter by profile with the picker."
         actions={
-          <Select value={selected || "all"} onValueChange={(v) => setSelected(v === "all" ? "" : v)}>
+          <Select value={selected || "all"} onValueChange={onSelectBp}>
             <SelectTrigger className="w-64" aria-label="Filter by billing profile">
               <SelectValue placeholder="All profiles" />
             </SelectTrigger>
@@ -260,15 +275,15 @@ export default function TransactionsPage() {
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="credits">
-              Account credit{credits.data ? ` (${creditRows.length})` : ""}
+              Account credit{credits.data ? ` (${creditTotal})` : ""}
             </TabsTrigger>
             <TabsTrigger value="collects">
-              Collect{collects.data ? ` (${collectRows.length})` : ""}
+              Collect{collects.data ? ` (${collectTotal})` : ""}
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="credits" className="mt-4">
-            {!credits.isLoading && !creditRows.length ? (
+            {!credits.isLoading && creditTotal === 0 ? (
               <EmptyState
                 icon={CreditCard}
                 title="No deposit transactions"
@@ -279,16 +294,15 @@ export default function TransactionsPage() {
                 columns={creditColumns}
                 data={creditRows}
                 isLoading={credits.isLoading}
-                searchPlaceholder="Search deposits…"
                 getRowId={(t) => t.id}
-                initialSorting={[{ id: "date", desc: true }]}
-                pageSize={25}
+                pageSize={PAGE_SIZE}
+                server={{ pageIndex: creditsPage, pageSize: PAGE_SIZE, total: creditTotal, onPageChange: setCreditsPage }}
               />
             )}
           </TabsContent>
 
           <TabsContent value="collects" className="mt-4">
-            {!collects.isLoading && !collectRows.length ? (
+            {!collects.isLoading && collectTotal === 0 ? (
               <EmptyState
                 icon={CreditCard}
                 title="No collect transactions"
@@ -300,10 +314,9 @@ export default function TransactionsPage() {
                 data={collectRows}
                 isLoading={collects.isLoading}
                 error={collects.isError ? (collects.error as Error) : null}
-                searchPlaceholder="Search collect charges…"
                 getRowId={(t) => t.id}
-                initialSorting={[{ id: "date", desc: true }]}
-                pageSize={25}
+                pageSize={PAGE_SIZE}
+                server={{ pageIndex: collectsPage, pageSize: PAGE_SIZE, total: collectTotal, onPageChange: setCollectsPage }}
               />
             )}
           </TabsContent>
