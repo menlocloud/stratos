@@ -97,6 +97,11 @@ type Config struct {
 		// Timeout bounds one billing call. A charge carries every billable resource for a profile,
 		// so it is deliberately generous compared to an interactive request.
 		Timeout time.Duration
+		// CallbackToken is the shared secret the billing service presents when calling back to
+		// suspend/resume clouds, activate projects or send mail. Empty → those callbacks are not
+		// mounted at all. They can pause a customer's whole fleet, so they are never exposed
+		// unauthenticated, network policy notwithstanding.
+		CallbackToken string
 	}
 	LogLevel string
 }
@@ -172,6 +177,7 @@ func Load() (*Config, error) {
 			c.Billing.Timeout = d
 		}
 	}
+	c.Billing.CallbackToken = envOr("STRATOS_BILLING_CALLBACK_TOKEN", k.String("stratos.billing.callback-token"))
 
 	c.LogLevel = strings.ToUpper(firstNonEmpty(k.String("logging.level.root"), "INFO"))
 

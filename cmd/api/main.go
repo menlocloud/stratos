@@ -44,6 +44,7 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/affiliate"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/internal/platform/billing"
+	"github.com/menlocloud/stratos/internal/platform/billingcallback"
 	"github.com/menlocloud/stratos/internal/platform/billingclient"
 	"github.com/menlocloud/stratos/internal/platform/billingjob"
 	"github.com/menlocloud/stratos/internal/platform/catalog"
@@ -521,7 +522,9 @@ func run() error {
 	activationSvc.SetClouds(cloudSuspender)
 	activationSvc.SetNotifier(mailSvc)
 	activationSvc.SetLoginURL(cfg.Self.UIBaseURL) // {{loginUrl}} in billing_profile_validated
-	activationSvc.SetActivateProjects(func(ctx context.Context, bpID string) error {
+	// Named rather than inline because the billing service also drives this over the callback
+	// endpoint once the engine moves out — both paths must run exactly the same activation.
+	activateProjectsFn := func(ctx context.Context, bpID string) error {
 		orgs, err := orgRepo.FindAllByBillingProfileID(ctx, bpID)
 		if err != nil || len(orgs) == 0 {
 			return err
@@ -561,7 +564,14 @@ func run() error {
 			}
 		}
 		return nil
-	})
+	}
+	activationSvc.SetActivateProjects(activateProjectsFn)
+	// Callbacks the billing service invokes once the engine runs out-of-process. Served on the mgmt
+	// port behind a shared token; nil (no token configured) mounts nothing.
+	billingCB := billingcallback.New(cloudSuspender, activateProjectsFn, mailSvc, cfg.Billing.CallbackToken, log)
+	if billingCB != nil {
+		log.Info("billing service callbacks enabled on the mgmt port")
+	}
 	adminH.SetActivation(activationSvc)
 	// On admin user-create, loop the given project IDs and send a project invite for each (best-effort).
 	adminH.SetInviteToProject(inviteH.InviteToProject)
@@ -917,7 +927,7 @@ func run() error {
 	}
 	mgmtSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Management.Port),
-		Handler:           server.MgmtRouter(h, cloudDebug, jobsDebug),
+		Handler:           server.MgmtRouter(h, cloudDebug, jobsDebug, billingCB),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
