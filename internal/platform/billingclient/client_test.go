@@ -37,7 +37,7 @@ func TestChargeRoundTripsThroughAServer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, 5*time.Second)
+	c := New(srv.URL, "tok", 5*time.Second)
 	resp, err := c.Charge(context.Background(), ChargeRequest{
 		ProfileID: "bp-1",
 		TimeUnit:  "minute",
@@ -88,7 +88,7 @@ func TestActiveProfileIDs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ids, err := New(srv.URL, time.Second).ActiveProfileIDs(context.Background())
+	ids, err := New(srv.URL, "tok", time.Second).ActiveProfileIDs(context.Background())
 	if err != nil {
 		t.Fatalf("active profiles: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestNonSuccessIsAnError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL, time.Second).Charge(context.Background(), ChargeRequest{ProfileID: "bp-1"}); err == nil {
+	if _, err := New(srv.URL, "tok", time.Second).Charge(context.Background(), ChargeRequest{ProfileID: "bp-1"}); err == nil {
 		t.Error("expected an error for a 500 response")
 	}
 }
@@ -114,7 +114,7 @@ func TestNonSuccessIsAnError(t *testing.T) {
 // TestUnconfiguredClientIsSafe: an unset billing URL yields a usable "disabled" client rather than
 // a nil-pointer panic on the charge path.
 func TestUnconfiguredClientIsSafe(t *testing.T) {
-	c := New("", time.Second)
+	c := New("", "tok", time.Second)
 	if c.Configured() {
 		t.Error("empty URL should not be configured")
 	}
@@ -138,7 +138,7 @@ func TestBaseURLTrailingSlash(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := New(srv.URL+"/", time.Second).Health(context.Background()); err != nil {
+	if err := New(srv.URL+"/", "tok", time.Second).Health(context.Background()); err != nil {
 		t.Fatalf("health: %v", err)
 	}
 	if path != "/cloud/internal/v1/health" {

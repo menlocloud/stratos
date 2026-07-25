@@ -94,6 +94,9 @@ type Config struct {
 		// Timeout bounds one billing call. A charge carries every billable resource for a profile,
 		// so it is deliberately generous compared to an interactive request.
 		Timeout time.Duration
+		// Token is the shared bearer token for the billing service's internal API. It must match
+		// that service's CLOUD_INTERNAL_TOKEN; without it the charge calls get a 401.
+		Token string
 		// CallbackToken is the shared secret the billing service presents when calling back to
 		// suspend/resume clouds, activate projects or send mail. Empty → those callbacks are not
 		// mounted at all. They can pause a customer's whole fleet, so they are never exposed
@@ -173,6 +176,7 @@ func Load() (*Config, error) {
 			c.Billing.Timeout = d
 		}
 	}
+	c.Billing.Token = envOr("STRATOS_BILLING_TOKEN", k.String("stratos.billing.token"))
 	c.Billing.CallbackToken = envOr("STRATOS_BILLING_CALLBACK_TOKEN", k.String("stratos.billing.callback-token"))
 
 	c.LogLevel = strings.ToUpper(firstNonEmpty(k.String("logging.level.root"), "INFO"))
@@ -194,6 +198,9 @@ func (c *Config) Validate() error {
 	// cron would fire, find nowhere to send the work, and log. Fail closed instead.
 	if c.Jobs.RemoteCharge && c.Billing.URL == "" {
 		missing = append(missing, "STRATOS_BILLING_URL (required when STRATOS_JOBS_REMOTE_CHARGE is set)")
+	}
+	if c.Jobs.RemoteCharge && c.Billing.Token == "" {
+		missing = append(missing, "STRATOS_BILLING_TOKEN (required when STRATOS_JOBS_REMOTE_CHARGE is set)")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))

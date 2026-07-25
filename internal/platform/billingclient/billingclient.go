@@ -29,6 +29,7 @@ import (
 // Client is a billing-service HTTP client. The zero value is not usable; use New.
 type Client struct {
 	baseURL string
+	token   string
 	http    *http.Client
 }
 
@@ -37,7 +38,7 @@ type Client struct {
 //
 // Returns nil when baseURL is empty, so a not-configured client is a usable "disabled" value rather
 // than a nil-pointer hazard: every method is nil-safe and reports ErrNotConfigured.
-func New(baseURL string, timeout time.Duration) *Client {
+func New(baseURL, token string, timeout time.Duration) *Client {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		return nil
@@ -45,7 +46,7 @@ func New(baseURL string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &Client{baseURL: baseURL, http: &http.Client{Timeout: timeout}}
+	return &Client{baseURL: baseURL, token: strings.TrimSpace(token), http: &http.Client{Timeout: timeout}}
 }
 
 // Configured reports whether the client can reach a billing service. Nil-safe.
@@ -150,6 +151,11 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+	// The billing service refuses to mount its internal API without a token, so a missing one here
+	// surfaces as a 401 rather than silently working.
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

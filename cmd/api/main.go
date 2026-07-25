@@ -501,7 +501,7 @@ func run() error {
 	// Client for the standalone billing service. nil when STRATOS_BILLING_URL is unset, which is
 	// fine: every call on it reports ErrNotConfigured, and Validate() already refuses to boot with
 	// remote charging enabled but no URL.
-	billingCli := billingclient.New(cfg.Billing.URL, cfg.Billing.Timeout)
+	billingCli := billingclient.New(cfg.Billing.URL, cfg.Billing.Token, cfg.Billing.Timeout)
 	if billingCli.Configured() {
 		log.Info("billing service client configured", "url", cfg.Billing.URL, "remoteCharge", cfg.Jobs.RemoteCharge)
 	}

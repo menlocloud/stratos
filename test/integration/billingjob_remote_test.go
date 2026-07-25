@@ -181,7 +181,7 @@ func TestRemoteChargeMatchesInProcess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := billingclient.New(srv.URL, 30*time.Second)
+	client := billingclient.New(srv.URL, "test-token", 30*time.Second)
 	if err := billingjob.RemoteCharge(ctx, remoteDriver, client, pricing.TimeUnitMinute, now, nil); err != nil {
 		t.Fatalf("remote charge: %v", err)
 	}
