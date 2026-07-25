@@ -235,3 +235,99 @@ func TestResolveByProfileIDCarriesTheCatalog(t *testing.T) {
 func decodeCharge(r *http.Request, out *billingclient.ChargeRequest) error {
 	return billingapi.NewDecoder(r.Body).Decode(out)
 }
+
+// TestChargeReplaySafety pins what happens when the SAME charge is applied twice — the situation
+// the remote path makes materially more likely, since an HTTP timeout leaves the caller unsure
+// whether the server committed.
+//
+// Both cadences turn out to be replay-safe, by two DIFFERENT mechanisms, and it is worth recording
+// which is which because they fail under different conditions:
+//
+//   - MINUTE/HOUR are idempotent via the accrual watermark. diff = elapsed(cycleTimestamp -
+//     lastRateTime), and the watermark advances to cycleTimestamp, so replaying the same timestamp
+//     yields diff = 0 (bill_build.go getTimeUnitsDiff). This holds only while the caller replays the
+//     SAME cycleTimestamp — which truncateForTimeUnit guarantees within a given minute/hour.
+//
+//   - MONTH is idempotent via the cap gate, not the watermark: getTimeUnitsDiff returns 1
+//     unconditionally for that cadence, but updateBillItems refuses to accrue once
+//     item.NetAmount has reached totalCap = timeUnitLimit(month) x price, and the default month
+//     limit is 1 — so the first charge saturates the cap and the replay is a no-op. This one is
+//     therefore sensitive to billingConfiguration.settings.timeUnitLimits: a month limit above 1
+//     would re-open the double-accrual window.
+//
+// Neither property is enforced by an explicit idempotency key, so both are worth pinning: if a
+// future change to the watermark or the cap gate breaks them, the remote charge path would start
+// double-billing on retry, silently.
+func TestChargeReplaySafety(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	t.Run("minute cadence is idempotent on replay", func(t *testing.T) {
+		db := freshPG(t)
+		profileID, trafficID, driver := chargeFixture(t, db, now)
+
+		if err := driver.Charge(ctx, pricing.TimeUnitMinute, now); err != nil {
+			t.Fatalf("first charge: %v", err)
+		}
+		first := trafficNet(t, db, profileID, trafficID)
+
+		// Replay the identical tick: same `now`, so the same cycleTimestamp.
+		if err := driver.Charge(ctx, pricing.TimeUnitMinute, now); err != nil {
+			t.Fatalf("replayed charge: %v", err)
+		}
+		second := trafficNet(t, db, profileID, trafficID)
+
+		if !second.Equal(first) {
+			t.Errorf("replaying a minute charge changed the bill: %s -> %s (expected idempotent)", first, second)
+		}
+	})
+
+	t.Run("month cadence is idempotent on replay (via the cap gate)", func(t *testing.T) {
+		db := freshPG(t)
+		profileID, _, driver := chargeFixture(t, db, now)
+
+		// Price the instance per month so the MONTH cadence has something to charge.
+		mustInsert(t, db, "pricePlanRule", pricing.PricePlanRule{
+			PricePlanID: "pp-public", TimeUnit: pricing.TimeUnitMonth, ResourceType: "instance",
+			Prices: []pricing.PricePlanRulePrice{{
+				AttributeName: "vcpus",
+				Tiers:         []pricing.PriceTier{{From: dptr("0"), To: nil, Value: dptr("1")}},
+			}},
+		})
+
+		if err := driver.Charge(ctx, pricing.TimeUnitMonth, now); err != nil {
+			t.Fatalf("first charge: %v", err)
+		}
+		first := instanceNet(t, db, profileID)
+		if err := driver.Charge(ctx, pricing.TimeUnitMonth, now); err != nil {
+			t.Fatalf("replayed charge: %v", err)
+		}
+		second := instanceNet(t, db, profileID)
+
+		if first.IsZero() {
+			t.Fatal("fixture did not charge the instance; the month cadence is not being exercised")
+		}
+		if !second.Equal(first) {
+			t.Errorf("replaying a month charge changed the bill: %s -> %s. The cap gate that makes "+
+				"month replays safe has regressed; the remote charge path will double-bill on retry.",
+				first, second)
+		}
+	})
+}
+
+// instanceNet returns the profile's charged "instance" amount.
+func instanceNet(t *testing.T, db *pgdoc.DB, profileID string) decimal.Decimal {
+	t.Helper()
+	var bill pricing.Bill
+	found, err := db.C("bill").FindOne(context.Background(), pgdoc.M{"billingProfileId": profileID}, &bill)
+	if err != nil || !found {
+		t.Fatalf("no bill for profile %s: found=%v err=%v", profileID, found, err)
+	}
+	total := decimal.Zero
+	for i := range bill.Items {
+		if bill.Items[i].ResourceType == "instance" {
+			total = total.Add(bill.Items[i].NetAmount)
+		}
+	}
+	return total
+}
