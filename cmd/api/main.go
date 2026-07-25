@@ -722,7 +722,11 @@ func run() error {
 				default:
 					tu = pricing.TimeUnitMinute
 				}
-				jobResult(w, map[string]any{"ran": "charge", "timeUnit": tu}, chargeJob.Charge(r.Context(), tu, time.Now().UTC()))
+				// Goes through chargeDispatch, not chargeJob.Charge, so the trigger exercises whatever
+				// path this deploy is actually configured for. Calling the in-process charge directly
+				// would mean an operator validating a remote-charge deploy silently tested the local
+				// engine instead — and got a passing result for a path that is not running.
+				jobResult(w, map[string]any{"ran": "charge", "timeUnit": tu, "remote": cfg.Jobs.RemoteCharge}, chargeDispatch(r.Context(), tu))
 			},
 			"run-savings-expire": func(w http.ResponseWriter, r *http.Request) {
 				n, err := savingsSvc.ExpireContracts(r.Context())
