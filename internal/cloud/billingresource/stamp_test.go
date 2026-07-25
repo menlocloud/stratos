@@ -5,19 +5,34 @@ import (
 	"time"
 
 	"github.com/menlocloud/stratos/internal/cloud"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
+
+// attrTypeByName is the local equivalent of the rating engine's AttributeTypeByName lookup. The
+// wire contract (billingapi) is pure data by design — the resolution side must not depend on the
+// rating package — so the test inspects the declared attributes directly.
+func attrTypeByName(t *billingapi.BillingResourceType, name string) string {
+	if t == nil {
+		return ""
+	}
+	for i := range t.Attributes {
+		if t.Attributes[i].Name == name {
+			return t.Attributes[i].Type
+		}
+	}
+	return ""
+}
 
 func TestStampResourceValues(t *testing.T) {
 	info := time.Date(2026, 6, 1, 8, 0, 0, 0, time.UTC)
 	doc := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
 
 	// Info.CreatedAt preferred over doc createdAt; region/service_id stamped + attrs declared.
-	withType := &pricing.BillingResource{BillingResourceType: &pricing.BillingResourceType{ResourceType: "instance"}}
-	noType := &pricing.BillingResource{}
+	withType := &billingapi.BillingResource{BillingResourceType: &billingapi.BillingResourceType{ResourceType: "instance"}}
+	noType := &billingapi.BillingResource{}
 	cr := &cloud.CloudResource{Region: "RegionOne", ServiceID: "svc-x", CreatedAt: &doc, Info: &cloud.Info{CreatedAt: &info}}
 
-	stampResourceValues([]*pricing.BillingResource{withType, noType}, cr)
+	stampResourceValues([]*billingapi.BillingResource{withType, noType}, cr)
 
 	if withType.Values["region"] != "RegionOne" || withType.Values["service_id"] != "svc-x" {
 		t.Errorf("region/service_id not stamped: %#v", withType.Values)
@@ -25,11 +40,11 @@ func TestStampResourceValues(t *testing.T) {
 	if withType.CreatedAt == nil || !withType.CreatedAt.Equal(info) {
 		t.Errorf("CreatedAt = %v, want Info.CreatedAt %v", withType.CreatedAt, info)
 	}
-	if got, _ := withType.BillingResourceType.AttributeTypeByName("region"); got != "string" {
-		t.Errorf("region attr not declared as string")
+	if got := attrTypeByName(withType.BillingResourceType, "region"); got != "string" {
+		t.Errorf("region attr not declared as string, got %q", got)
 	}
-	if got, _ := withType.BillingResourceType.AttributeTypeByName("service_id"); got != "string" {
-		t.Errorf("service_id attr not declared as string")
+	if got := attrTypeByName(withType.BillingResourceType, "service_id"); got != "string" {
+		t.Errorf("service_id attr not declared as string, got %q", got)
 	}
 	// nil-type resource: createdAt still stamped, region/service_id left unset (no type to declare on).
 	if noType.CreatedAt == nil || noType.Values["region"] != nil {
@@ -37,7 +52,7 @@ func TestStampResourceValues(t *testing.T) {
 	}
 
 	// Idempotent: re-stamping does not duplicate the attrs.
-	stampResourceValues([]*pricing.BillingResource{withType}, cr)
+	stampResourceValues([]*billingapi.BillingResource{withType}, cr)
 	n := 0
 	for _, a := range withType.BillingResourceType.Attributes {
 		if a.Name == "region" {
@@ -49,8 +64,8 @@ func TestStampResourceValues(t *testing.T) {
 	}
 
 	// Fallback to doc createdAt when Info is absent.
-	noInfo := &pricing.BillingResource{BillingResourceType: &pricing.BillingResourceType{}}
-	stampResourceValues([]*pricing.BillingResource{noInfo}, &cloud.CloudResource{CreatedAt: &doc})
+	noInfo := &billingapi.BillingResource{BillingResourceType: &billingapi.BillingResourceType{}}
+	stampResourceValues([]*billingapi.BillingResource{noInfo}, &cloud.CloudResource{CreatedAt: &doc})
 	if noInfo.CreatedAt == nil || !noInfo.CreatedAt.Equal(doc) {
 		t.Errorf("fallback CreatedAt = %v, want doc %v", noInfo.CreatedAt, doc)
 	}

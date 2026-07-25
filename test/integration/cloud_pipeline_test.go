@@ -13,6 +13,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud/billingresource"
 	"github.com/menlocloud/stratos/internal/cloud/metrics"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // TestM6Pipeline is the capstone: usage (GnocchiMetrics) → BillingResource
@@ -58,7 +59,7 @@ func TestM6Pipeline(t *testing.T) {
 
 	// 3. dispatch → BillingResources (instance + instance_traffic).
 	registry := map[string]billingresource.Provider{cloud.TypeServer: billingresource.NewServerProvider(gnocchiRepo)}
-	brs, err := billingresource.GetBillingResources(ctx, cloudRepo, registry, "proj-p", "svc-p", pricing.BillingContext{})
+	brs, err := billingresource.GetBillingResources(ctx, cloudRepo, registry, "proj-p", "svc-p", billingapi.BillingContext{})
 	if err != nil {
 		t.Fatalf("getBillingResources: %v", err)
 	}
@@ -74,7 +75,8 @@ func TestM6Pipeline(t *testing.T) {
 	rc := pricing.RatingContext{TimeUnit: pricing.TimeUnitHour, CycleTimestamp: cycleStart.Add(12 * time.Hour)}
 
 	bill, err := pricing.ChargeBillingResources(ctx, pricingRepo, eng, rc, pricing.BillingContext{},
-		"bp-pipeline", []pricing.PricePlanRule{rule}, brs, cycleStart, cycleEnd, cycleStart.Add(time.Hour), "USD", nil)
+		// The charge seam: resolution hands over billingapi resources, rating maps them in.
+		"bp-pipeline", []pricing.PricePlanRule{rule}, pricing.FromAPIResources(brs), cycleStart, cycleEnd, cycleStart.Add(time.Hour), "USD", nil)
 	if err != nil {
 		t.Fatalf("charge: %v", err)
 	}

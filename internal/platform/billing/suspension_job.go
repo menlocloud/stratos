@@ -49,6 +49,11 @@ func (j *SuspensionJob) SetAudit(a *audit.Service) { j.audit = a }
 // (nova PAUSE/UNPAUSE each project server +
 // project status DISABLED/ENABLED). Best-effort: cloud errors never block the billing state flip
 // (cloud errors are swallowed). Nil → DB-only flips (the old behavior).
+//
+// EXTRACTION SEAM: the implementation is OpenStack-specific and stays in stratos when billing moves
+// out; this becomes a billing→stratos HTTP callback
+// (POST /internal/v1/billing-profiles/{id}/{suspend,resume}-clouds). The signature is already
+// wire-ready — context-first, and a profile id is the only argument. Keep it that way.
 type CloudSuspender interface {
 	SuspendBillingProfileClouds(ctx context.Context, billingProfileID string) error
 	ResumeBillingProfileClouds(ctx context.Context, billingProfileID string) error

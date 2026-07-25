@@ -284,7 +284,9 @@ func (h *Handler) attachPricePlan(ctx context.Context, proj *Project, cr *cloud.
 func billingResourceTypeFor(resourceType string) *pricing.BillingResourceType {
 	for _, t := range billingresource.Catalog() {
 		if t.ResourceType == resourceType {
-			return t
+			// The catalog speaks the billingapi wire contract (resolution side); the engine wants
+			// its own type.
+			return pricing.FromAPIResourceType(t)
 		}
 	}
 	return nil

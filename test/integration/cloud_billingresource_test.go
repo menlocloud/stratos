@@ -9,15 +9,15 @@ import (
 
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/billingresource"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // fakeBRProvider emits one BillingResource per cloud resource (keyed by its id).
 type fakeBRProvider struct{ typ string }
 
 func (f fakeBRProvider) Type() string { return f.typ }
-func (f fakeBRProvider) GetBillingInformation(_ context.Context, _ pricing.BillingContext, cr *cloud.CloudResource) ([]*pricing.BillingResource, error) {
-	return []*pricing.BillingResource{{ResourceID: cr.ID, ProjectID: cr.ProjectID, ResourceType: cr.Type}}, nil
+func (f fakeBRProvider) GetBillingInformation(_ context.Context, _ billingapi.BillingContext, cr *cloud.CloudResource) ([]*billingapi.BillingResource, error) {
+	return []*billingapi.BillingResource{{ResourceID: cr.ID, ProjectID: cr.ProjectID, ResourceType: cr.Type}}, nil
 }
 
 // TestGetBillingResources verifies the cloud→billing dispatch: a service's cloud resources
@@ -41,7 +41,7 @@ func TestGetBillingResources(t *testing.T) {
 
 	registry := map[string]billingresource.Provider{cloud.TypeServer: fakeBRProvider{typ: cloud.TypeServer}}
 
-	brs, err := billingresource.GetBillingResources(ctx, repo, registry, "proj-b", "svc-b", pricing.BillingContext{})
+	brs, err := billingresource.GetBillingResources(ctx, repo, registry, "proj-b", "svc-b", billingapi.BillingContext{})
 	if err != nil {
 		t.Fatalf("getBillingResources: %v", err)
 	}

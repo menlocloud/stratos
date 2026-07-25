@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/menlocloud/stratos/internal/cloud"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // Provider builds the BillingResource(s) for one CloudResourceType:
@@ -17,18 +17,18 @@ import (
 // GnocchiMetrics usage, for traffic-billed types) into the priced attribute Values.
 type Provider interface {
 	Type() string
-	GetBillingInformation(ctx context.Context, bc pricing.BillingContext, cr *cloud.CloudResource) ([]*pricing.BillingResource, error)
+	GetBillingInformation(ctx context.Context, bc billingapi.BillingContext, cr *cloud.CloudResource) ([]*billingapi.BillingResource, error)
 }
 
 // GetBillingResources lists the
 // service's cloud resources and flat-maps each through its type's Provider. Resources whose
 // type has no registered Provider are skipped (faithful: only billable types contribute).
-func GetBillingResources(ctx context.Context, repo *cloud.Repo, registry map[string]Provider, projectID, serviceID string, bc pricing.BillingContext) ([]*pricing.BillingResource, error) {
+func GetBillingResources(ctx context.Context, repo *cloud.Repo, registry map[string]Provider, projectID, serviceID string, bc billingapi.BillingContext) ([]*billingapi.BillingResource, error) {
 	resources, err := repo.FindByProjectAndService(ctx, projectID, serviceID)
 	if err != nil {
 		return nil, err
 	}
-	out := []*pricing.BillingResource{}
+	out := []*billingapi.BillingResource{}
 	for i := range resources {
 		cr := &resources[i]
 		p, ok := registry[cr.Type]
@@ -52,7 +52,7 @@ func GetBillingResources(ctx context.Context, repo *cloud.Repo, registry map[str
 // BillingResource.CreatedAt — the latter drives mid-month proration in the rating engine
 // (getTierValue). Without this, region/service_id filters never match and a `month`-timeUnit rule
 // never prorates a mid-month resource (it rates the full month).
-func stampResourceValues(brs []*pricing.BillingResource, cr *cloud.CloudResource) {
+func stampResourceValues(brs []*billingapi.BillingResource, cr *cloud.CloudResource) {
 	created := cr.CreatedAt
 	if cr.Info != nil && cr.Info.CreatedAt != nil {
 		created = cr.Info.CreatedAt
@@ -84,11 +84,11 @@ func stampResourceValues(brs []*pricing.BillingResource, cr *cloud.CloudResource
 
 // ensureStringAttr adds a `string` ResourceAttribute named `name` to the type if absent (idempotent),
 // so a price-plan filter on that attribute resolves instead of erroring on a missing attribute.
-func ensureStringAttr(t *pricing.BillingResourceType, name string) {
+func ensureStringAttr(t *billingapi.BillingResourceType, name string) {
 	for i := range t.Attributes {
 		if t.Attributes[i].Name == name {
 			return
 		}
 	}
-	t.Attributes = append(t.Attributes, pricing.ResourceAttribute{Name: name, Type: "string"})
+	t.Attributes = append(t.Attributes, billingapi.ResourceAttribute{Name: name, Type: "string"})
 }

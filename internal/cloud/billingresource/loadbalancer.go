@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/menlocloud/stratos/internal/cloud"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // LoadBalancerProvider maps a
@@ -15,7 +15,7 @@ func NewLoadBalancerProvider() *LoadBalancerProvider { return &LoadBalancerProvi
 
 func (p *LoadBalancerProvider) Type() string { return cloud.TypeLoadBalancer }
 
-func (p *LoadBalancerProvider) GetBillingInformation(_ context.Context, _ pricing.BillingContext, cr *cloud.CloudResource) ([]*pricing.BillingResource, error) {
+func (p *LoadBalancerProvider) GetBillingInformation(_ context.Context, _ billingapi.BillingContext, cr *cloud.CloudResource) ([]*billingapi.BillingResource, error) {
 	values := map[string]any{}
 	notEligible := false
 	if lb, ok := mapAt(cr.Data, "loadBalancer"); ok {
@@ -25,7 +25,7 @@ func (p *LoadBalancerProvider) GetBillingInformation(_ context.Context, _ pricin
 		// operating_status == ERROR → not eligible.
 		notEligible = str(lb["operating_status"]) == "ERROR"
 	}
-	return []*pricing.BillingResource{{
+	return []*billingapi.BillingResource{{
 		ResourceID:            cr.ID,
 		ProjectID:             cr.ProjectID,
 		ResourceType:          "load_balancer",
@@ -35,9 +35,11 @@ func (p *LoadBalancerProvider) GetBillingInformation(_ context.Context, _ pricin
 	}}, nil
 }
 
-func loadBalancerType() *pricing.BillingResourceType {
-	s := func(n string) pricing.ResourceAttribute { return pricing.ResourceAttribute{Name: n, Type: "string"} }
-	return &pricing.BillingResourceType{ResourceType: "load_balancer", Attributes: []pricing.ResourceAttribute{
+func loadBalancerType() *billingapi.BillingResourceType {
+	s := func(n string) billingapi.ResourceAttribute {
+		return billingapi.ResourceAttribute{Name: n, Type: "string"}
+	}
+	return &billingapi.BillingResourceType{ResourceType: "load_balancer", Attributes: []billingapi.ResourceAttribute{
 		s("flavor_id"), s("display_name"), s("operating_status"),
 	}}
 }
