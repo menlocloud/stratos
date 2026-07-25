@@ -61,11 +61,12 @@ func (s *Service) ResolveByProfileID(ctx context.Context, profileID, timeUnit st
 		if err != nil {
 			return req, err
 		}
-		// Skip services with nothing to charge: an empty group is pure wire overhead, and the
-		// billing service would rate it to nothing anyway.
-		if len(resources) == 0 {
-			continue
-		}
+		// Services with no resources are included deliberately, not skipped. The in-process driver
+		// calls ChargeBillingResources once per external service regardless, and that call opens
+		// the current bill via GetCurrentBill — which CREATES it when absent. Dropping empty groups
+		// here would mean an ACTIVE profile with nothing billable stops getting a bill created,
+		// which is visible to the customer. The wire cost of an empty array is trivial next to a
+		// behaviour change in billing.
 		req.Services = append(req.Services, billingclient.ServiceResources{
 			ServiceID: es.ID,
 			Resources: resources,

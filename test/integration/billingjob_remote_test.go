@@ -331,3 +331,73 @@ func instanceNet(t *testing.T, db *pgdoc.DB, profileID string) decimal.Decimal {
 	}
 	return total
 }
+
+// TestRemoteChargeCreatesBillForProfileWithNoResources guards a difference that is easy to
+// introduce as an "optimisation": the in-process driver calls ChargeBillingResources once per
+// external service whether or not that service has resources, and that call opens the current bill
+// via GetCurrentBill, which CREATES it when absent.
+//
+// So an ACTIVE profile with nothing billable still gets a bill each tick. If the remote path drops
+// empty service groups to save bytes, those profiles silently stop getting bills — visible to the
+// customer, and not something any amount-based assertion would catch.
+func TestRemoteChargeCreatesBillForProfileWithNoResources(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	db := freshPG(t)
+
+	billingRepo := billing.NewRepo(db)
+	orgRepo := org.NewRepo(db)
+	projectRepo := project.NewRepo(db)
+	cloudRepo := cloud.NewRepo(db)
+	pricingRepo := pricing.NewRepo(db)
+	esSvc := externalservice.NewService(externalservice.NewRepo(db), textcrypt.New("dev-key"))
+
+	mustInsert(t, db, "billingConfiguration", pgdoc.M{"baseCurrency": "USD"})
+	profileID := mustInsertID(t, db, "billingProfile", pgdoc.M{
+		"status": billing.StatusActive, "currency": "USD",
+		"pricePlanConfig": pgdoc.M{"includePublicPricePlans": true},
+	})
+	orgID, err := db.C("organization").InsertOne(ctx, pgdoc.M{"name": "acme", "billingProfileId": profileID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An ENABLED project attached to the service, but with NO cloud resources behind it.
+	mustInsertID(t, db, "project", pgdoc.M{
+		"name": "empty", "status": project.StatusEnabled, "organizationId": orgID,
+		"memberships": []any{}, "services": []any{pgdoc.M{"serviceId": "svc-x"}},
+	})
+	mustInsert(t, db, "externalService", pgdoc.M{"_id": "svc-x", "type": externalservice.TypeCloud, "name": "dev", "config": pgdoc.M{}})
+
+	driver := billingjob.New(billingjob.Deps{
+		Billing: billingRepo, ExternalServices: esSvc, Projects: projectRepo, Orgs: orgRepo,
+		Pricing: pricingRepo, Engine: pricing.NewEngine(pricing.SystemClock()), Cloud: cloudRepo,
+		Registry: map[string]billingresource.Provider{},
+		Now:      func() time.Time { return now },
+	})
+
+	req, err := driver.ResolveByProfileID(ctx, profileID, pricing.TimeUnitMinute, now)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(req.Services) == 0 {
+		t.Fatal("a service with no resources must still be sent, or the bill is never created " +
+			"for profiles that have nothing billable")
+	}
+	if n := len(req.Services[0].Resources); n != 0 {
+		t.Fatalf("expected an empty resource group, got %d resources", n)
+	}
+
+	// And the in-process driver, for comparison, does create the bill.
+	if err := driver.Charge(ctx, pricing.TimeUnitMinute, now); err != nil {
+		t.Fatalf("in-process charge: %v", err)
+	}
+	var bill pricing.Bill
+	found, err := db.C("bill").FindOne(ctx, pgdoc.M{"billingProfileId": profileID}, &bill)
+	if err != nil {
+		t.Fatalf("load bill: %v", err)
+	}
+	if !found {
+		t.Error("the in-process driver should create a bill even with no billable resources; " +
+			"the remote path must match")
+	}
+}
