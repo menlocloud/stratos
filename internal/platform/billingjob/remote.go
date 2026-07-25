@@ -2,6 +2,7 @@ package billingjob
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -26,6 +27,12 @@ import (
 type Charger interface {
 	ActiveProfileIDs(ctx context.Context) ([]string, error)
 	Charge(ctx context.Context, req billingclient.ChargeRequest) (*billingclient.ChargeResponse, error)
+}
+
+// Resolver builds a profile's charge request from local cloud state. *Service implements it; the
+// interface keeps the driver's response handling testable without a database behind it.
+type Resolver interface {
+	ResolveByProfileID(ctx context.Context, profileID, timeUnit string, now time.Time) (billingclient.ChargeRequest, error)
 }
 
 // ResolveByProfileID builds one profile's charge request from local cloud state.
@@ -54,7 +61,14 @@ func (s *Service) ResolveByProfileID(ctx context.Context, profileID, timeUnit st
 		return req, err
 	}
 
+	// The rating side must see the SAME per-time-unit limits this side resolved with: they feed both
+	// the charge cap and the elapsed-units calculation, so a mismatch silently rates differently.
+	// billingContext() returns no limits today (the engine falls back to its defaults on both sides),
+	// but propagating it now means the day billingConfiguration.settings.timeUnitLimits starts being
+	// honoured here, the remote path follows automatically instead of quietly diverging.
 	bc := s.billingContext(ctx)
+	req.TimeUnitLimits = bc.TimeUnitLimits
+
 	for i := range externalServices {
 		es := &externalServices[i]
 		resources, err := s.billingResources(ctx, bc, projects, es.ID)
@@ -81,7 +95,7 @@ func (s *Service) ResolveByProfileID(ctx context.Context, profileID, timeUnit st
 // Per-profile errors are logged and skipped rather than aborting the cycle — the same isolation the
 // in-process loop and the RabbitMQ fan-out both provide, so one bad profile cannot stall the rest.
 // The first error is returned so the run is still visibly unhealthy.
-func RemoteCharge(ctx context.Context, resolver *Service, client Charger, timeUnit string, now time.Time, log *slog.Logger) error {
+func RemoteCharge(ctx context.Context, resolver Resolver, client Charger, timeUnit string, now time.Time, log *slog.Logger) error {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -92,6 +106,7 @@ func RemoteCharge(ctx context.Context, resolver *Service, client Charger, timeUn
 	}
 
 	var firstErr error
+	var charged, skipped int
 	for _, id := range ids {
 		req, err := resolver.ResolveByProfileID(ctx, id, timeUnit, now)
 		if err != nil {
@@ -101,16 +116,44 @@ func RemoteCharge(ctx context.Context, resolver *Service, client Charger, timeUn
 			}
 			continue
 		}
-		if _, err := client.Charge(ctx, req); err != nil {
+		resp, err := client.Charge(ctx, req)
+		if err != nil {
 			log.Error("remote charge: charge", "profileId", id, "timeUnit", timeUnit, "err", err)
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
+		// A 200 does not mean a charge happened. The service answers "not charged" with a reason for
+		// legitimate no-ops (the profile stopped being ACTIVE between resolution and rating) but ALSO
+		// for misconfiguration (its engine disabled, or no billingConfiguration). Treating both as
+		// success is how a deploy mistake turns into silently billing nothing, indefinitely, with a
+		// green cron.
+		if resp == nil || !resp.Charged {
+			reason := "unknown"
+			if resp != nil && resp.Reason != "" {
+				reason = resp.Reason
+			}
+			skipped++
+			log.Warn("remote charge: profile not charged", "profileId", id, "timeUnit", timeUnit, "reason", reason)
+			continue
+		}
+		charged++
 	}
+
+	// Every profile the service itself listed as ACTIVE came back uncharged: that is not a run of
+	// unlucky no-ops, it is the billing service refusing to bill. Surface it as a failed run so the
+	// cron is visibly unhealthy rather than quietly producing no bills.
+	if firstErr == nil && charged == 0 && skipped > 0 {
+		return fmt.Errorf("remote charge: none of the %d active profiles were charged (last reason logged); "+
+			"check the billing service's CLOUD_DB_URL and billingConfiguration", skipped)
+	}
+	log.Info("remote charge complete", "timeUnit", timeUnit, "charged", charged, "skipped", skipped)
 	return firstErr
 }
 
 // compile-time proof that the concrete client satisfies the driver's interface.
-var _ Charger = (*billingclient.Client)(nil)
+var (
+	_ Charger  = (*billingclient.Client)(nil)
+	_ Resolver = (*Service)(nil)
+)
