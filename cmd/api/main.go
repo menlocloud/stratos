@@ -44,6 +44,7 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/affiliate"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/internal/platform/billing"
+	"github.com/menlocloud/stratos/internal/platform/billingclient"
 	"github.com/menlocloud/stratos/internal/platform/billingjob"
 	"github.com/menlocloud/stratos/internal/platform/catalog"
 	"github.com/menlocloud/stratos/internal/platform/chargefanout"
@@ -497,6 +498,13 @@ func run() error {
 			cloud.TypeLoadBalancer: billingresource.NewLoadBalancerProvider(),
 		},
 	})
+	// Client for the standalone billing service. nil when STRATOS_BILLING_URL is unset, which is
+	// fine: every call on it reports ErrNotConfigured, and Validate() already refuses to boot with
+	// remote charging enabled but no URL.
+	billingCli := billingclient.New(cfg.Billing.URL, cfg.Billing.Timeout)
+	if billingCli.Configured() {
+		log.Info("billing service client configured", "url", cfg.Billing.URL, "remoteCharge", cfg.Jobs.RemoteCharge)
+	}
 	metricsJob := metricsjob.New(projectRepo, cloudRepo, esSvc, metrics.NewService(metricsRepo), log)
 	syncJob := syncjob.New(projectRepo, esSvc, cloudRepo, log)
 	savingsSvc := billing.NewSavingsService(billingRepo)
@@ -659,9 +667,23 @@ func run() error {
 	// WriteService.Delete per resource) then remove the doc. ⚠ performs LIVE cloud DELETEs.
 	deletionJob := project.NewDeletionJob(projectRepo, projectCloudDeleter{cloudRepo: cloudRepo, client: func() *client.Client { return cloudCli.Load() }}, log)
 	sched := scheduler.New(lock.New(pg))
-	// Charge dispatch: in-process loop by default; RabbitMQ fan-out (one message per ACTIVE
-	// profile → the per-pod consumer) when STRATOS_JOBS_RABBIT_FANOUT=true and the broker is up.
+	// Charge dispatch, in precedence order:
+	//
+	//  1. REMOTE (STRATOS_JOBS_REMOTE_CHARGE): billing runs as its own service. This pod still
+	//     resolves each profile's cloud resources — that needs the OpenStack cache, which only
+	//     lives here — and POSTs them to the billing service to be rated. This is the target state;
+	//     once it is proven, the two paths below are deleted along with the in-process engine.
+	//  2. RabbitMQ fan-out (STRATOS_JOBS_RABBIT_FANOUT): one message per ACTIVE profile, drained by
+	//     a per-pod consumer.
+	//  3. The in-process loop.
+	//
+	// Remote deliberately does NOT fall back to in-process on error: a silent fallback would let
+	// the two engines both charge the same cycle into different databases during migration, which
+	// is far worse than a visibly failed run.
 	chargeDispatch := func(ctx context.Context, timeUnit string) error {
+		if cfg.Jobs.RemoteCharge {
+			return billingjob.RemoteCharge(ctx, chargeJob, billingCli, timeUnit, time.Now().UTC(), log)
+		}
 		if cfg.Jobs.RabbitFanout {
 			if rc := rabbit.Load(); rc != nil {
 				n, err := chargefanout.Publish(ctx, rc, chargeJob, timeUnit)

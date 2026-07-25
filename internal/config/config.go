@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
@@ -82,6 +83,20 @@ type Config struct {
 		// RabbitFanout routes the charge cron through RabbitMQ (one message per ACTIVE
 		// profile → a consumer per pod) instead of the in-process loop. Default off.
 		RabbitFanout bool
+		// RemoteCharge routes the charge cron to the standalone billing service instead of rating
+		// in-process: this pod still resolves each profile's cloud resources (that needs the
+		// OpenStack cache, which only lives here) and POSTs them to Billing.URL to be rated.
+		// Requires Billing.URL. Default off, so the in-process path remains authoritative until
+		// the remote path has been validated against it.
+		RemoteCharge bool
+	}
+	// Billing points at the standalone billing service. Empty → not configured, and any
+	// billing-service-backed path stays disabled.
+	Billing struct {
+		URL string
+		// Timeout bounds one billing call. A charge carries every billable resource for a profile,
+		// so it is deliberately generous compared to an interactive request.
+		Timeout time.Duration
 	}
 	LogLevel string
 }
@@ -147,6 +162,16 @@ func Load() (*Config, error) {
 	c.Jobs.SchedulerEnabled = boolEnv("STRATOS_JOBS_SCHEDULER_ENABLED") || k.Bool("stratos.jobs.scheduler-enabled")
 	c.Jobs.DebugTriggers = boolEnv("STRATOS_JOBS_DEBUG_TRIGGERS") || k.Bool("stratos.jobs.debug-triggers")
 	c.Jobs.RabbitFanout = boolEnv("STRATOS_JOBS_RABBIT_FANOUT") || k.Bool("stratos.jobs.rabbit-fanout")
+	c.Jobs.RemoteCharge = boolEnv("STRATOS_JOBS_REMOTE_CHARGE") || k.Bool("stratos.jobs.remote-charge")
+
+	// Standalone billing service.
+	c.Billing.URL = firstNonEmpty(os.Getenv("STRATOS_BILLING_URL"), k.String("stratos.billing.url"))
+	c.Billing.Timeout = 60 * time.Second
+	if s := os.Getenv("STRATOS_BILLING_TIMEOUT"); s != "" {
+		if d, err := time.ParseDuration(s); err == nil {
+			c.Billing.Timeout = d
+		}
+	}
 
 	c.LogLevel = strings.ToUpper(firstNonEmpty(k.String("logging.level.root"), "INFO"))
 
@@ -162,6 +187,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Rabbit.Host == "" {
 		missing = append(missing, "rabbitmq.host / STRATOS_RABBITMQ_HOST")
+	}
+	// Remote charging without a billing URL would silently stop charging bills altogether — the
+	// cron would fire, find nowhere to send the work, and log. Fail closed instead.
+	if c.Jobs.RemoteCharge && c.Billing.URL == "" {
+		missing = append(missing, "STRATOS_BILLING_URL (required when STRATOS_JOBS_REMOTE_CHARGE is set)")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
