@@ -300,7 +300,6 @@ flowchart TB
         promotion["promotion"]
         catalog["catalog"]
         billingjob["billingjob"]
-        chargefanout["chargefanout"]
     end
     subgraph CLOUD["Cloud"]
         externalservice["externalservice"]
@@ -346,7 +345,7 @@ flowchart TB
 | `promotion` | Promotion/deposit config reads and promo-code redemption into promotional credit. |
 | `catalog` | Cloud-catalog config reads: flavor categories, image groups/categories, instance-metadata options (admin-configured document tables). |
 | `billingjob` | The charge-cron driver: load active profiles + services, and rate each billable cloud resource per time unit. |
-| `chargefanout` | The multi-pod alternative to the in-process charge loop: publish one RabbitMQ message per active profile; any pod's consumer drains the queue. |
+| `billingclient` | Client for the standalone billing service (charge API + callbacks contract). |
 
 ### Cloud
 
@@ -444,7 +443,7 @@ ports, the PostgreSQL DSN (`STRATOS_DB_URL`), RabbitMQ, the data-at-rest `Encryp
 `pkg/textcrypt` to decrypt external-service secrets), self URLs (API/UI/admin base
 URLs, which also seed CORS), the three auth realms, the OpenStack dev-bootstrap
 connection, and the `Jobs` gates (`SchedulerEnabled`, `DebugTriggers`,
-`RabbitFanout`).
+`RemoteCharge`).
 
 ### Async & scheduling (`internal/amqp`, `scheduler`, `lock`)
 
@@ -456,7 +455,7 @@ services sync, savings expiry + reminders, transaction scan, auto-suspension
 (dunning), monthly bill finalization, monthly collect, and project deletion.
 
 The charge cron has two execution modes: an **in-process loop** by default, or a
-**RabbitMQ fan-out** (`STRATOS_JOBS_RABBIT_FANOUT=true`) that publishes one
+**remote charge path** (`STRATOS_JOBS_REMOTE_CHARGE=true`) that sends one
 message per active billing profile so any pod's consumer can charge one profile —
 isolating per-profile failures across the fleet. RabbitMQ itself is maintained by
 a background reconnect loop so readiness self-heals after a dropped connection.

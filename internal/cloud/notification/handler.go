@@ -22,7 +22,7 @@ const notificationSecretHeader = "X-Stratos-Notification-Secret"
 // POST /api/v1/notifications/{externalServiceId}/{region}. OpenStack/ceilometer HTTP-POSTs an
 // oslo.messaging notification here (the "Notifier URI" shown in the admin Connection tab). With no
 // message broker wired we
-// process IN-PROCESS (the chargefanout precedent) and ALWAYS return 200 — the notifier is
+// process IN-PROCESS and ALWAYS return 200 — the notifier is
 // fire-and-forget, a processing error must not make OpenStack retry-storm (we
 // swallow exceptions, only logging them). The path is permitAll (auth.go whitelist) — ceilometer
 // cannot send a bearer.

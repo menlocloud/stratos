@@ -5,7 +5,7 @@ that keeps them single-run across replicas, the optional RabbitMQ charge
 fan-out, and the on-demand debug triggers.
 
 This document is for contributors working in `internal/platform/scheduler`,
-`internal/platform/lock`, `internal/platform/chargefanout`,
+`internal/platform/lock`,
 `internal/platform/billingjob`, and the job wiring in `cmd/api/main.go`.
 
 ---
@@ -171,8 +171,9 @@ By default the charge cron runs **in-process**: one pod acquires the
 profile itself. That's simple and correct, but a slow or failing profile is
 processed on the same goroutine as the rest, and all the work lands on one pod.
 
-`internal/platform/chargefanout/chargefanout.go` is the opt-in alternative. When
-`STRATOS_JOBS_RABBIT_FANOUT=true`, the cron **publishes** instead of looping:
+`internal/platform/billingjob/remote.go` is the opt-in alternative. When
+`STRATOS_JOBS_REMOTE_CHARGE=true`, the cron resolves each profile's resources locally and POSTs
+them to the billing service to be rated:
 
 - `Publish` fans out one message per ACTIVE profile to the shared queue
   `stratos.charge`. Each message is `{ profileId, timeUnit }`.
@@ -267,7 +268,7 @@ The three env gates (`internal/config/config.go`):
 |---|---|
 | `STRATOS_JOBS_SCHEDULER_ENABLED` | Start the cron scheduler (jobs begin firing on their specs). |
 | `STRATOS_JOBS_DEBUG_TRIGGERS` | Expose the mgmt `/debug/run-*` triggers even when the scheduler is off. |
-| `STRATOS_JOBS_RABBIT_FANOUT` | Route the charge cron through the RabbitMQ fan-out; also starts a charge consumer on this pod. |
+| `STRATOS_JOBS_REMOTE_CHARGE` | Route the charge cron to the standalone billing service: resolve resources here, POST them there to be rated. Requires `STRATOS_BILLING_URL`. |
 
 When fan-out is on, `startChargeConsumer` waits (bounded) for the
 background-maintained broker connection, then subscribes this pod's consumer —
@@ -316,7 +317,7 @@ only live SSE delivery is pod-local.
 
 - `internal/platform/scheduler/scheduler.go` — cron specs, `Job`, `Register`, `RunLocked`
 - `internal/platform/lock/shedlock.go` — the PostgreSQL distributed lock (acquire/release)
-- `internal/platform/chargefanout/chargefanout.go` — RabbitMQ charge fan-out (Publish / StartConsumer)
+- `internal/platform/billingjob/remote.go` — remote charge (resolve locally, rate in the billing service)
 - `internal/platform/billingjob/billingjob.go` — the charge/rating driver (`Charge`, `ChargeProfileByID`, `ActiveProfileIDs`)
 - `internal/cloud/syncjob/job.go` — the `servicesSync` job
 - `internal/cloud/metricsjob/job.go` — the `gnocchiMetricsFetch` job

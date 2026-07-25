@@ -48,7 +48,6 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/billingclient"
 	"github.com/menlocloud/stratos/internal/platform/billingjob"
 	"github.com/menlocloud/stratos/internal/platform/catalog"
-	"github.com/menlocloud/stratos/internal/platform/chargefanout"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
 	"github.com/menlocloud/stratos/internal/platform/feature"
 	"github.com/menlocloud/stratos/internal/platform/job"
@@ -677,15 +676,9 @@ func run() error {
 	// WriteService.Delete per resource) then remove the doc. ⚠ performs LIVE cloud DELETEs.
 	deletionJob := project.NewDeletionJob(projectRepo, projectCloudDeleter{cloudRepo: cloudRepo, client: func() *client.Client { return cloudCli.Load() }}, log)
 	sched := scheduler.New(lock.New(pg))
-	// Charge dispatch, in precedence order:
-	//
-	//  1. REMOTE (STRATOS_JOBS_REMOTE_CHARGE): billing runs as its own service. This pod still
-	//     resolves each profile's cloud resources — that needs the OpenStack cache, which only
-	//     lives here — and POSTs them to the billing service to be rated. This is the target state;
-	//     once it is proven, the two paths below are deleted along with the in-process engine.
-	//  2. RabbitMQ fan-out (STRATOS_JOBS_RABBIT_FANOUT): one message per ACTIVE profile, drained by
-	//     a per-pod consumer.
-	//  3. The in-process loop.
+	// Charge dispatch: REMOTE (STRATOS_JOBS_REMOTE_CHARGE) sends the resolved resources to the
+	// billing service to be rated; otherwise the in-process loop rates them here. Remote is the
+	// target state — the in-process path goes away with the engine itself.
 	//
 	// Remote deliberately does NOT fall back to in-process on error: a silent fallback would let
 	// the two engines both charge the same cycle into different databases during migration, which
@@ -694,24 +687,9 @@ func run() error {
 		if cfg.Jobs.RemoteCharge {
 			return billingjob.RemoteCharge(ctx, chargeJob, billingCli, timeUnit, time.Now().UTC(), log)
 		}
-		if cfg.Jobs.RabbitFanout {
-			if rc := rabbit.Load(); rc != nil {
-				n, err := chargefanout.Publish(ctx, rc, chargeJob, timeUnit)
-				if err == nil {
-					log.Info("charge fan-out published", "timeUnit", timeUnit, "count", n)
-				}
-				return err
-			}
-			log.Warn("rabbit fan-out on but broker not connected — charging in-process this tick", "timeUnit", timeUnit)
-		}
 		return chargeJob.Charge(ctx, timeUnit, time.Now().UTC())
 	}
 	registerJobs(sched, chargeDispatch, metricsJob, syncJob, savingsSvc, suspensionJob, collectSvc, txnScanner, deletionJob, billSendSvc, log)
-	// When fan-out is on, run a consumer in this pod (waits for the broker, then drains the
-	// charge queue). Background so startup never blocks on the broker.
-	if cfg.Jobs.RabbitFanout {
-		go startChargeConsumer(&rabbit, chargeJob, log)
-	}
 	if cfg.Jobs.SchedulerEnabled {
 		log.Warn("scheduled jobs ENABLED (charge cron + cloud metrics) — bills will be charged on a timer")
 		sched.Start()
@@ -824,15 +802,6 @@ func run() error {
 					"fullName": "Stratos Test User", "balance": "0.00", "currency": "USD",
 				})
 				jobResult(w, map[string]any{"ran": "send-test-mail", "to": to, "template": key}, err)
-			},
-			"run-charge-fanout": func(w http.ResponseWriter, r *http.Request) {
-				rc := rabbit.Load()
-				if rc == nil {
-					jobResult(w, nil, errors.New("rabbitmq not connected"))
-					return
-				}
-				n, err := chargefanout.Publish(r.Context(), rc, chargeJob, pricing.TimeUnitMinute)
-				jobResult(w, map[string]any{"ran": "charge-fanout", "published": n}, err)
 			},
 			// rabbit-selftest proves Publish+Consume work live against the cluster broker (an
 			// isolated queue round-trip) without needing any billing data seeded.
@@ -950,23 +919,6 @@ func run() error {
 	_ = appSrv.Shutdown(sctx)
 	_ = mgmtSrv.Shutdown(sctx)
 	return nil
-}
-
-// startChargeConsumer waits for the RabbitMQ broker to come up (background-connected) then
-// subscribes a charge consumer on this pod. Bounded wait so a missing broker just logs.
-func startChargeConsumer(rabbit *atomic.Pointer[amqp.Client], charger chargefanout.Charger, log *slog.Logger) {
-	for i := 0; i < 60; i++ {
-		if rc := rabbit.Load(); rc != nil && rc.Healthy() {
-			if _, err := chargefanout.StartConsumer(rc, charger, log); err != nil {
-				log.Error("charge fan-out consumer", "err", err)
-				return
-			}
-			log.Warn("charge fan-out consumer started", "queue", chargefanout.Queue)
-			return
-		}
-		time.Sleep(2 * time.Second)
-	}
-	log.Error("charge fan-out consumer: broker not up after 120s")
 }
 
 // registerJobs wires the charge cron (minutely/hourly/monthly) + the gnocchi metrics job
