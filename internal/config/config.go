@@ -80,6 +80,9 @@ type Config struct {
 		// WITHOUT auto-starting the crons — so a deploy can be driven deterministically for the
 		// golden run while staying dormant (no timed bill charging).
 		DebugTriggers bool
+		// RabbitFanout routes the charge cron through RabbitMQ (one message per ACTIVE
+		// profile → a consumer per pod) instead of the in-process loop. Default off.
+		RabbitFanout bool
 		// RemoteCharge routes the charge cron to the standalone billing service instead of rating
 		// in-process: this pod still resolves each profile's cloud resources (that needs the
 		// OpenStack cache, which only lives here) and POSTs them to Billing.URL to be rated.
@@ -166,6 +169,7 @@ func Load() (*Config, error) {
 	// Scheduled jobs (charge cron + cloud metrics) — OFF unless explicitly enabled.
 	c.Jobs.SchedulerEnabled = boolEnv("STRATOS_JOBS_SCHEDULER_ENABLED") || k.Bool("stratos.jobs.scheduler-enabled")
 	c.Jobs.DebugTriggers = boolEnv("STRATOS_JOBS_DEBUG_TRIGGERS") || k.Bool("stratos.jobs.debug-triggers")
+	c.Jobs.RabbitFanout = boolEnv("STRATOS_JOBS_RABBIT_FANOUT") || k.Bool("stratos.jobs.rabbit-fanout")
 	c.Jobs.RemoteCharge = boolEnv("STRATOS_JOBS_REMOTE_CHARGE") || k.Bool("stratos.jobs.remote-charge")
 
 	// Standalone billing service.

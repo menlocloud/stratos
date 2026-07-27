@@ -116,17 +116,9 @@ spec:
             - name: STRATOS_JOBS_DEBUG_TRIGGERS
               value: "true"
             {{- end }}
-            {{- if .Values.api.jobs.remoteCharge }}
-            - name: STRATOS_JOBS_REMOTE_CHARGE
+            {{- if .Values.api.jobs.rabbitFanout }}
+            - name: STRATOS_JOBS_RABBIT_FANOUT
               value: "true"
-            {{- end }}
-            {{- if .Values.api.billing.url }}
-            - name: STRATOS_BILLING_URL
-              value: {{ .Values.api.billing.url | quote }}
-            {{- end }}
-            {{- if .Values.api.billing.callbackToken }}
-            - name: STRATOS_BILLING_CALLBACK_TOKEN
-              value: {{ .Values.api.billing.callbackToken | quote }}
             {{- end }}
             {{- if .Values.api.network.defaultMtu }}
             - name: STRATOS_DEFAULT_NETWORK_MTU

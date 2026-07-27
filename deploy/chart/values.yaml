@@ -77,18 +77,9 @@ api:
     # Expose the on-demand POST :<managementPort>/debug/run-* triggers
     # without starting the crons.
     debugTriggers: false
-    # Route the charge cron to the standalone billing service instead of rating in-process:
-    # this pod still resolves each profile's cloud resources (it owns the OpenStack cache) and
-    # POSTs them to billing.url to be rated. Requires billing.url.
-    remoteCharge: false
-
-  # Standalone billing service (the extracted cloud-billing engine).
-  billing:
-    # In-cluster URL, e.g. http://cloud-billing.billing.svc.cluster.local:8080
-    url: ""
-    # Shared secret the billing service presents when calling back to suspend/resume
-    # clouds, activate projects or send mail. Empty -> those callbacks are NOT mounted.
-    callbackToken: ""
+    # Route the charge cron through RabbitMQ fan-out instead of the
+    # in-process loop.
+    rabbitFanout: false
 
   # Networking defaults for client-created networks.
   network:

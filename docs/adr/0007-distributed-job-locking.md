@@ -37,8 +37,8 @@ composed in `Scheduler.RunLocked`, which acquires, runs iff acquired, and
 releases honoring the floor.
 
 For the one job that is both hot and naturally shardable — the per-profile charge
-run — provide an **optional remote charge path** (`internal/platform/billingjob/remote.go`,
-gated by `STRATOS_JOBS_REMOTE_CHARGE`). Instead of one pod charging every profile
+run — provide an **optional RabbitMQ fan-out** (`internal/platform/chargefanout`,
+gated by `STRATOS_JOBS_RABBIT_FANOUT`). Instead of one pod charging every profile
 in a loop, the locked cron *publishes one message per active billing profile*;
 any pod's consumer drains the queue, charging one profile per message. The
 per-profile charge math is identical to the in-process path. Default is off

@@ -113,9 +113,7 @@ unexpectedly.
 |---------|-----|------|---------|---------|
 | Scheduler | `STRATOS_JOBS_SCHEDULER_ENABLED` | `stratos.jobs.scheduler-enabled` | `false` | Auto-start the charge/metrics crons (charges bills on a timer). |
 | Debug triggers | `STRATOS_JOBS_DEBUG_TRIGGERS` | `stratos.jobs.debug-triggers` | `false` | Expose on-demand `POST :8081/debug/run-*` triggers **without** starting the crons — for deterministic, manual runs. |
-| Remote charge | `STRATOS_JOBS_REMOTE_CHARGE` | `stratos.jobs.remote-charge` | `false` | Route the charge cron to the standalone billing service: this pod resolves each profile's cloud resources and POSTs them there to be rated. Requires `STRATOS_BILLING_URL`. |
-| Billing service URL | `STRATOS_BILLING_URL` | `stratos.billing.url` | — | In-cluster URL of the standalone billing service. |
-| Billing callback token | `STRATOS_BILLING_CALLBACK_TOKEN` | `stratos.billing.callback-token` | — | Shared secret the billing service presents when calling back to suspend/resume clouds, activate projects or send mail. Empty → those callbacks are not mounted. |
+| Rabbit fanout | `STRATOS_JOBS_RABBIT_FANOUT` | `stratos.jobs.rabbit-fanout` | `false` | Route the charge cron through RabbitMQ (one message per active profile) instead of the in-process loop. |
 | Default network MTU | `STRATOS_DEFAULT_NETWORK_MTU` | `api.network.defaultMtu` (Helm) | _unset_ | MTU stamped on client-created networks. Unset/0 leaves it to neutron's provider default (e.g. the geneve/vxlan value); set e.g. `1500` to force a fixed MTU. |
 
 When the scheduler or debug triggers are enabled, the management port also exposes

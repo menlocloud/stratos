@@ -16,7 +16,7 @@ arithmetic is exact decimal.
 | `pricing` | `internal/platform/pricing` | The rating core: price-plan/rule domain + the pure rating math, bill assembly, tax, FX, credits, settlement, and the suspension **decision** predicates. Golden-tested, mostly pure. |
 | `billing` | `internal/platform/billing` | The billing-profile aggregate, the PostgreSQL repos, and the stateful services: balance/due, bill send, pay-by-credit, savings contracts + reminders, suspension **orchestration**, gateways, cards, activation. |
 | `billingjob` | `internal/platform/billingjob` | The charge cron driver — loads active profiles + resources and drives `pricing` to accrue costs onto the current bill. |
-| `billingclient` | `internal/platform/billingclient` | Client for the standalone billing service: the charge API the cron drives when `STRATOS_JOBS_REMOTE_CHARGE` is on. |
+| `chargefanout` | `internal/platform/chargefanout` | Optional RabbitMQ fan-out of the charge job (one message per profile) as a multi-pod alternative to the in-process loop. |
 | `payment` | `internal/platform/payment` | Money-in flows: add funds, deposit/collect by card, register card, the Stripe gateway, and the stuck-transaction scanner. |
 | `promotion` | `internal/platform/promotion` | Client promo-code redemption → promotional credit. |
 | `catalog` | `internal/platform/catalog` | Cloud-catalog config reads (flavor categories / image groups). |
@@ -192,10 +192,10 @@ metrics jobs.
 ### In-process loop vs RabbitMQ fan-out
 
 By default the cron runs the charge loop **in-process** under a distributed lock.
-When `STRATOS_JOBS_REMOTE_CHARGE=true` (config `stratos.jobs.remote-charge`) the cron
-resolves each ACTIVE profile's billable resources locally — that needs the OpenStack
-resource cache, which only lives here — and POSTs them to the standalone billing
-service to be rated (`billingjob.RemoteCharge` →
+When `STRATOS_JOBS_RABBIT_FANOUT=true` (config `stratos.jobs.rabbit-fanout`) and a
+broker is up, the cron instead **publishes one message per active profile**
+(`chargefanout.Publish`, queue `stratos.charge`), and any pod's consumer charges
+one profile per message (`chargefanout.StartConsumer` →
 `billingjob.ChargeProfileByID`). The per-profile unit of work — and the money math —
 is identical; the fan-out just spreads it across pods and isolates failures.
 
@@ -718,7 +718,7 @@ runs each tick.
 
 ## 15. Config flags
 
-- **`STRATOS_JOBS_REMOTE_CHARGE`** (`stratos.jobs.remote-charge`, default off) —
+- **`STRATOS_JOBS_RABBIT_FANOUT`** (`stratos.jobs.rabbit-fanout`, default off) —
   route the charge cron through RabbitMQ (one message per active profile) instead
   of the in-process loop.
 - **`billingConfiguration.baseCurrency`** — the product/base currency all bills
