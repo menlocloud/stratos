@@ -77,9 +77,30 @@ api:
     # Expose the on-demand POST :<managementPort>/debug/run-* triggers
     # without starting the crons.
     debugTriggers: false
-    # Route the charge cron through RabbitMQ fan-out instead of the
-    # in-process loop.
+    # Fan the NATIVE charge cron out across pods via RabbitMQ (one message per active profile)
+    # instead of charging every profile in a single pod. Ignored by the external provider, which
+    # gets its parallelism from the billing service instead.
     rabbitFanout: false
+
+  # Which engine charges bills.
+  #
+  #   native   (default) The billing engine built into stratos. Needs nothing but PostgreSQL, and
+  #                      is a complete billing system: profiles, rating, bills, credits, savings
+  #                      plans, dunning and suspension. This is what a plain deployment runs.
+  #   external           Delegate rating to a separate billing service. Stratos still resolves what
+  #                      to bill (it owns the OpenStack resource cache) and POSTs the resolved
+  #                      resources to billing.url. Requires url and token.
+  #
+  # Only the charge step differs; every other billing surface behaves identically.
+  billing:
+    provider: native
+    # External provider only. In-cluster URL of the billing service.
+    url: ""
+    # External provider only. Bearer token for that service's internal API.
+    token: ""
+    # Shared secret the billing service presents when calling BACK into stratos to suspend/resume
+    # clouds, activate projects or send mail. Empty -> those callbacks are not mounted at all.
+    callbackToken: ""
 
   # Networking defaults for client-created networks.
   network:

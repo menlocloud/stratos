@@ -113,12 +113,49 @@ unexpectedly.
 |---------|-----|------|---------|---------|
 | Scheduler | `STRATOS_JOBS_SCHEDULER_ENABLED` | `stratos.jobs.scheduler-enabled` | `false` | Auto-start the charge/metrics crons (charges bills on a timer). |
 | Debug triggers | `STRATOS_JOBS_DEBUG_TRIGGERS` | `stratos.jobs.debug-triggers` | `false` | Expose on-demand `POST :8081/debug/run-*` triggers **without** starting the crons — for deterministic, manual runs. |
-| Rabbit fanout | `STRATOS_JOBS_RABBIT_FANOUT` | `stratos.jobs.rabbit-fanout` | `false` | Route the charge cron through RabbitMQ (one message per active profile) instead of the in-process loop. |
+| Rabbit fanout | `STRATOS_JOBS_RABBIT_FANOUT` | `stratos.jobs.rabbit-fanout` | `false` | Fan the **native** charge cron out across pods via RabbitMQ (one message per active profile) instead of charging every profile in one pod. Ignored by the external provider. |
 | Default network MTU | `STRATOS_DEFAULT_NETWORK_MTU` | `api.network.defaultMtu` (Helm) | _unset_ | MTU stamped on client-created networks. Unset/0 leaves it to neutron's provider default (e.g. the geneve/vxlan value); set e.g. `1500` to force a fixed MTU. |
 
 When the scheduler or debug triggers are enabled, the management port also exposes
 operator triggers such as `POST :8081/debug/gen-hmac-key` (mint an Admin API key —
 see `docs/auth.md`).
+
+### Billing provider
+
+Stratos ships a **complete billing system** — profiles, a rating engine, bills,
+credits, savings plans, dunning and suspension — and it needs nothing but
+PostgreSQL. That is the `native` provider and it is the default: check out this
+repository, run it, and billing works.
+
+Some deployments run a separate billing service instead. `external` delegates the
+rating step to it. Stratos still resolves *what* to bill, because it owns the
+OpenStack resource cache and nothing else can.
+
+| Concern | env | file | Default | Meaning |
+|---------|-----|------|---------|---------|
+| Provider | `STRATOS_BILLING_PROVIDER` | `stratos.billing.provider` | `native` | `native` or `external`. An unrecognised value fails startup rather than silently defaulting. |
+| Service URL | `STRATOS_BILLING_URL` | `stratos.billing.url` | — | External only. In-cluster URL of the billing service. **Required** when provider is `external`. |
+| Service token | `STRATOS_BILLING_TOKEN` | `stratos.billing.token` | — | External only. Bearer token for that service's internal API. **Required** when provider is `external`. |
+| Call timeout | `STRATOS_BILLING_TIMEOUT` | — | `60s` | External only. Bounds one charge call, which carries every billable resource for a profile. |
+| Callback token | `STRATOS_BILLING_CALLBACK_TOKEN` | `stratos.billing.callback-token` | — | Shared secret the billing service presents when calling **back** into stratos to suspend/resume clouds, activate projects or send mail. Empty → those callbacks are not mounted at all. |
+
+**What changes between the two.** Only the charge step. Every other billing
+surface — the client REST API, the admin API, project cost reads, the billing
+repository — behaves identically.
+
+**What does not run under `external`.** The billing jobs that drive the in-tree
+engine directly are not scheduled, because the billing service runs its own:
+`savingsContractExpiration`, `savingsContractExpiryReminders`,
+`reminderNotifications`, `paymentGatewayTransactionScanning`,
+`autoSuspensionJob`, `monthlyBill`, `monthlyCollect`. Running both would mean two
+dunning passes, two sets of customer emails and two attempts on the same saved
+card. Non-billing jobs (metrics ingestion, cloud sync, project deletion) always
+run — the external provider still needs this pod to keep the resource cache fresh.
+
+> The external provider deliberately does **not** fall back to the native engine
+> when the billing service is unreachable. Both engines write bills, and during a
+> migration they may write to different databases, so a silent fallback could
+> charge a cycle twice in two places. A failed run is easier to recover from.
 
 ### Mail / SMTP
 

@@ -10,17 +10,20 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/billingclient"
 )
 
-// remote.go is the charge path once billing runs as its own service.
+// remote.go is the charge path for the EXTERNAL billing provider
+// (STRATOS_BILLING_PROVIDER=external). It is one of two implementations behind
+// internal/platform/billingprovider; the other, and the default, is the billing engine in this
+// repository.
 //
-// The work splits exactly where the in-process driver already splits it: RESOLUTION (read the cloud
-// cache, resolve the profile's projects, build billable units) stays here because it is
-// OpenStack-specific, and RATING moves to the billing service. The only difference from
-// Service.Charge is that the units are POSTed instead of handed to pricing in-process.
+// The work splits where the in-process driver already splits it: RESOLUTION (read the cloud cache,
+// resolve the profile's projects, build billable units) always happens here because it is
+// OpenStack-specific and nothing else can do it, and RATING goes to the billing service. The only
+// difference from Service.Charge is that the units are POSTed instead of handed to pricing
+// in-process.
 //
 // Note what this path does NOT touch: the local billing repo. The profile work-list comes from the
 // billing service, and resolution only needs a profile id to walk orgs → projects → cloud
-// resources. That is what makes the eventual removal of billing from this binary a deletion rather
-// than a rewrite.
+// resources. The native engine remains fully present and is what a plain checkout of stratos runs.
 
 // Charger is the subset of billingclient.Client the remote driver needs (an interface so the driver
 // can be tested without a server).
