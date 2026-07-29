@@ -28,6 +28,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/billingresource"
 	"github.com/menlocloud/stratos/internal/cloud/cephcred"
+	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/metrics"
 	"github.com/menlocloud/stratos/internal/cloud/metricsjob"
@@ -249,6 +250,11 @@ func run() error {
 	// Ceph RGW (S3) per-project credentials — enables ceph-s3 provisioning + bucket writes.
 	cephCredRepo := cephcred.New(pg, enc)
 	projectH.SetCephCreds(cephCredRepo, cephcred.NewKeyRepo(pg, enc))
+	// Kamaji Managed Kubernetes — enables kamaji provisioning + the KUBERNETES_CLUSTER write
+	// surface (Application CRs on the provider's management cluster; tasks/managed-k8s-plan.md).
+	projectH.SetKamaji(func(es *externalservice.ExternalService) (*kamaji.Service, error) {
+		return kamaji.New(es.KamajiConfig(), es.ID)
+	})
 
 	// Promotion (deposit config) + Affiliate (cfy check + project config/log) — client reads.
 	// The promo-redeem authz gate resolves the bp's org WITH a membership check on the caller
@@ -494,10 +500,11 @@ func run() error {
 		Engine:           pricing.NewEngine(nil),
 		Cloud:            cloudRepo,
 		Registry: map[string]billingresource.Provider{
-			cloud.TypeServer:       billingresource.NewServerProvider(metricsRepo),
-			cloud.TypeVolume:       billingresource.NewVolumeProvider(),
-			cloud.TypeFloatingIP:   billingresource.NewFloatingIPProvider(),
-			cloud.TypeLoadBalancer: billingresource.NewLoadBalancerProvider(),
+			cloud.TypeServer:            billingresource.NewServerProvider(metricsRepo),
+			cloud.TypeVolume:            billingresource.NewVolumeProvider(),
+			cloud.TypeFloatingIP:        billingresource.NewFloatingIPProvider(),
+			cloud.TypeLoadBalancer:      billingresource.NewLoadBalancerProvider(),
+			cloud.TypeKubernetesCluster: billingresource.NewKubernetesClusterProvider(),
 		},
 	})
 	// Client for the standalone billing service. nil when STRATOS_BILLING_URL is unset, which is
@@ -673,7 +680,15 @@ func run() error {
 	billSendSvc.SetNotifier(mailSvc)
 	// Project-deletion job: cascade-delete a scheduled project's cloud resources (live
 	// WriteService.Delete per resource) then remove the doc. ⚠ performs LIVE cloud DELETEs.
-	deletionJob := project.NewDeletionJob(projectRepo, projectCloudDeleter{cloudRepo: cloudRepo, client: func() *client.Client { return cloudCli.Load() }}, log)
+	deletionJob := project.NewDeletionJob(projectRepo, projectCloudDeleter{
+		cloudRepo: cloudRepo,
+		client:    func() *client.Client { return cloudCli.Load() },
+		// kamaji rows have no keystone tenant — route them to the management cluster
+		// (Application delete) instead of the OpenStack WriteService (whose KUBERNETES_CLUSTER
+		// branch is the dormant Magnum path and would fail every sweep).
+		esGet:     esSvc.Get,
+		kamajiFor: func(es *externalservice.ExternalService) (*kamaji.Service, error) { return kamaji.New(es.KamajiConfig(), es.ID) },
+	}, log)
 	sched := scheduler.New(lock.New(pg))
 	// Which engine charges bills. NATIVE (the default) rates in-process with the billing engine in
 	// this repository and needs nothing but PostgreSQL — that is what a plain checkout of stratos
@@ -1193,6 +1208,8 @@ func (s billingCloudSuspender) pauseProjectServers(ctx context.Context, p *proje
 type projectCloudDeleter struct {
 	cloudRepo *cloud.Repo
 	client    func() *client.Client
+	esGet     func(ctx context.Context, id string) (*externalservice.ExternalService, error)
+	kamajiFor func(es *externalservice.ExternalService) (*kamaji.Service, error)
 }
 
 func (d projectCloudDeleter) DeleteProjectResources(ctx context.Context, projectID string) error {
@@ -1206,6 +1223,42 @@ func (d projectCloudDeleter) DeleteProjectResources(ctx context.Context, project
 		return err
 	}
 	project.SortCloudResourcesForDeletion(resources)
+
+	// kamaji rows: delete via the management cluster (ArgoCD Application cascade), never the
+	// OpenStack WriteService. A successful delete request archives the row immediately — the
+	// cascade is asynchronous and the service-level sweep (syncjob.sweepKamajiOrphans) later
+	// revokes the appcred and reaps secret/namespace, which keeps working after this project's
+	// doc is gone (the sweep scans the management cluster, not stratos projects). Failures are
+	// collected (not abort-on-first, so one bad row cannot strand the others) and returned at
+	// the end — the deletion job then cancels this run and the project owner sees it, same as
+	// an OpenStack sweep failure.
+	var kamajiErr error
+	if d.esGet != nil && d.kamajiFor != nil {
+		kept := resources[:0]
+		now := time.Now().UTC()
+		for i := range resources {
+			res := &resources[i]
+			es, gerr := d.esGet(ctx, res.ServiceID)
+			if gerr != nil || es == nil || !es.IsKamaji() {
+				kept = append(kept, *res)
+				continue
+			}
+			ks, kerr := d.kamajiFor(es)
+			if kerr != nil {
+				kamajiErr = fmt.Errorf("kamaji service %s: %w", res.ServiceID, kerr)
+				continue
+			}
+			if derr := ks.DeleteCluster(ctx, projectID, res.ExternalID); derr != nil {
+				kamajiErr = fmt.Errorf("kamaji cluster %s: %w", res.ExternalID, derr)
+				continue
+			}
+			if aerr := d.cloudRepo.DeleteAndArchive(ctx, res, now); aerr != nil {
+				kamajiErr = fmt.Errorf("archive kamaji cluster %s: %w", res.ExternalID, aerr)
+			}
+		}
+		resources = kept
+	}
+
 	remaining := resources
 	var lastErr error
 	for sweep := 0; sweep < 3 && len(remaining) > 0; sweep++ {
@@ -1232,6 +1285,9 @@ func (d projectCloudDeleter) DeleteProjectResources(ctx context.Context, project
 	}
 	if len(remaining) > 0 {
 		return fmt.Errorf("scheduled project deletion left %d resource(s): %w", len(remaining), lastErr)
+	}
+	if kamajiErr != nil {
+		return fmt.Errorf("scheduled project deletion: %w", kamajiErr)
 	}
 	return nil
 }

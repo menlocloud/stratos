@@ -1,0 +1,77 @@
+{{/*
+  In order for changes to the kubeadm config to be applied to existing machines,
+  kubeadm config templates must be treated as immutable. This means that we must
+  create a new one when the spec changes and update the ref in the corresponding
+  machine deployment, which will trigger a rollout of new machines with the new
+  kubeadm config.
+
+  If the kubeadm config is updated in place, it will apply to new machine (e.g. on
+  a scale out operation), but will not be applied to existing machines.
+
+  To do this, we create a new template whenever the checksum of the spec changes.
+*/}}
+
+{{- define "openstack-kamaji-cluster.nodegroup.kct.spec.nodeLabels" -}}
+{{- $ctx := index . 0 }}
+{{- $nodeGroup := index . 1 }}
+{{- $defaultLabels := dict (printf "%s/node-group" $ctx.Values.projectPrefix) $nodeGroup.name }}
+{{- $nodeLabels := dig "nodeLabels" dict $nodeGroup | mergeOverwrite $defaultLabels }}
+joinConfiguration: {{ include "openstack-kamaji-cluster.nodeRegistration.nodeLabels" $nodeLabels | nindent 2 }}
+{{- end }}
+
+{{- define "openstack-kamaji-cluster.nodegroup.kct.spec.taints" -}}
+{{- $ctx := index . 0 }}
+{{- $nodeGroup := index . 1 }}
+{{- $taints := dig "taints" list $nodeGroup }}
+{{- $rendered := include "openstack-kamaji-cluster.nodeRegistration.taints" $taints }}
+{{- if $rendered }}
+joinConfiguration: {{ $rendered | nindent 2 }}
+{{- end }}
+{{- end }}
+
+{{- define "openstack-kamaji-cluster.nodegroup.kct.spec" -}}
+{{- $ctx := index . 0 }}
+{{- $nodeGroup := index . 1 }}
+{{-
+  list
+    (include "openstack-kamaji-cluster.nodegroup.kct.spec.nodeLabels" (list $ctx $nodeGroup) | fromYaml)
+    (include "openstack-kamaji-cluster.nodegroup.kct.spec.taints" (list $ctx $nodeGroup) | fromYaml)
+    (include "openstack-kamaji-cluster.kubeadmConfigSpec" (list $ctx $nodeGroup.kubeadmConfigSpec) | fromYaml)
+    (omit (include "openstack-kamaji-cluster.osDistroKubeadmConfigSpec" (list $ctx) | fromYaml) "initConfiguration")
+    (pick (include "openstack-kamaji-cluster.patchConfigSpec" (list $ctx ) | fromYaml) "preKubeadmCommands") |
+  include "openstack-kamaji-cluster.mergeConcatMany" |
+  fromYaml |
+  toYaml
+}}
+{{- end }}
+
+{{- define "openstack-kamaji-cluster.nodegroup.kct.checksum" -}}
+{{- include "openstack-kamaji-cluster.nodegroup.kct.spec" . | sha256sum }}
+{{- end }}
+
+{{- define "openstack-kamaji-cluster.nodegroup.kct.name" -}}
+{{- $ctx := index . 0 }}
+{{- $nodeGroup := index . 1 }}
+{{- $checksum := include "openstack-kamaji-cluster.nodegroup.kct.checksum" . }}
+{{- include "openstack-kamaji-cluster.componentName" (list $ctx $nodeGroup.name) }}-{{ trunc 8 $checksum }}
+{{- end }}
+
+{{- range $nodeGroupOverrides := .Values.nodeGroups }}
+{{- $nodeGroup := deepCopy $.Values.nodeGroupDefaults | mustMerge $nodeGroupOverrides }}
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: {{ include "openstack-kamaji-cluster.nodegroup.kct.name" (list $ $nodeGroup) }}
+  labels:
+    {{- include "openstack-kamaji-cluster.componentLabels" (list $ "worker") | nindent 4 }}
+    {{ $.Values.projectPrefix }}/node-group: {{ $nodeGroup.name }}
+  annotations:
+    {{ $.Values.projectPrefix }}/template-checksum: {{ include "openstack-kamaji-cluster.nodegroup.kct.checksum" (list $ $nodeGroup) }}
+    # Cluster API complains when old templates disappear before it has rolled all the machines over
+    # When deploying with Helm, leave the resource behind and let Cluster API clean it up
+    helm.sh/resource-policy: keep
+spec:
+  template:
+    spec: {{ include "openstack-kamaji-cluster.nodegroup.kct.spec" (list $ $nodeGroup) | nindent 6 }}
+{{- end }}

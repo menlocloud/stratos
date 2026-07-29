@@ -1,0 +1,84 @@
+---
+# =============================================================================
+# OpenStackCluster - Infrastructure definition for CAPO
+# =============================================================================
+# Kamaji owns the API server endpoint via its own LoadBalancer Service, so:
+#   - apiServerLoadBalancer.enabled is hardcoded to false (CAPO must NOT
+#     create a competing Octavia LB)
+#   - disableAPIServerFloatingIP is hardcoded to true
+#   - apiServerFixedIP is set only when .Values.apiServer.fixedIP is provided;
+#     otherwise the KamajiControlPlane controller populates it after the
+#     LoadBalancer Service it provisions becomes ready.
+# =============================================================================
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: OpenStackCluster
+metadata:
+  name: {{ include "openstack-kamaji-cluster.clusterName" . }}
+  labels: {{ include "openstack-kamaji-cluster.labels" . | nindent 4 }}
+  annotations:
+    # We let Cluster API clean up this resource
+    helm.sh/resource-policy: keep
+spec:
+  identityRef:
+    name: {{ include "openstack-kamaji-cluster.cloudCredentialsSecretName" . }}
+    cloudName: openstack
+  {{- with .Values.clusterNetworking }}
+  {{- if .manageSecurityGroups }}
+  managedSecurityGroups:
+    allowAllInClusterTraffic: {{ .allowAllInClusterTraffic }}
+    {{- with .securityGroupRules }}
+    allNodesSecurityGroupRules: {{ toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- if and .externalNetworkId .disableExternalNetwork }}
+  {{- fail "clusterNetworking: externalNetworkId and disableExternalNetwork are mutually exclusive" }}
+  {{- end }}
+  {{- with .externalNetworkId }}
+  externalNetwork:
+    id: {{ . }}
+  {{- end }}
+  {{- if .disableExternalNetwork }}
+  disableExternalNetwork: true
+  {{- end }}
+  {{- with .internalNetwork }}
+  {{- /*
+      Bring-your-own vs managed. The branch is decided by whether a filter actually SELECTS
+      something — not merely by the key being present. `{id: }` is a truthy map with a nil id, and
+      taking the BYO branch on it renders a dangling reference that CAPO cannot resolve: it will
+      not create a network, will not find one, and the cluster sits unprovisioned with nothing in
+      the chart output that looks wrong. Fail the render instead.
+  */}}
+  {{- $netSel := and .networkFilter (or .networkFilter.id .networkFilter.name .networkFilter.tags) }}
+  {{- $subSel := and .subnetFilter (or .subnetFilter.id .subnetFilter.name .subnetFilter.tags) }}
+  {{- if and (or .networkFilter .subnetFilter) (not (or $netSel $subSel)) }}
+  {{- fail "clusterNetworking.internalNetwork: networkFilter/subnetFilter is set but selects nothing (needs id, name or tags). Leave BOTH unset to let CAPO create a per-cluster network from nodeCidr." }}
+  {{- end }}
+  {{- if or $netSel $subSel }}
+  {{- with .networkFilter }}
+  network: {{ include "openstack-kamaji-cluster.convert.neutronFilter" . | nindent 4 }}
+  {{- end }}
+  {{- with .subnetFilter }}
+  subnets:
+    - {{ include "openstack-kamaji-cluster.convert.neutronFilter" . | nindent 6 }}
+  {{- end }}
+  {{- else }}
+  managedSubnets:
+    - cidr: {{ .nodeCidr }}
+      {{- with (default $.Values.clusterNetworking.dnsNameservers .dnsNameservers) }}
+      dnsNameservers: {{ toYaml . | nindent 8 }}
+      {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  # =========================================================================
+  # Kamaji-specific: DISABLE OpenStack API server load balancer
+  # The KamajiControlPlane creates its own LoadBalancer Service for the
+  # API server endpoint. CAPO must NOT create a competing one.
+  # =========================================================================
+  apiServerLoadBalancer:
+    enabled: false
+  disableAPIServerFloatingIP: true
+  {{- with .Values.apiServer.fixedIP }}
+  apiServerFixedIP: {{ . }}
+  {{- end }}
+  apiServerPort: {{ .Values.apiServer.port }}

@@ -74,6 +74,7 @@ function navGroups(pid: string): Group[] {
     {
       label: "Platform",
       items: [
+        { to: `${p}/kubernetes`, label: "Kubernetes", icon: Boxes, service: "kubernetes" },
         { to: `${p}/stacks`, label: "Stacks", icon: Layers, service: "orchestration" },
         { to: `${p}/secrets`, label: "Secrets", icon: Lock, service: "key-manager" },
       ],

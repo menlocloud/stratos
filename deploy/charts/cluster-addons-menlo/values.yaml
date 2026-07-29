@@ -1,0 +1,498 @@
+---
+
+# The name of the Cluster API cluster
+# if not given, the release name is used
+clusterName:
+
+# Settings for the CNI addon
+cni:
+  # Indicates if a CNI should be deployed
+  enabled: true
+  # The CNI to deploy - supported values are calico or cilium
+  type: calico
+  # Settings for the calico CNI
+  # See https://projectcalico.docs.tigera.io/getting-started/kubernetes/helm
+  calico:
+    chart:
+      repo: https://projectcalico.docs.tigera.io/charts
+      name: tigera-operator
+      version: v3.31.5
+    release:
+      namespace: tigera-operator
+      values:
+        nodeSelector:
+          node-role.kubernetes.io/control-plane: ""
+    # Nova metadata service
+    # See https://docs.openstack.org/nova/latest/user/metadata.html#the-metadata-service
+    globalNetworkPolicy:
+      denyNamespaceSelector: kubernetes.io/metadata.name != 'openstack-system'
+      allowPriority: 20
+      denyPriority: 10
+      allowEgressCidrs:
+        - "0.0.0.0/0"
+      denyEgressCidrs:
+        - "169.254.169.254/32"
+      allowv6EgressCidrs:
+        - "::/0"
+      denyv6EgressCidrs:
+        - "fe80::a9fe:a9fe/128"
+  # Settings for the Cilium CNI
+  # See https://docs.cilium.io/en/stable/gettingstarted/k8s-install-helm/ for details
+  cilium:
+    chart:
+      repo: https://helm.cilium.io/
+      name: cilium
+      version: 1.19.3
+    release:
+      namespace: kube-system
+      values: {}
+
+# Settings for CSI addons
+csi:
+  # Settings for the CephFS CSI
+  cephfs:
+    enabled: false
+    chart:
+      repo: https://ceph.github.io/csi-charts
+      name: ceph-csi-cephfs
+      version: 3.11.0
+    release:
+      namespace: csi-ceph-system
+      values: {}
+
+# Settings for the OpenStack integrations
+openstack:
+  # Indicates if the OpenStack integrations should be enabled
+  enabled: false
+  # The target namespace for the OpenStack integrations
+  targetNamespace: openstack-system
+  # cloud-config options for the OpenStack integrations
+  # The [Global] section is configured to use the target cloud
+  # See https://github.com/kubernetes/cloud-provider-openstack/blob/master/docs/openstack-cloud-controller-manager/using-openstack-cloud-controller-manager.md#config-openstack-cloud-controller-manager
+  # and https://github.com/kubernetes/cloud-provider-openstack/blob/master/docs/cinder-csi-plugin/using-cinder-csi-plugin.md#block-storage
+  cloudConfig:
+    # By default, ignore volume AZs for Cinder as most clouds have a single globally-attachable Cinder AZ
+    BlockStorage:
+      ignore-volume-az: true
+  # Settings for the Cloud Controller Manager (CCM)
+  ccm:
+    # Indicates if the OpenStack CCM should be enabled
+    # By default, the CCM is enabled if the OpenStack integrations are enabled
+    # See https://github.com/kubernetes/cloud-provider-openstack/blob/master/charts/openstack-cloud-controller-manager/values.yaml
+    enabled: true
+    chart:
+      repo: https://kubernetes.github.io/cloud-provider-openstack
+      name: openstack-cloud-controller-manager
+      # MENLO: 2.36.1 (upstream 0.27.0 pins 2.36.0) — appVersion v1.36.0,
+      # required for OpenStack 2026.1
+      version: 2.36.1
+    values: {}
+  # Settings for the Cinder CSI plugin
+  csiCinder:
+    # Indicates if the Cinder CSI should be enabled
+    # By default, it is enabled if the OpenStack integrations are enabled
+    # See https://github.com/kubernetes/cloud-provider-openstack/blob/master/charts/cinder-csi-plugin/values.yaml
+    enabled: true
+    chart:
+      repo: https://kubernetes.github.io/cloud-provider-openstack
+      name: openstack-cinder-csi
+      # MENLO: 2.36.0 (upstream 0.27.0 pins 2.35.0) — appVersion v1.36.0,
+      # fixes Cinder CSI errors against OpenStack 2026.1
+      version: 2.36.0
+    values:
+      csi:
+        plugin:
+          controllerPlugin:
+            # MENLO: upstream cluster-addons pins the controller plugin to
+            # control-plane nodes. Hosted control planes (Kamaji) have none, so
+            # the pin makes the controller permanently unschedulable and no PV
+            # is ever provisioned. Upstream cinder-csi's own defaults are
+            # `nodeSelector: {}` / `tolerations: []`, so dropping the key here
+            # is enough — the addons operator never unsets a key on `null`.
+            tolerations:
+              - operator: Exists
+    # Definition of the default storage class for Cinder CSI
+    defaultStorageClass:
+      # Indicates if the storage class should be enabled
+      enabled: true
+      # The name of the storage class
+      name: csi-cinder
+      # Indicates if the Cinder default storage class is the cluster default storage class
+      isClusterDefault: true
+      # The reclaim policy for the storage class
+      reclaimPolicy: Delete
+      # Indicates if volume expansion is allowed
+      allowVolumeExpansion: true
+      # Controls when volume binding and dynamic provisioning should occur
+      volumeBindingMode: WaitForFirstConsumer
+      # The allowed topologies for the storage class
+      allowedTopologies:
+      # Filesystem type to use for volumes provisioned with the storage class
+      # If not given, the default filesystem type will be used
+      fstype:
+      # The Cinder availability zone to use for volumes provisioned by the storage class
+      availabilityZone: nova
+      # The Cinder volume type to use for volumes provisioned by the storage class
+      # If not given, the default volume type will be used
+      volumeType:
+    # Additional storage classes to create for the Cinder CSI
+    # For each item, the properties from the default storage class are supported (except enabled and isClusterDefault)
+    additionalStorageClasses: []
+  # Settings for the Manila CSI plugin
+  csiManila:
+    # Indicates if the Manila CSI should be enabled
+    # By default, it is disabled as Manila is not commonly available
+    # See https://github.com/kubernetes/cloud-provider-openstack/blob/master/charts/manila-csi-plugin/values.yaml
+    enabled: false
+    chart:
+      repo: https://kubernetes.github.io/cloud-provider-openstack
+      name: openstack-manila-csi
+      # MENLO: 2.36.0 (upstream 0.27.0 pins 2.30.0) — align driver family
+      # with CCM/Cinder for OpenStack 2026.1
+      version: 2.36.0
+    values: {}
+    # Definition of the default storage class for the Manila CSI
+    defaultStorageClass:
+      # Indicates if the storage class should be enabled
+      enabled: true
+      # The name of the storage class
+      name: csi-manila
+      # Indicates if the Manila default storage class is the cluster default storage class
+      isClusterDefault: false
+      # The provisioner for the storage class
+      # If not given and the Ceph CSI plugin is installed, cephfs.manila.csi.openstack.org is used
+      provisioner:
+      # The reclaim policy for the storage class
+      reclaimPolicy: Delete
+      # Indicates if volume expansion is allowed
+      allowVolumeExpansion: true
+      # Controls when volume binding and dynamic provisioning should occur
+      volumeBindingMode: WaitForFirstConsumer
+      # The allowed topologies for the storage class
+      allowedTopologies:
+      # The parameters for the storage class
+      # See https://github.com/kubernetes/cloud-provider-openstack/blob/master/docs/manila-csi-plugin/using-manila-csi-plugin.md#controller-service-volume-parameters
+      parameters:
+        # The Manila share type to use
+        # If not given and the Ceph CSI plugin is installed, cephfs is used
+        type:
+    # Additional storage classes to create for the Manila CSI
+    # For each item, the properties from the default storage class are supported (except for "enabled")
+    additionalStorageClasses: []
+  k8sKeystoneAuth:
+    enabled: false
+    targetNamespace: kube-system
+    chart:
+      repo: https://catalyst-cloud.github.io/capi-plugin-helm-charts
+      name: k8s-keystone-auth
+      version: 1.5.1
+
+# Setting for Reloader used to restart workloads on Secret/ConfigMap changes
+reloader:
+  # Indicates if Reloader should be enabled
+  enabled: false
+  chart:
+    repo: https://stakater.github.io/stakater-charts
+    name: reloader
+    version: 2.2.11
+  release:
+    # Deploy to the same namespace as OpenStack services
+    namespace: openstack-system
+    values:
+      reloader:
+        # Restrict scope to namespace
+        watchGlobally: false
+
+# Settings for etcd defragmentation jobs
+etcdDefrag:
+  # Indicates if the etcd defragmentation job should be enabled
+  enabled: true
+  chart:
+    repo: https://azimuth-cloud.github.io/capi-helm-charts
+    name: etcd-defrag
+    version:  # Defaults to the same version as this chart
+  release:
+    # This should be namespace in which the etcd pods are deployed
+    namespace: kube-system
+    values: {}
+
+# Settings for the metrics server
+# https://github.com/kubernetes-sigs/metrics-server#helm-chart
+metricsServer:
+  # Indicates if the metrics server should be deployed
+  enabled: true
+  chart:
+    repo: https://kubernetes-sigs.github.io/metrics-server
+    name: metrics-server
+    version: 3.13.0
+  release:
+    namespace: kube-system
+    values: {}
+
+# Settings for ingress controllers
+ingress:
+  # Indicates if ingress controllers should be enabled
+  enabled: false
+  # Settings for the Nginx ingress controller
+  # https://github.com/kubernetes/ingress-nginx/tree/main/charts/ingress-nginx#configuration
+  nginx:
+    # Indicates if the Nginx ingress controller should be enabled
+    # MENLO: upstream 0.27.0 flipped the default ingress controller to
+    # Traefik; we keep Nginx as the default (existing clusters use it)
+    enabled: true
+    chart:
+      repo: https://kubernetes.github.io/ingress-nginx
+      name: ingress-nginx
+      version: 4.15.1
+    release:
+      namespace: ingress-nginx
+      values: {}
+  # Settings for the Traefik ingress controller
+  # https://github.com/traefik/traefik-helm-chart/blob/master/EXAMPLES.md
+  traefik:
+    # Indicates if the Traefik ingress controller should be enabled
+    # MENLO: disabled by default — we keep Nginx as the default (see above)
+    enabled: false
+    chart:
+      repo: https://traefik.github.io/charts
+      name: traefik
+      version: 40.1.0
+    release:
+      namespace: traefik
+      values: {}
+
+# Settings for cluster monitoring
+monitoring:
+  # Indicates if the cluster monitoring should be enabled
+  enabled: false
+  # Config for the kube-prometheus-stack helm chart
+  # https://github.com/prometheus-community/helm-charts/blob/main/charts/kube-prometheus-stack
+  kubePrometheusStack:
+    chart:
+      repo: https://prometheus-community.github.io/helm-charts
+      name: kube-prometheus-stack
+      version: 85.0.2
+    release:
+      namespace: monitoring-system
+      values:
+        # Enable persistence by default for prometheus and alertmanager
+        alertmanager:
+          alertmanagerSpec:
+            # By default, retain 7 days of data
+            retention: 168h
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 10Gi
+        prometheus:
+          prometheusSpec:
+            # The amount of data that is retained will be 90 days or 95% of the size of the
+            # persistent volume, whichever is reached first
+            retention: 90d
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 10Gi
+  lokiStack:
+    enabled: true
+    chart:
+      repo: https://grafana.github.io/helm-charts
+      name: loki-stack
+      version: 2.10.2
+    release:
+      namespace: monitoring-system
+      values:
+        loki:
+          # Enable retention and configure a default retention period of 31 days
+          config:
+            compactor:
+              retention_enabled: true
+            limits_config:
+              retention_period: 72h
+          # Enable persistence by default
+          persistence:
+            enabled: true
+            size: 10Gi
+  # Configuration for the blackbox exporter
+  blackboxExporter:
+    enabled: true
+    chart:
+      repo: https://prometheus-community.github.io/helm-charts
+      name: prometheus-blackbox-exporter
+      version: 11.9.1
+    release:
+      namespace: monitoring-system
+      values: {}
+        # Example of adding additional scrape targets
+        # serviceMonitor:
+        #   targets:
+        #     - name: example
+        #       url: http://example.com/healthz
+    # Indicates if a blackbox target for the cloud's auth endpoint should be created
+    openstackAuthUrlTarget:
+      enabled: true
+
+# Settings for node feature discovery
+# https://github.com/kubernetes-sigs/node-feature-discovery/tree/master/deployment/helm/node-feature-discovery
+nodeFeatureDiscovery:
+  # Indicates if node feature discovery should be enabled
+  enabled: true
+  chart:
+    repo: https://kubernetes-sigs.github.io/node-feature-discovery/charts
+    name: node-feature-discovery
+    version: 0.18.3
+  release:
+    namespace: node-feature-discovery
+    values: {}
+
+# Settings for the NVIDIA GPU operator
+nvidiaGPUOperator:
+  # Indicates if the NVIDIA GPU operator should be enabled
+  # Note that because it uses node feature discovery to run only on nodes
+  # with an NVIDIA GPU available, the overhead of enabling this on clusters
+  # that do not need it now but may need it in the future is low
+  enabled: true
+  chart:
+    repo: https://helm.ngc.nvidia.com/nvidia
+    name: gpu-operator
+    version: v26.3.1
+  release:
+    namespace: gpu-operator
+    values:
+      dcgmExporter:
+        serviceMonitor:
+          enabled: true
+
+amdGPUOperator:
+  enabled: false
+  chart:
+    repo: https://rocm.github.io/gpu-operator
+    name: gpu-operator-charts
+    version: v1.5.0
+  release:
+    namespace: kube-amd-gpu
+    values: {}
+
+intelDevicePlugin:
+  enabled: false
+  operator:
+    chart:
+      repo: https://intel.github.io/helm-charts
+      name: intel-device-plugins-operator
+      version: 0.32.0
+    release:
+      namespace: intel
+      values:
+        manager:
+          devices:
+            gpu: true
+        resources:
+          limits:
+            cpu: 100m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 160Mi
+  gpuPlugin:
+    chart:
+      repo: https://intel.github.io/helm-charts
+      name: intel-device-plugins-gpu
+      version: 0.36.0
+    release:
+      namespace: intel
+      values:
+        sharedDevNum: 1
+        preferredAllocationPolicy: none
+        logLevel: 4
+        enableMonitoring: true
+        tolerations:
+          - key: "gpu.intel.com/i915"
+            operator: "Exists"
+            effect: "NoSchedule"
+  xpuManagerMonitoring:
+    enabled: true
+    namespace: intel
+    repo:
+      url: https://github.com/intel/xpumanager
+      tag: V1.2.39
+
+certManager:
+  enabled: false
+  chart:
+    repo: https://charts.jetstack.io
+    name: cert-manager
+    version: v1.17.0
+  release:
+    namespace: cert-manager
+    values:
+      crds:
+        enabled: true
+
+# Settings for the Mellanox network operator
+mellanoxNetworkOperator:
+  # Indicates if the network operator should be enabled
+  # Note that because it uses node feature discovery to run only on nodes
+  # with a Mellanox NIC available, the overhead of enabling this on clusters
+  # that do not need it now but may need it in the future is low
+  enabled: true
+  chart:
+    repo: https://helm.ngc.nvidia.com/nvidia
+    name: network-operator
+    version: 26.1.1
+  release:
+    namespace: network-operator
+    values: {}
+
+# Settings for the node problem detector
+nodeProblemDetector:
+  # Indicates if the node problem detector should be enabled
+  enabled: true
+  chart:
+    repo: https://charts.deliveryhero.io
+    name: node-problem-detector
+    version: 2.3.14
+  release:
+    namespace: node-problem-detector
+    values: {}
+
+# Settings for any custom addons
+custom: {}
+  # # Indexed by the name of the release on the target cluster
+  # my-custom-helm-release:
+  #   # Indicates that this is a Helm addon
+  #   kind: HelmRelease
+  #   spec:
+  #     # The namespace that the addon should be in
+  #     namespace: my-namespace
+  #     # Details of the Helm chart to use
+  #     chart:
+  #       # The chart repository that contains the chart to use
+  #       repo: https://my-project/charts
+  #       # The name of the chart to use
+  #       name: my-chart
+  #       # The version of the chart to use (must be an exact version)
+  #       version: 1.5.0
+  #     # The Helm values to use for the release
+  #     values: {}
+  # # Indexed by the name of the release on the target cluster
+  # my-custom-manifests:
+  #   # Indicates that this is a Manifests addon
+  #   kind: Manifests
+  #   spec:
+  #     # The namespace that the addon should be in
+  #     namespace: my-namespace
+  #     # The manifests for the addon, indexed by filename
+  #     manifests:
+  #       secret.yaml: |-
+  #         apiVersion: v1
+  #         kind: Secret
+  #         metadata:
+  #           name: my-secret
+  #         stringData:
+  #           secret-file: "secret-data"

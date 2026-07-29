@@ -42,7 +42,7 @@ func (h *Handler) enableAndBootstrap(ctx context.Context, p *Project) error {
 		return err
 	}
 	var osES *externalservice.ExternalService
-	var cephES []*externalservice.ExternalService
+	var cephES, kamajiES []*externalservice.ExternalService
 	for i := range services {
 		if services[i].IsDisabled() {
 			continue
@@ -52,9 +52,11 @@ func (h *Handler) enableAndBootstrap(ctx context.Context, p *Project) error {
 			osES = &services[i]
 		case services[i].IsCephS3():
 			cephES = append(cephES, &services[i])
+		case services[i].IsKamaji():
+			kamajiES = append(kamajiES, &services[i])
 		}
 	}
-	if osES == nil && len(cephES) == 0 {
+	if osES == nil && len(cephES) == 0 && len(kamajiES) == 0 {
 		return nil // no cloud provider configured → nothing to provision
 	}
 	p.Status = StatusEnabled
@@ -70,7 +72,44 @@ func (h *Handler) enableAndBootstrap(ctx context.Context, p *Project) error {
 			return err
 		}
 	}
+	// Kamaji managed-k8s bootstrap (no Keystone) — ensure the project's management-cluster namespace.
+	for _, es := range kamajiES {
+		if err := h.BootstrapKamajiOnto(ctx, p, es); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// BootstrapKamajiOnto provisions the project onto a kamaji Managed-Kubernetes service: ensure the
+// project's namespace on the management cluster (labelled for the sync/AppProject scoping) and
+// append the binding {serviceId, provider:"kamaji", region}. No credential store — the cluster
+// admin kubeconfig is fetched on demand from the Kamaji secret, never persisted (plan D5).
+// Idempotent: a project already attached to this service is saved as-is.
+func (h *Handler) BootstrapKamajiOnto(ctx context.Context, p *Project, es *externalservice.ExternalService) error {
+	if p.HasService(es.ID) {
+		return h.svc.Save(ctx, p)
+	}
+	if h.kamajiFor == nil {
+		return fmt.Errorf("bootstrap kamaji: managed-k8s service not configured")
+	}
+	ks, err := h.kamajiFor(es)
+	if err != nil {
+		return fmt.Errorf("bootstrap kamaji: build management client: %w", err)
+	}
+	if err := ks.EnsureProjectNamespace(ctx, p.ID); err != nil {
+		return fmt.Errorf("bootstrap kamaji: ensure namespace: %w", err)
+	}
+	region := es.KamajiRegion()
+	if region == "" {
+		region = h.cloudRegion
+	}
+	p.Services = append(p.Services, map[string]any{
+		"serviceId": es.ID,
+		"provider":  "kamaji",
+		"region":    region,
+	})
+	return h.svc.Save(ctx, p)
 }
 
 // BootstrapCephOnto provisions the project onto a ceph-s3 object-store service (decision #2: no Keystone
@@ -125,6 +164,10 @@ func (h *Handler) BootstrapOnto(ctx context.Context, p *Project, es *externalser
 	// (enableAndBootstrap only provisions projects that have no service attached yet).
 	if es.IsCephS3() {
 		return h.BootstrapCephOnto(ctx, p, es)
+	}
+	// Same for kamaji: no Keystone — the management-cluster namespace leg.
+	if es.IsKamaji() {
+		return h.BootstrapKamajiOnto(ctx, p, es)
 	}
 	if p.HasService(es.ID) {
 		return h.svc.Save(ctx, p)

@@ -1,0 +1,139 @@
+{{- if .Values.kamajiControlPlane.cloudControllerManager.enabled }}
+{{- $ccm := .Values.kamajiControlPlane.cloudControllerManager }}
+{{- /*
+  =============================================================================
+  OpenStack cloud-controller-manager — MANAGEMENT-SIDE
+  =============================================================================
+  Runs next to the TenantControlPlane pods in this release's namespace on the
+  management cluster and drives the tenant cluster through the Kamaji-issued
+  admin kubeconfig (`admin.svc`, the in-cluster Service URL variant). The
+  workload cluster gets no OpenStack credential at all — that is the point.
+
+  Placement is the one Kamaji documents as the credential-isolating
+  alternative to running the CCM on workers, and ships reference templates for
+  on vSphere:
+    https://kamaji.clastix.io/cluster-api/vsphere-infra-provider/
+    https://github.com/clastix/cluster-api-control-plane-provider-kamaji/tree/master/templates/vsphere
+  There is no OpenStack equivalent upstream; this is our port of it.
+
+  Ordering: the admin-kubeconfig Secret only exists once Kamaji has provisioned
+  the control plane, so on a fresh install this pod sits in
+  CreateContainerConfigError for a minute and then starts. That is expected and
+  self-healing — no init container, no hook.
+*/}}
+{{- $cloudConfig := deepCopy ($ccm.cloudConfig | default dict) }}
+{{- /* Floating network for tenant `type: LoadBalancer` Services — the CCM
+       cannot discover it, and without it Services get no external IP. */}}
+{{- with .Values.clusterNetworking.externalNetworkId }}
+{{- $lb := deepCopy (dig "LoadBalancer" dict $cloudConfig) }}
+{{- $_ := set $lb "floating-network-id" . }}
+{{- $_ := set $cloudConfig "LoadBalancer" $lb }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "openstack-kamaji-cluster.componentName" (list . "ccm-openstack-config") }}
+  labels: {{ include "openstack-kamaji-cluster.componentLabels" (list . "ccm-openstack") | nindent 4 }}
+stringData:
+  cloud.conf: |
+    [Global]
+    use-clouds=true
+    clouds-file=/etc/config/clouds.yaml
+    cloud={{ .Values.cloudName }}
+    {{- if .Values.cloudCACert }}
+    ca-file=/etc/config/cacert
+    {{- end }}
+    {{- range $section, $entries := $cloudConfig }}
+
+    [{{ $section }}]
+    {{- range $k, $v := $entries }}
+    {{ $k }}={{ $v }}
+    {{- end }}
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openstack-kamaji-cluster.componentName" (list . "ccm-openstack") }}
+  labels: {{ include "openstack-kamaji-cluster.componentLabels" (list . "ccm-openstack") | nindent 4 }}
+spec:
+  replicas: {{ $ccm.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "openstack-kamaji-cluster.componentSelectorLabels" (list . "ccm-openstack") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openstack-kamaji-cluster.componentSelectorLabels" (list . "ccm-openstack") | nindent 8 }}
+      annotations:
+        # Roll the CCM when cloud.conf changes (credentials Secret rotations are
+        # picked up by the kubelet's projected-volume refresh instead).
+        {{ .Values.projectPrefix }}/cloud-conf-checksum: {{ printf "%s|%s|%v" (toYaml $cloudConfig) .Values.cloudName (ne (toString .Values.cloudCACert) "") | sha256sum }}
+    spec:
+      # The CCM only ever talks to the TENANT api server (via the mounted
+      # kubeconfig) and to OpenStack. It has no business with the management
+      # cluster's API, so give it no token for it.
+      automountServiceAccountToken: false
+      {{- with $ccm.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $ccm.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $ccm.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $ccm.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cloud-controller-manager
+          image: {{ printf "%s:%s" $ccm.image.repository $ccm.image.tag }}
+          imagePullPolicy: {{ $ccm.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - /bin/openstack-cloud-controller-manager
+            - --cloud-provider=openstack
+            - --cloud-config=/etc/cloud/cloud.conf
+            - --cluster-name={{ include "openstack-kamaji-cluster.clusterName" . }}
+            # Both flags point at the tenant api server: --kubeconfig for the
+            # controllers themselves, --authentication-kubeconfig so the CCM can
+            # delegate authn for its own serving endpoints.
+            - --kubeconfig=/etc/kubernetes/admin.svc
+            - --authentication-kubeconfig=/etc/kubernetes/admin.svc
+            - --authorization-kubeconfig=/etc/kubernetes/admin.svc
+            - --leader-elect=true
+            - --use-service-account-credentials=false
+            - --v=2
+            {{- range $k, $v := ($ccm.extraArgs | default dict) }}
+            - {{ printf "--%s=%v" $k $v | quote }}
+            {{- end }}
+          {{- with $ccm.resources }}
+          resources: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          # ponytail: no probes, matching Kamaji's own vSphere reference and the
+          # upstream OCCM chart — leader election plus the Deployment restart on
+          # crash is the supervision. Add a /healthz probe on the secure port if
+          # a wedged-but-alive CCM ever shows up in practice.
+          volumeMounts:
+            - name: cloud-config
+              mountPath: /etc/cloud
+              readOnly: true
+            - name: cloud-credentials
+              mountPath: /etc/config
+              readOnly: true
+            - name: admin-kubeconfig
+              mountPath: /etc/kubernetes/admin.svc
+              subPath: admin.svc
+              readOnly: true
+      volumes:
+        - name: cloud-config
+          secret:
+            secretName: {{ include "openstack-kamaji-cluster.componentName" (list . "ccm-openstack-config") }}
+        - name: cloud-credentials
+          secret:
+            secretName: {{ include "openstack-kamaji-cluster.cloudCredentialsSecretName" . }}
+        - name: admin-kubeconfig
+          secret:
+            secretName: {{ include "openstack-kamaji-cluster.kamajiAdminKubeconfigSecretName" . }}
+{{- end }}

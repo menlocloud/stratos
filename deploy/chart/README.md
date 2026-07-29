@@ -30,6 +30,12 @@ own). For a throwaway local dev install, pass the insecure sample values with
 A fresh database needs the base configuration documents seeded before the
 billing/project endpoints work — see `deploy/seed/` in the repo.
 
+Registering a **kamaji managed-Kubernetes provider** has an out-of-chart
+prerequisite: the Kamaji management cluster must run ArgoCD and be prepared
+with the operator-applied manifests in `deploy/mgmt-cluster/` (stratos
+ServiceAccount + RBAC, the `stratos-k8s` AppProject, custom health checks)
+before the provider is added. See `docs/managed-k8s.md`.
+
 ## Layout conventions
 
 - Templates are grouped by component directory (`templates/api`,

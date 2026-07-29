@@ -1,0 +1,679 @@
+---
+# =============================================================================
+# OpenStack Kamaji Cluster (CAPI) - Helm Chart Values
+# =============================================================================
+# This chart deploys a Kubernetes cluster on OpenStack using:
+#   - Cluster API (CAPI) for infrastructure lifecycle
+#   - CAPO (Cluster API Provider OpenStack) for OpenStack integration
+#   - Kamaji as the hosted control plane provider (no dedicated CP VMs)
+#
+# Key difference from kubeadm-based chart:
+#   - Control plane runs as pods in the management cluster
+#   - No control plane VMs are provisioned on OpenStack
+#   - API server endpoint is managed by Kamaji via a LoadBalancer Service
+#   - Only worker nodes are provisioned as OpenStack VMs
+# =============================================================================
+
+# -- The name of an existing secret containing a clouds.yaml and optional cacert
+# RECOMMENDED: keep credentials out of values files. Manage the Secret via
+# External Secrets / Sealed Secrets / Vault and reference it here. Embedding
+# `clouds:` inline (below) leaks the application credential secret into Git.
+#
+# Default placeholder kept render-safe so `helm template` succeeds with bare
+# defaults; override per environment.
+cloudCredentialsSecretName: openstack-credentials
+# OR
+# -- Content for the clouds.yaml file
+# Having this as a top-level item allows a clouds.yaml file from OpenStack to be used as a values file
+# WARNING: any value committed here is plaintext.
+clouds:
+# -- The PEM-encoded CA certificate for the specified cloud
+cloudCACert:
+
+# -- The name of the cloud to use from the specified clouds.yaml
+cloudName: openstack
+
+# -- The Kubernetes version of the cluster
+# This should match the version of kubelet and kubeadm in the worker image.
+# Default kept render-safe so `helm template` with bare defaults succeeds in CI.
+kubernetesVersion: 1.34.1
+
+# -- The name of the image to use for cluster machines (workers)
+machineImage:
+# OR
+# -- The ID of the image to use for cluster machines (workers)
+machineImageId:
+
+# -- The name of the SSH key to inject into cluster machines
+machineSSHKeyName:
+
+# -- Global metadata items to add to each machine
+machineMetadata: {}
+
+# -- The prefix used for project labels and annotations
+projectPrefix: capi.stackhpc.com
+
+# -- Any extra annotations to add to the cluster
+clusterAnnotations: {}
+
+# -- OS distribution
+osDistro:
+
+# =============================================================================
+# OpenID Connect (OIDC) Authentication
+# =============================================================================
+# Two configuration modes (mutually exclusive):
+#
+# 1. INLINE — populate `oidc.*` fields below directly. Simple, but values
+#    end up in values.yaml / Git unless externalised by your tooling
+#    (External Secrets, SealedSecrets, ESC, Vault).
+#
+# 2. EXISTING SECRET — set `oidc.existingSecret.name` to the name of a
+#    pre-created Secret in the release namespace. The chart resolves OIDC
+#    fields from that Secret at template time using `lookup`.
+#
+#    Required Secret format (string data, keys configurable via
+#    `oidc.existingSecret.keys`):
+#
+#      apiVersion: v1
+#      kind: Secret
+#      metadata:
+#        name: cluster1-oidc
+#        namespace: <release-namespace>
+#      type: Opaque
+#      stringData:
+#        issuer-url: https://keycloak.example.com/realms/janai
+#        client-id: kubernetes
+#        username-claim: preferred_username     # optional
+#        username-prefix: "oidc:"               # optional
+#        groups-claim: groups                   # optional
+#        groups-prefix: "oidc:"                 # optional
+#        signing-algs: RS256                    # optional
+#
+#    LIMITATION: `lookup` requires the chart to be rendered with a live
+#    cluster connection. `helm template` (no cluster) and Argo CD with
+#    server-side apply disabled will return empty values. For Argo CD
+#    pull/sync, prefer External Secrets to materialise the Secret AND
+#    have your Argo plugin (e.g. argocd-vault-plugin) inline the values
+#    instead of using this mode.
+# =============================================================================
+oidc:
+  # -- The URL of the OIDC provider
+  # e.g. if the discovery URL is https://auth.example.com/.well-known/openid-configuration,
+  #      the value should be https://auth.example.com
+  # Leave empty to disable OIDC
+  issuerUrl:
+  # -- The client ID that tokens are issued for
+  clientId:
+  # -- The claim to extract the username from
+  usernameClaim: sub
+  # -- The prefix to append to usernames from OIDC
+  # Used to prevent collisions with existing names, e.g. service accounts
+  # For example, if the claim contains jbloggs and the prefix is oidc:,
+  # then in Kubernetes the user can be referred to as oidc:jbloggs
+  usernamePrefix: "oidc:"
+  # -- The claim to extract the user's groups from
+  groupsClaim: groups
+  # -- The prefix to append to groups from OIDC, similar to usernamePrefix
+  groupsPrefix: "oidc:"
+  # -- The signing algorithms that are accepted
+  signingAlgs: RS256
+  # -- Read OIDC config from an existing Secret (alternative to inline values)
+  # When `name` is set, fields above are overridden by Secret data.
+  existingSecret:
+    name: ""
+    # -- Map Secret keys to OIDC fields. Override per-key only if your
+    # secret uses different key names.
+    keys:
+      issuerUrl: issuer-url
+      clientId: client-id
+      usernameClaim: username-claim
+      usernamePrefix: username-prefix
+      groupsClaim: groups-claim
+      groupsPrefix: groups-prefix
+      signingAlgs: signing-algs
+
+# =============================================================================
+# Kamaji Control Plane Configuration
+# =============================================================================
+# Kamaji provides a hosted control plane: the K8s API server, controller-manager,
+# scheduler and etcd all run as pods in the management cluster rather than on
+# dedicated VMs. This dramatically reduces resource consumption and operational
+# overhead.
+# =============================================================================
+kamajiControlPlane:
+  # -- The Kamaji Datastore to use for this tenant control plane
+  # Must match a DataStore resource that exists in the management cluster
+  dataStoreName: default
+
+  # -- Number of control plane replicas (API server pods)
+  # 3 gives HA tolerance during rolling restarts of the Kamaji TenantControlPlane
+  replicas: 3
+
+  # -- Addons managed by Kamaji for the tenant control plane
+  addons:
+    # -- CoreDNS addon configuration
+    coreDNS: {}
+    # -- kube-proxy addon configuration
+    # kubeProxy: {}
+    # -- konnectivity addon for secure tunneling (optional)
+    konnectivity:
+      server:
+        port: 8132
+        resources: {}
+      agent:
+        resources: {}
+
+  # -- Kubelet configuration for the hosted control plane
+  kubelet:
+    # -- The cgroup driver to use
+    cgroupfs: systemd
+    # -- The preferred address types for kubelet
+    # IMPORTANT: InternalIP must come first because DNS resolution
+    # does not work with Hostname in OpenStack environments
+    preferredAddressTypes:
+      - InternalIP
+      - ExternalIP
+      - Hostname
+
+  # -- Network configuration for the Kamaji control plane endpoint
+  # Kamaji creates a Kubernetes Service to expose the API server
+  network:
+    # -- The service type for the API server endpoint
+    # Use LoadBalancer for OpenStack (Octavia will create an LB)
+    serviceType: LoadBalancer
+    # -- Annotations for the LoadBalancer service
+    # These are passed to the OpenStack cloud provider to configure the LB.
+    # When `externalDNS.enabled` is true, the chart automatically merges
+    # `external-dns.alpha.kubernetes.io/hostname` and TTL annotations here.
+    serviceAnnotations: {}
+      # -- Set to "true" to use an internal (non-floating) load balancer
+      # service.beta.kubernetes.io/openstack-internal-load-balancer: "true"
+      # -- The floating network ID to associate with the load balancer
+      # loadbalancer.openstack.org/floating-network-id: "<external-network-id>"
+      # -- Restrict API server LB ingress to specific source CIDRs (Octavia ACL)
+      # loadbalancer.openstack.org/allowed-cidrs: "10.0.0.0/8,1.2.3.4/32"
+    # -- Labels for the API server service
+    serviceLabels: {}
+    # -- Ingress configuration (alternative to LoadBalancer)
+    ingress: {}
+    # -- Additional Subject Alternative Names for the kube-apiserver cert.
+    # Auto-merged with `externalDNS.hostname` when `externalDNS.enabled`.
+    certSANs: []
+    # -- external-dns integration for the LoadBalancer Service.
+    # When enabled:
+    #   * `external-dns.alpha.kubernetes.io/hostname` and `ttl` annotations
+    #     are added to the Service so external-dns publishes a DNS record
+    #     pointing at the LB floating IP.
+    #   * `hostname` is appended to `certSANs` so the apiserver cert is
+    #     valid for the FQDN.
+    # NOTE: hostname is NOT used as Kamaji `network.advertiseAddress` —
+    # kube-apiserver `--advertise-address` only accepts IPs. Workers join
+    # via the LB fixed IP (apiServerFixedIP), so an LB IP change requires
+    # re-bootstrapping affected workers; the FQDN is for kubectl/Lens.
+    # external-dns must run in the management cluster and watch this
+    # Service. Set TTL low (60s) so DNS flips quickly after IP changes.
+    externalDNS:
+      enabled: false
+      # -- FQDN for the API server (e.g. api.cluster1.internal.example.com)
+      hostname: ""
+      # -- DNS record TTL in seconds. Low value recommended for fast failover.
+      ttl: 60
+      # -- Extra annotations forwarded to the Service for provider-specific
+      # external-dns options, e.g. cloudflare proxied, route53 weighted...
+      extraAnnotations: {}
+
+  # -- Auto-generated kubeconfig for OIDC end-users (customers, devs).
+  # When enabled AND oidc.issuerUrl is set, the chart renders a ConfigMap
+  # containing a ready-to-use kubeconfig. End-user / portal can fetch it:
+  #   kubectl -n <release-ns> get cm <release>-oidc-kubeconfig \
+  #     -o jsonpath='{.data.kubeconfig}' > stag-oidc.yaml
+  # Then `kubectl --kubeconfig stag-oidc.yaml get nodes` triggers the
+  # int128/kubelogin (`kubectl oidc-login`) flow in a browser.
+  endUserKubeconfig:
+    enabled: false
+    # -- Server URL the kubeconfig will point at. Typically the FQDN
+    # advertised via externalDNS on the apiserver LB plus :6443.
+    # e.g. https://api.cluster1.example.com:6443
+    serverUrl: ""
+    # -- When false (default), a post-sync Job reads the Kamaji-generated
+    # `<release>-kamaji-cp-ca` Secret and renders the kubeconfig ConfigMap
+    # with `certificate-authority-data` embedded — fully automatic,
+    # no manual paste, auto-rotates on chart upgrade.
+    # When true, the chart skips the Job and renders a ConfigMap with
+    # `insecure-skip-tls-verify: true` (kubectl will NOT validate the
+    # apiserver cert — only acceptable on trusted network paths).
+    insecureSkipTLSVerify: false
+    # -- Override the Kamaji CA Secret name used by the Job (default:
+    # `<release>-kamaji-cp-ca`). Only relevant when insecureSkipTLSVerify=false.
+    caSecretName: ""
+    # -- Container image for the kubeconfig-rendering Job. Needs `kubectl`
+    # and a POSIX `sh`. Defaults to bitnami/kubectl latest.
+    jobImage: ""
+    # -- Optional kubeconfig identifiers. Defaults derived from release name.
+    clusterName: ""    # default: <release>
+    contextName: ""    # default: <release>-oidc
+    userName: ""       # default: oidc-user
+    # -- Name of the rendered ConfigMap. Default: <release>-oidc-kubeconfig
+    configMapName: ""
+    # -- Extra OAuth scopes requested by kubelogin
+    extraScopes:
+      - email
+      - profile
+      - groups
+
+  # -- Extra arguments for the API server (merged with OIDC args when oidc.issuerUrl is set)
+  # Production hardening hints (uncomment / adjust):
+  #   audit-log-path: /var/log/kubernetes/audit.log
+  #   audit-log-maxage: "30"
+  #   audit-log-maxbackup: "10"
+  #   audit-log-maxsize: "100"
+  #   request-timeout: 60s
+  #   default-not-ready-toleration-seconds: "30"
+  #   default-unreachable-toleration-seconds: "30"
+  extraArgs: {}
+
+  # -- Resource requirements for the control plane pods
+  resources: {}
+    # requests:
+    #   cpu: 250m
+    #   memory: 512Mi
+    # limits:
+    #   cpu: 1000m
+    #   memory: 2Gi
+
+  # -- Overrides for the TenantControlPlane Deployment managed by Kamaji
+  # (passed through to KamajiControlPlane spec.deployment). Supports
+  # affinity, nodeSelector, tolerations, topologySpreadConstraints, ...
+  # Example — spread CP replicas across nodes (the scheduler otherwise
+  # happily packs every control plane pod onto one worker):
+  #   deployment:
+  #     topologySpreadConstraints:
+  #       - maxSkew: 1
+  #         topologyKey: kubernetes.io/hostname
+  #         whenUnsatisfiable: DoNotSchedule
+  #         labelSelector:
+  #           matchLabels:
+  #             kamaji.clastix.io/name: <release>-kamaji-cp
+  deployment: {}
+
+  # ---------------------------------------------------------------------------
+  # OpenStack cloud-controller-manager, MANAGEMENT-SIDE
+  # ---------------------------------------------------------------------------
+  # The CCM runs as an ordinary Deployment in this release's namespace on the
+  # management cluster, next to the TenantControlPlane pods, and talks to the
+  # tenant API server through the Kamaji-issued admin kubeconfig. The workload
+  # cluster therefore never holds an OpenStack credential — which is the whole
+  # point, and the placement Kamaji itself documents and ships templates for
+  # (https://kamaji.clastix.io/cluster-api/vsphere-infra-provider/). Gardener
+  # and HyperShift run the same shape in production.
+  #
+  # Replaces `addons.openstack.ccm`. Enabling both would give you two CCMs
+  # fighting over the same cloud.
+  cloudControllerManager:
+    enabled: true
+    image:
+      repository: registry.menlo.ai/k8s-io/provider-os/openstack-cloud-controller-manager
+      # Keep in step with addons.openstack.ccm's chart pin (2.36.1 → v1.36.0).
+      tag: v1.36.0
+      pullPolicy: IfNotPresent
+    imagePullSecrets: []
+    replicas: 1
+    # -- cloud.conf [Global] uses the clouds.yaml from the cluster credentials
+    # Secret; the other sections are rendered from the values below.
+    cloudConfig:
+      LoadBalancer:
+        create-monitor: true
+        lb-method: ROUND_ROBIN
+        lb-provider: amphora
+      BlockStorage:
+        ignore-volume-az: true
+    # -- Extra `--flag=value` arguments, e.g. cluster-name or a longer
+    # --leader-elect-lease-duration on a busy management cluster.
+    extraArgs: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
+# =============================================================================
+# Kubernetes Network Configuration
+# =============================================================================
+kubeNetwork:
+  pods:
+    cidrBlocks:
+      - 172.16.0.0/13
+  services:
+    cidrBlocks:
+      - 172.24.0.0/13
+  serviceDomain: cluster.local
+
+# =============================================================================
+# OpenStack Networking Configuration
+# =============================================================================
+clusterNetworking:
+  dnsNameservers: []
+  # -- Indicates if security groups should be managed by the cluster
+  manageSecurityGroups: true
+  # -- Allow all traffic within the cluster security groups
+  allowAllInClusterTraffic: true
+  # -- The ID of the external network. Dual-purpose: it becomes
+  # OpenStackCluster.spec.externalNetwork (the gateway for the router CAPO creates in managed
+  # mode; presence-only in bring-your-own mode) AND the management-side CCM's
+  # `[LoadBalancer] floating-network-id` — the pool every tenant `type: LoadBalancer` Service
+  # draws its external IP from. Leave empty ONLY on a cloud with exactly one external network
+  # (CAPO auto-discovers it; MORE than one is a hard reconcile error).
+  externalNetworkId:
+  # -- Tell CAPO not to look for an external network at all. For clusters on a provider network
+  # (or any network whose egress is not CAPO's business). Mutually exclusive with
+  # externalNetworkId; also leaves the CCM without a floating-IP pool, so tenant LoadBalancer
+  # Services will not get external IPs.
+  disableExternalNetwork: false
+  # -- Internal network configuration
+  internalNetwork:
+    # -- Bring-your-own network. Leave BOTH filters unset (the default) and CAPO creates a fresh
+    # network + subnet + router per cluster from `nodeCidr`. Set them to attach the cluster to a
+    # network the customer already owns.
+    #
+    # These MUST stay null rather than `{id: }`: an empty-but-present map is truthy in Helm, which
+    # sent the chart down the bring-your-own branch and rendered `network: {id: null}` — CAPO then
+    # neither creates a network nor finds one, and the cluster never provisions. The templates now
+    # `fail` on that shape instead of emitting it, but do not reintroduce the placeholder here.
+    networkFilter:
+    subnetFilter:
+    # -- CIDR of the per-cluster subnet CAPO creates (ignored in bring-your-own mode).
+    nodeCidr: 10.0.0.0/24
+    dnsNameservers:
+
+# =============================================================================
+# API Server Configuration
+# =============================================================================
+# With Kamaji the API server endpoint is the LoadBalancer Service created by
+# the KamajiControlPlane controller. The OpenStackCluster therefore disables
+# its own apiServerLoadBalancer and floating IP. These invariants are baked
+# into templates/cluster-openstack.yaml; only `port` and `fixedIP` are tunable.
+# =============================================================================
+apiServer:
+  # -- The port the API server listens on (used by the Kamaji LB Service)
+  port: 6443
+  # -- Optional: pin the apiServerFixedIP on OpenStackCluster. Leave empty so
+  # Kamaji populates it from the LoadBalancer Service it provisions.
+  fixedIP:
+
+# =============================================================================
+# Registry Mirror Configuration
+# =============================================================================
+registryMirrors:
+  docker.io:
+    - https://quay.io/v2/azimuth/docker.io
+  ghcr.io:
+    - https://quay.io/v2/azimuth/ghcr.io
+  nvcr.io:
+    - https://quay.io/v2/azimuth/nvcr.io
+  quay.io:
+    - https://quay.io/v2/azimuth/quay.io
+  registry.k8s.io:
+    - https://quay.io/v2/azimuth/registry.k8s.io
+
+# -- A map of trusted CAs to add to the system trust on cluster nodes
+trustedCAs: {}
+
+# -- List of additional packages to install on cluster nodes
+additionalPackages: []
+
+# =============================================================================
+# Worker Node Group Defaults
+# =============================================================================
+# Worker nodes are the ONLY VMs provisioned on OpenStack when using Kamaji.
+# They still use kubeadm bootstrap to join the hosted control plane.
+# =============================================================================
+nodeGroupDefaults:
+  autoscale: false
+  failureDomain:
+  machineFlavor:
+  machineImage:
+  machineImageId:
+  kubernetesVersion:
+  machineNetworking:
+    ports:
+  machineRootVolume:
+    diskSize:
+  machineMetadata: {}
+  serverGroupId:
+  nodeLabels: {}
+  taints: []
+  additionalBlockDevices: {}
+  machineConfigDrive: false
+  nodeDrainTimeout: 5m0s
+  nodeVolumeDetachTimeout: 5m0s
+  nodeDeletionTimeout: 5m0s
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+      deletePolicy: Random
+  # -- kubeadm bootstrap configuration for worker nodes
+  # Workers still use kubeadm to join the Kamaji-hosted control plane
+  kubeadmConfigSpec:
+    joinConfiguration:
+      nodeRegistration:
+        name: "{{ local_hostname }}"
+        kubeletExtraArgs:
+          - name: cloud-provider
+            value: external
+          - name: feature-gates
+            value: "KubeletCrashLoopBackOffMax=true,KubeletEnsureSecretPulledImages=true"
+  # -- Machine health check for worker nodes
+  # NOTE: With Kamaji, CCM runs on worker nodes (not CP VMs), so the first
+  # nodes take longer to become Ready. Timeouts should be more generous.
+  healthCheck:
+    enabled: true
+    spec:
+      # 40% allows MHC to remediate single-node failures while protecting
+      # against mass-failure storms (would not remediate if >40% unhealthy).
+      # Set to 100% to disable remediation entirely.
+      maxUnhealthy: 40%
+      # Increased from upstream 30m: with Kamaji the CCM runs on workers,
+      # so first nodes need extra time to bootstrap before going Ready.
+      nodeStartupTimeout: 45m0s
+      unhealthyConditions:
+        - type: Ready
+          status: Unknown
+          # Increased from upstream 5m for the same reason.
+          timeout: 15m0s
+        - type: Ready
+          status: "False"
+          timeout: 15m0s
+
+# =============================================================================
+# Worker Node Groups
+# =============================================================================
+# Empty default keeps `helm template` with bare defaults render-safe (no
+# MachineDeployment renders without a flavor). Override per environment, e.g.:
+#   nodeGroups:
+#     - name: default-worker
+#       machineCount: 3
+#       machineFlavor: m5.large
+nodeGroups: []
+
+# =============================================================================
+# Cluster Autoscaler Configuration
+# =============================================================================
+autoscaler:
+  image:
+    repository: registry.k8s.io/autoscaling/cluster-autoscaler
+    pullPolicy: IfNotPresent
+    # Cluster-autoscaler minor MUST match cluster Kubernetes minor
+    tag: v1.34.0
+  imagePullSecrets: []
+  extraArgs:
+    logtostderr: true
+    stderrthreshold: info
+    v: 4
+    cordon-node-before-terminating: "true"
+    expander: least-waste,random
+    skip-nodes-with-system-pods: "true"
+    skip-nodes-with-local-storage: "false"
+    skip-nodes-with-custom-controller-pods: "false"
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    readOnlyRootFilesystem: true
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  topologySpreadConstraints: []
+  affinity: {}
+  # Probes for cluster-autoscaler. Defaults match the upstream
+  # cluster-autoscaler chart's recommendation (HTTP /health-check on :8085).
+  # Override per-cluster if first-cycle scan is slow on big clusters or under
+  # API server contention; bump initialDelaySeconds / failureThreshold.
+  livenessProbe:
+    httpGet:
+      path: /health-check
+      port: 8085
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /health-check
+      port: 8085
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 3
+
+# =============================================================================
+# Cluster Addons
+# =============================================================================
+# Bundled cluster-addons subchart. The defaults below are the ones a Kamaji
+# cluster on our clouds actually needs — they used to live copy-pasted in every
+# infra-ops wrapper. Two themes:
+#
+#   1. NO CONTROL PLANE NODES. Every addon that upstream schedules onto
+#      `node-role.kubernetes.io/control-plane` has to be freed, and every addon
+#      that must come up *before* the CCM initialises the nodes has to tolerate
+#      `node.cloudprovider.kubernetes.io/uninitialized` and the CAPI
+#      not-ready taints. That is why CNI, NFD and friends carry
+#      `tolerations: [{operator: Exists}]`.
+#   2. NO OPENSTACK CREDENTIAL IN THE WORKLOAD CLUSTER. `openstack.enabled`
+#      gates the CCM, the Cinder CSI *and* the `cloud-config` push that copies
+#      the cluster's clouds.yaml into the tenant's `openstack-system`
+#      namespace. It is off; the CCM runs management-side instead, see
+#      `kamajiControlPlane.cloudControllerManager` and
+#      templates/control-plane/ccm-openstack.yaml.
+#
+# Consequence of (2), by design for now: no Cinder CSI, so a cluster has no
+# dynamic block storage until the CSI controller/node split lands. Set
+# `addons.openstack.enabled: true` to get the old behaviour back (and with it
+# the credential in the workload cluster).
+#
+# Built-in addons (cert-manager, reloader) and arbitrary HelmRelease addons
+# (argo-rollouts, external-dns, external-secrets, nginx-gateway-fabric,
+# reflector, robusta, ...) are NOT enabled here. See
+# examples/values-with-custom-addons.yaml for a copy-paste starter.
+# =============================================================================
+addons:
+  enabled: true
+
+  # -- OpenStack integrations INSIDE the workload cluster (CCM + Cinder CSI +
+  # the cloud-config credential push). Off: the CCM runs management-side.
+  openstack:
+    enabled: false
+
+  cni:
+    enabled: true
+    type: cilium
+    cilium:
+      release:
+        values:
+          routingMode: "native"
+          autoDirectNodeRoutes: "true"
+          # MUST equal kubeNetwork.pods.cidrBlocks[0] — templates/cluster.yaml
+          # fails the render if the two drift apart.
+          ipv4NativeRoutingCIDR: "172.16.0.0/13"
+          kubeProxyReplacement: true
+          image:
+            repository: "registry.menlo.ai/quay-io/cilium/cilium"
+          certgen:
+            image:
+              repository: "registry.menlo.ai/quay-io/cilium/certgen"
+          hubble:
+            relay:
+              image:
+                repository: "registry.menlo.ai/quay-io/cilium/hubble-relay"
+            ui:
+              backend:
+                image:
+                  repository: "registry.menlo.ai/quay-io/cilium/hubble-ui-backend"
+              frontend:
+                image:
+                  repository: "registry.menlo.ai/quay-io/cilium/hubble-ui"
+          envoy:
+            image:
+              repository: "registry.menlo.ai/quay-io/cilium/cilium-envoy"
+          # The agent and the operator are the first pods on a brand new node,
+          # before the CCM has removed the uninitialized taint — without these
+          # tolerations the cluster never gets a network and never converges.
+          tolerations:
+            - operator: Exists
+          operator:
+            image:
+              repository: "registry.menlo.ai/quay-io/cilium/operator"
+            tolerations:
+              - operator: Exists
+          nodeinit:
+            image:
+              repository: "registry.menlo.ai/quay-io/cilium/startup-script"
+          preflight:
+            image:
+              repository: "registry.menlo.ai/quay-io/cilium/cilium"
+            envoy:
+              image:
+                repository: "registry.menlo.ai/quay-io/cilium/cilium-envoy"
+          clustermesh:
+            apiserver:
+              image:
+                repository: "registry.menlo.ai/quay-io/cilium/clustermesh-apiserver"
+
+  # -- etcd lives in the Kamaji datastore on the management cluster; there is
+  # no workload-cluster etcd to defrag.
+  etcdDefrag:
+    enabled: false
+
+  nodeFeatureDiscovery:
+    release:
+      values:
+        image:
+          repository: registry.menlo.ai/k8s-io/nfd/node-feature-discovery
+        master:
+          tolerations:
+            - operator: Exists
+        gc:
+          tolerations:
+            - operator: Exists
+
+  nodeProblemDetector:
+    release:
+      values:
+        image:
+          repository: registry.menlo.ai/k8s-io/node-problem-detector/node-problem-detector
+
+  # -- Accelerator operators are opt-in: they are heavy and pointless on a
+  # cluster with no GPU / RDMA node group. Turn on per cluster.
+  nvidiaGPUOperator:
+    enabled: false
+  mellanoxNetworkOperator:
+    enabled: false

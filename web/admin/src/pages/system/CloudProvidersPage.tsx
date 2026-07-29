@@ -23,6 +23,13 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { apiFetch } from "@/lib/api"
 import { useAdminList } from "@/lib/hooks"
+import {
+  KamajiProviderForm,
+  emptyKamajiForm,
+  kamajiFormToBody,
+  kamajiFormValid,
+  type KamajiFormState,
+} from "./kamajiProvider"
 
 const LIST_PATH = "/admin/service"
 
@@ -290,9 +297,10 @@ export default function CloudProvidersPage() {
   const items = data?.data ?? []
 
   const [createOpen, setCreateOpen] = useState(false)
-  const [kind, setKind] = useState<"openstack" | "ceph-s3">("openstack")
+  const [kind, setKind] = useState<"openstack" | "ceph-s3" | "kamaji">("openstack")
   const [form, setForm] = useState<FormState>(emptyForm)
   const [cephForm, setCephForm] = useState<CephFormState>(emptyCephForm)
+  const [kamajiForm, setKamajiForm] = useState<KamajiFormState>(emptyKamajiForm)
 
   const create = useMutation({
     // POST /admin/service (externalServiceCreate). The operator finishes the Services/Features tabs on
@@ -300,13 +308,14 @@ export default function CloudProvidersPage() {
     mutationFn: () =>
       apiFetch<CloudProvider>(LIST_PATH, {
         method: "POST",
-        body: kind === "ceph-s3" ? cephFormToBody(cephForm) : formToBody(form),
+        body: kind === "ceph-s3" ? cephFormToBody(cephForm) : kind === "kamaji" ? kamajiFormToBody(kamajiForm) : formToBody(form),
       }),
     onSuccess: (created) => {
       toast.success("Cloud provider created")
       setCreateOpen(false)
       setForm(emptyForm)
       setCephForm(emptyCephForm)
+      setKamajiForm(emptyKamajiForm)
       void qc.invalidateQueries({ queryKey: ["admin-list", LIST_PATH] })
       if (created?.id) navigate(`/system/cloud-providers/${created.id}`)
     },
@@ -402,11 +411,12 @@ export default function CloudProvidersPage() {
         open={createOpen}
         onOpenChange={(o) => {
           setCreateOpen(o)
-          // Clear BOTH forms on every close (Cancel, Esc, overlay) — the ceph form holds admin keys,
-          // which must not sit in state and re-appear on the next open.
+          // Clear ALL forms on every close (Cancel, Esc, overlay) — the ceph form holds admin keys
+          // and the kamaji form a kubeconfig; neither must sit in state and re-appear on next open.
           if (!o) {
             setForm(emptyForm)
             setCephForm(emptyCephForm)
+            setKamajiForm(emptyKamajiForm)
             setKind("openstack")
           }
         }}
@@ -417,19 +427,26 @@ export default function CloudProvidersPage() {
             <DialogDescription>
               {kind === "ceph-s3"
                 ? "Connect a Ceph RGW object store over its S3 and Admin Ops endpoints. No Keystone involved — projects get a dedicated RGW user."
-                : 'Connect an OpenStack cloud with its Keystone admin credentials. You will enable per-region services and run "Test connection" on the provider page after it is created.'}
+                : kind === "kamaji"
+                  ? "Connect a Kamaji management cluster for Managed Kubernetes. Clusters are delivered as ArgoCD Applications of the pinned chart; worker nodes run in each customer's OpenStack tenant."
+                  : 'Connect an OpenStack cloud with its Keystone admin credentials. You will enable per-region services and run "Test connection" on the provider page after it is created.'}
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <Button variant={kind === "openstack" ? "default" : "outline"} onClick={() => setKind("openstack")}>
               OpenStack
             </Button>
             <Button variant={kind === "ceph-s3" ? "default" : "outline"} onClick={() => setKind("ceph-s3")}>
               Ceph S3
             </Button>
+            <Button variant={kind === "kamaji" ? "default" : "outline"} onClick={() => setKind("kamaji")}>
+              Kubernetes
+            </Button>
           </div>
           {kind === "ceph-s3" ? (
             <CephProviderForm form={cephForm} setForm={setCephForm} />
+          ) : kind === "kamaji" ? (
+            <KamajiProviderForm form={kamajiForm} setForm={setKamajiForm} />
           ) : (
             <ProviderForm form={form} setForm={setForm} />
           )}
@@ -439,7 +456,10 @@ export default function CloudProvidersPage() {
             </Button>
             <Button
               onClick={() => create.mutate()}
-              disabled={(kind === "ceph-s3" ? !cephFormValid(cephForm) : !formValid(form)) || create.isPending}
+              disabled={
+                (kind === "ceph-s3" ? !cephFormValid(cephForm) : kind === "kamaji" ? !kamajiFormValid(kamajiForm) : !formValid(form)) ||
+                create.isPending
+              }
             >
               {create.isPending ? "Creating…" : "Create provider"}
             </Button>

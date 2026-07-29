@@ -1,0 +1,23 @@
+apiVersion: v2
+appVersion: "0.1.0"
+dependencies:
+  - alias: addons
+    condition: addons.enabled
+    name: cluster-addons-menlo
+    # file:// so `helm dependency build` resolves from this repo checkout —
+    # no GHCR round-trip, and the vendored tgz can never drift from source.
+    # The packaged chart published to GHCR embeds the subchart either way.
+    repository: file://../cluster-addons-menlo
+    version: 0.27.2
+description: >-
+  Helm chart for deploying a Kubernetes cluster on OpenStack using
+  Cluster API with Kamaji as the hosted control plane provider.
+  Unlike the kubeadm-based chart, the control plane runs as pods
+  in the management cluster (no dedicated CP VMs needed).
+name: openstack-kamaji-cluster
+type: application
+# 0.5.0 adds clusterNetworking.disableExternalNetwork (CAPO auto-discovery opt-out for clusters
+# on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
+# `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
+# bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
+version: 0.5.0

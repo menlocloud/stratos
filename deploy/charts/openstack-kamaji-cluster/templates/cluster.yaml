@@ -1,0 +1,32 @@
+{{- /*
+  Cilium in native-routing mode needs ipv4NativeRoutingCIDR to equal the pod
+  CIDR. When the two drift the cluster comes up and then silently drops
+  pod-to-pod traffic that leaves a node — a miserable thing to debug, so fail
+  the render instead.
+*/}}
+{{- if and .Values.addons.enabled (eq (dig "cni" "type" "" .Values.addons) "cilium") }}
+{{- $native := dig "cni" "cilium" "release" "values" "ipv4NativeRoutingCIDR" "" .Values.addons }}
+{{- $pods := first .Values.kubeNetwork.pods.cidrBlocks }}
+{{- if and $native (ne $native $pods) }}
+{{- fail (printf "addons.cni.cilium.release.values.ipv4NativeRoutingCIDR (%s) must equal kubeNetwork.pods.cidrBlocks[0] (%s)" $native $pods) }}
+{{- end }}
+{{- end }}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: {{ include "openstack-kamaji-cluster.clusterName" . }}
+  labels: {{ include "openstack-kamaji-cluster.labels" . | nindent 4 }}
+  annotations: {{ toYaml .Values.clusterAnnotations | nindent 4 }}
+spec:
+  clusterNetwork: {{ .Values.kubeNetwork | toYaml | nindent 4 }}
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+    kind: KamajiControlPlane
+    name: {{ include "openstack-kamaji-cluster.componentName" (list . "kamaji-cp") }}
+    namespace: {{ .Release.Namespace }}
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: OpenStackCluster
+    name: {{ include "openstack-kamaji-cluster.clusterName" . }}
+    namespace: {{ .Release.Namespace }}

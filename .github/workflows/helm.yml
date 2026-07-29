@@ -18,11 +18,18 @@ on:
       - main
     paths:
       - 'deploy/chart/**'
+      - 'deploy/charts/**'
 
 env:
   CHART_DIR: deploy/chart
   CHART_NAME: stratos
   OCI_REPO: oci://ghcr.io/${{ github.repository_owner }}/charts
+  # The Managed Kubernetes cluster chart (deploy/charts) is versioned by its own Chart.yaml, not by
+  # the release tag, and goes to its own OCI path so it never collides with the copy of the same
+  # chart published from menlocloud/charts for the infra-ops wrappers. See deploy/charts/README.md.
+  K8S_CHART_DIR: deploy/charts/openstack-kamaji-cluster
+  K8S_CHART_NAME: openstack-kamaji-cluster
+  K8S_OCI_REPO: oci://ghcr.io/${{ github.repository_owner }}/stratos-charts
 
 jobs:
   # ---- PR: sanity only ------------------------------------------------------
@@ -49,6 +56,14 @@ jobs:
           helm dependency build "$CHART_DIR"
           helm lint "$CHART_DIR"
           helm template "$CHART_DIR" -f "$CHART_DIR/values-dev.yaml" >/dev/null
+
+      - name: Lint + template the managed-k8s cluster chart
+        run: |
+          set -euo pipefail
+          helm dependency build "$K8S_CHART_DIR"
+          helm lint "$K8S_CHART_DIR"
+          # Bare defaults must render: it is the only cheap guard on the chart's own consistency.
+          helm template test "$K8S_CHART_DIR" >/dev/null
 
   # ---- tag v*: package + publish the chart at the tag version (idempotent) ---
   publish:
@@ -83,3 +98,20 @@ jobs:
           # and the docker workflow tags images with the tag name verbatim (v0.1.0).
           helm package "$CHART_DIR" -d /tmp/pkg --version "$version" --app-version "$GITHUB_REF_NAME"
           helm push "/tmp/pkg/$CHART_NAME-$version.tgz" "$OCI_REPO"
+
+      - name: Package + publish the managed-k8s cluster chart at ITS OWN version
+        run: |
+          set -euo pipefail
+          # Deliberately NOT the release tag: a customer cluster pins a chart version and keeps it
+          # until something moves it, so the chart's lifecycle is its own. Bump Chart.yaml in the
+          # PR that changes the chart; this step is a no-op until you do.
+          version="$(helm show chart "$K8S_CHART_DIR" | awk '/^version:/ {print $2}')"
+          if helm show chart "$K8S_OCI_REPO/$K8S_CHART_NAME" --version "$version" >/dev/null 2>&1; then
+            echo "chart $K8S_CHART_NAME $version already published — nothing to do."
+            exit 0
+          fi
+          helm dependency build "$K8S_CHART_DIR"
+          helm lint "$K8S_CHART_DIR"
+          helm template test "$K8S_CHART_DIR" >/dev/null
+          helm package "$K8S_CHART_DIR" -d /tmp/pkg
+          helm push "/tmp/pkg/$K8S_CHART_NAME-$version.tgz" "$K8S_OCI_REPO"
