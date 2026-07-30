@@ -8,8 +8,20 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
+)
+
+// CloudResource `type` discriminator values, mirrored from internal/cloud's CloudResourceType
+// constants. Inlined here on purpose: the billing domain must stay free of any internal/cloud
+// import so it can be extracted into the standalone billing service. These are the stable wire
+// values the FE resource-name/created helpers read (data.<key>) — keep them in sync with
+// internal/cloud/resource.go if OpenStack resource types ever change.
+const (
+	cloudTypeServer       = "SERVER"
+	cloudTypeVolume       = "VOLUME"
+	cloudTypeFloatingIP   = "FLOATING_IP"
+	cloudTypeLoadBalancer = "LOAD_BALANCER"
+	cloudTypeBucket       = "BUCKET"
 )
 
 // MonthlyBillCosts sums a profile's bill-item net amounts into the current-month and previous-month
@@ -216,15 +228,15 @@ func decimalCatMap(in map[string]decimal.Decimal) map[string]any {
 func billingResourceCloudShape(billingType string) (cloudType, dataKey string) {
 	switch billingType {
 	case "instance", "instance_traffic":
-		return cloud.TypeServer, "server"
+		return cloudTypeServer, "server"
 	case "volume":
-		return cloud.TypeVolume, "volume"
+		return cloudTypeVolume, "volume"
 	case "floating_ip":
-		return cloud.TypeFloatingIP, "floatingIp"
+		return cloudTypeFloatingIP, "floatingIp"
 	case "load_balancer":
-		return cloud.TypeLoadBalancer, "loadBalancer"
+		return cloudTypeLoadBalancer, "loadBalancer"
 	case "bucket":
-		return cloud.TypeBucket, "bucket"
+		return cloudTypeBucket, "bucket"
 	default:
 		return billingType, billingType
 	}

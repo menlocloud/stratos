@@ -9,7 +9,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/metrics"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // ServerProvider yields up
@@ -31,8 +31,8 @@ func (p *ServerProvider) Type() string { return cloud.TypeServer }
 // nova statuses is excluded from billing (DELETED/ERROR/UNKNOWN/BUILD).
 var serverNotEligibleStatuses = map[string]bool{"DELETED": true, "ERROR": true, "UNKNOWN": true, "BUILD": true}
 
-func (p *ServerProvider) GetBillingInformation(ctx context.Context, _ pricing.BillingContext, cr *cloud.CloudResource) ([]*pricing.BillingResource, error) {
-	out := []*pricing.BillingResource{}
+func (p *ServerProvider) GetBillingInformation(ctx context.Context, _ billingapi.BillingContext, cr *cloud.CloudResource) ([]*billingapi.BillingResource, error) {
+	out := []*billingapi.BillingResource{}
 	notEligible := false
 	if server, ok := mapAt(cr.Data, "server"); ok {
 		notEligible = serverNotEligibleStatuses[str(server["status"])]
@@ -55,7 +55,7 @@ func (p *ServerProvider) GetBillingInformation(ctx context.Context, _ pricing.Bi
 
 // instanceBR builds the "instance" resource from the server's flavor/data.
 // nil when the cloud data has no server.
-func (p *ServerProvider) instanceBR(cr *cloud.CloudResource, notEligible bool) *pricing.BillingResource {
+func (p *ServerProvider) instanceBR(cr *cloud.CloudResource, notEligible bool) *billingapi.BillingResource {
 	server, ok := mapAt(cr.Data, "server")
 	if !ok {
 		return nil
@@ -89,7 +89,7 @@ func (p *ServerProvider) instanceBR(cr *cloud.CloudResource, notEligible bool) *
 	if ramMB, ok := toDec(flavor["ram"]); ok {
 		values["ram_gb"] = ramMB.DivRound(decimal.NewFromInt(1024), 2)
 	}
-	return &pricing.BillingResource{
+	return &billingapi.BillingResource{
 		ResourceID:            cr.ID,
 		ProjectID:             cr.ProjectID,
 		ResourceType:          "instance",
@@ -101,7 +101,7 @@ func (p *ServerProvider) instanceBR(cr *cloud.CloudResource, notEligible bool) *
 
 // trafficBR builds the "instance_traffic" resource from the month's GnocchiMetrics.
 // nil when no metrics exist for the current cycle.
-func (p *ServerProvider) trafficBR(ctx context.Context, cr *cloud.CloudResource) (*pricing.BillingResource, error) {
+func (p *ServerProvider) trafficBR(ctx context.Context, cr *cloud.CloudResource) (*billingapi.BillingResource, error) {
 	cycleStart := firstDayOfCurrentMonth(p.now())
 	m, err := p.gnocchi.FindForCurrentMonth(ctx, cr.ID, cycleStart)
 	if err != nil {
@@ -127,7 +127,7 @@ func (p *ServerProvider) trafficBR(ctx context.Context, cr *cloud.CloudResource)
 		"total_traffic_mb":            d.TotalTrafficMb,
 		"display_name":                dn,
 	}
-	return &pricing.BillingResource{
+	return &billingapi.BillingResource{
 		ResourceID:          fmt.Sprintf("instance_traffic-%s", cr.ID),
 		ProjectID:           cr.ProjectID,
 		ResourceType:        "instance_traffic",
@@ -136,10 +136,14 @@ func (p *ServerProvider) trafficBR(ctx context.Context, cr *cloud.CloudResource)
 	}, nil
 }
 
-func instanceType() *pricing.BillingResourceType {
-	num := func(n string) pricing.ResourceAttribute { return pricing.ResourceAttribute{Name: n, Type: "number"} }
-	s := func(n string) pricing.ResourceAttribute { return pricing.ResourceAttribute{Name: n, Type: "string"} }
-	return &pricing.BillingResourceType{ResourceType: "instance", Attributes: []pricing.ResourceAttribute{
+func instanceType() *billingapi.BillingResourceType {
+	num := func(n string) billingapi.ResourceAttribute {
+		return billingapi.ResourceAttribute{Name: n, Type: "number"}
+	}
+	s := func(n string) billingapi.ResourceAttribute {
+		return billingapi.ResourceAttribute{Name: n, Type: "string"}
+	}
+	return &billingapi.BillingResourceType{ResourceType: "instance", Attributes: []billingapi.ResourceAttribute{
 		s("instance_type"), num("ram_mb"), num("ram_gb"), num("vcpus"), num("root_disk_gb"),
 		num("gpu_count"), s("gpu_model"),
 		s("display_name"), s("host"), s("status"), s("image"),
@@ -147,12 +151,12 @@ func instanceType() *pricing.BillingResourceType {
 	}}
 }
 
-func instanceTrafficType() *pricing.BillingResourceType {
+func instanceTrafficType() *billingapi.BillingResourceType {
 	yes := true
-	usage := func(n string) pricing.ResourceAttribute {
-		return pricing.ResourceAttribute{Name: n, Type: "number", IsUsage: &yes}
+	usage := func(n string) billingapi.ResourceAttribute {
+		return billingapi.ResourceAttribute{Name: n, Type: "number", IsUsage: &yes}
 	}
-	return &pricing.BillingResourceType{ResourceType: "instance_traffic", Attributes: []pricing.ResourceAttribute{
+	return &billingapi.BillingResourceType{ResourceType: "instance_traffic", Attributes: []billingapi.ResourceAttribute{
 		usage("incoming_private_traffic_mb"), usage("outgoing_private_traffic_mb"),
 		usage("incoming_public_traffic_mb"), usage("outgoing_public_traffic_mb"),
 		usage("total_public_traffic_mb"), usage("total_private_traffic_mb"), usage("total_traffic_mb"),

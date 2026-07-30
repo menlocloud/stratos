@@ -120,6 +120,24 @@ spec:
             - name: STRATOS_JOBS_RABBIT_FANOUT
               value: "true"
             {{- end }}
+            {{- if .Values.api.billing }}
+            {{- if .Values.api.billing.provider }}
+            - name: STRATOS_BILLING_PROVIDER
+              value: {{ .Values.api.billing.provider | quote }}
+            {{- end }}
+            {{- if .Values.api.billing.url }}
+            - name: STRATOS_BILLING_URL
+              value: {{ .Values.api.billing.url | quote }}
+            {{- end }}
+            {{- if .Values.api.billing.token }}
+            - name: STRATOS_BILLING_TOKEN
+              value: {{ .Values.api.billing.token | quote }}
+            {{- end }}
+            {{- if .Values.api.billing.callbackToken }}
+            - name: STRATOS_BILLING_CALLBACK_TOKEN
+              value: {{ .Values.api.billing.callbackToken | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.api.network.defaultMtu }}
             - name: STRATOS_DEFAULT_NETWORK_MTU
               value: {{ .Values.api.network.defaultMtu | quote }}

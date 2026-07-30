@@ -44,7 +44,10 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/affiliate"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/internal/platform/billing"
+	"github.com/menlocloud/stratos/internal/platform/billingcallback"
+	"github.com/menlocloud/stratos/internal/platform/billingclient"
 	"github.com/menlocloud/stratos/internal/platform/billingjob"
+	"github.com/menlocloud/stratos/internal/platform/billingprovider"
 	"github.com/menlocloud/stratos/internal/platform/catalog"
 	"github.com/menlocloud/stratos/internal/platform/chargefanout"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
@@ -497,6 +500,10 @@ func run() error {
 			cloud.TypeLoadBalancer: billingresource.NewLoadBalancerProvider(),
 		},
 	})
+	// Client for the standalone billing service. nil when STRATOS_BILLING_URL is unset, which is
+	// fine: every call on it reports ErrNotConfigured, and Validate() already refuses to boot with
+	// remote charging enabled but no URL.
+	billingCli := billingclient.New(cfg.Billing.URL, cfg.Billing.Token, cfg.Billing.Timeout)
 	metricsJob := metricsjob.New(projectRepo, cloudRepo, esSvc, metrics.NewService(metricsRepo), log)
 	syncJob := syncjob.New(projectRepo, esSvc, cloudRepo, log)
 	savingsSvc := billing.NewSavingsService(billingRepo)
@@ -513,7 +520,9 @@ func run() error {
 	activationSvc.SetClouds(cloudSuspender)
 	activationSvc.SetNotifier(mailSvc)
 	activationSvc.SetLoginURL(cfg.Self.UIBaseURL) // {{loginUrl}} in billing_profile_validated
-	activationSvc.SetActivateProjects(func(ctx context.Context, bpID string) error {
+	// Named rather than inline because the billing service also drives this over the callback
+	// endpoint once the engine moves out — both paths must run exactly the same activation.
+	activateProjectsFn := func(ctx context.Context, bpID string) error {
 		orgs, err := orgRepo.FindAllByBillingProfileID(ctx, bpID)
 		if err != nil || len(orgs) == 0 {
 			return err
@@ -553,7 +562,14 @@ func run() error {
 			}
 		}
 		return nil
-	})
+	}
+	activationSvc.SetActivateProjects(activateProjectsFn)
+	// Callbacks the billing service invokes once the engine runs out-of-process. Served on the mgmt
+	// port behind a shared token; nil (no token configured) mounts nothing.
+	billingCB := billingcallback.New(cloudSuspender, activateProjectsFn, mailSvc, cfg.Billing.CallbackToken, log)
+	if billingCB != nil {
+		log.Info("billing service callbacks enabled on the mgmt port")
+	}
 	adminH.SetActivation(activationSvc)
 	// On admin user-create, loop the given project IDs and send a project invite for each (best-effort).
 	adminH.SetInviteToProject(inviteH.InviteToProject)
@@ -659,25 +675,37 @@ func run() error {
 	// WriteService.Delete per resource) then remove the doc. ⚠ performs LIVE cloud DELETEs.
 	deletionJob := project.NewDeletionJob(projectRepo, projectCloudDeleter{cloudRepo: cloudRepo, client: func() *client.Client { return cloudCli.Load() }}, log)
 	sched := scheduler.New(lock.New(pg))
-	// Charge dispatch: in-process loop by default; RabbitMQ fan-out (one message per ACTIVE
-	// profile → the per-pod consumer) when STRATOS_JOBS_RABBIT_FANOUT=true and the broker is up.
-	chargeDispatch := func(ctx context.Context, timeUnit string) error {
-		if cfg.Jobs.RabbitFanout {
-			if rc := rabbit.Load(); rc != nil {
-				n, err := chargefanout.Publish(ctx, rc, chargeJob, timeUnit)
-				if err == nil {
-					log.Info("charge fan-out published", "timeUnit", timeUnit, "count", n)
+	// Which engine charges bills. NATIVE (the default) rates in-process with the billing engine in
+	// this repository and needs nothing but PostgreSQL — that is what a plain checkout of stratos
+	// runs. EXTERNAL delegates rating to a separate billing service; this pod still resolves each
+	// profile's cloud resources, because it owns the OpenStack cache and nothing else can.
+	//
+	// Only this step differs between the two. See internal/platform/billingprovider.
+	var billingProv billingprovider.Provider
+	switch cfg.Billing.Provider {
+	case billingprovider.External:
+		billingProv = billingprovider.NewExternal(chargeJob, billingCli, log)
+		log.Warn("billing provider EXTERNAL: bills are rated by the billing service, not in-process",
+			"url", cfg.Billing.URL)
+	default:
+		billingProv = billingprovider.NewNative(chargeJob,
+			func() billingprovider.Publisher {
+				if rc := rabbit.Load(); rc != nil {
+					return rc
 				}
-				return err
-			}
-			log.Warn("rabbit fan-out on but broker not connected — charging in-process this tick", "timeUnit", timeUnit)
-		}
-		return chargeJob.Charge(ctx, timeUnit, time.Now().UTC())
+				return nil
+			}, cfg.Jobs.RabbitFanout, log)
+		log.Info("billing provider NATIVE: bills are rated in-process",
+			"rabbitFanout", cfg.Jobs.RabbitFanout)
 	}
-	registerJobs(sched, chargeDispatch, metricsJob, syncJob, savingsSvc, suspensionJob, collectSvc, txnScanner, deletionJob, billSendSvc, log)
-	// When fan-out is on, run a consumer in this pod (waits for the broker, then drains the
-	// charge queue). Background so startup never blocks on the broker.
-	if cfg.Jobs.RabbitFanout {
+	chargeDispatch := func(ctx context.Context, timeUnit string) error {
+		return billingProv.Charge(ctx, timeUnit, time.Now().UTC())
+	}
+	registerJobs(sched, billingProv.Name(), chargeDispatch, metricsJob, syncJob, savingsSvc, suspensionJob, collectSvc, txnScanner, deletionJob, billSendSvc, log)
+	// The fan-out consumer belongs to the native provider: it drains the queue that provider
+	// publishes to. Under the external provider nothing publishes, so a consumer would idle
+	// forever on a queue that never fills.
+	if cfg.Jobs.RabbitFanout && billingProv.Name() == billingprovider.Native {
 		go startChargeConsumer(&rabbit, chargeJob, log)
 	}
 	if cfg.Jobs.SchedulerEnabled {
@@ -712,7 +740,11 @@ func run() error {
 				default:
 					tu = pricing.TimeUnitMinute
 				}
-				jobResult(w, map[string]any{"ran": "charge", "timeUnit": tu}, chargeJob.Charge(r.Context(), tu, time.Now().UTC()))
+				// Goes through chargeDispatch, not chargeJob.Charge, so the trigger exercises whatever
+				// path this deploy is actually configured for. Calling the in-process charge directly
+				// would mean an operator validating a remote-charge deploy silently tested the local
+				// engine instead — and got a passing result for a path that is not running.
+				jobResult(w, map[string]any{"ran": "charge", "timeUnit": tu, "provider": billingProv.Name()}, chargeDispatch(r.Context(), tu))
 			},
 			"run-savings-expire": func(w http.ResponseWriter, r *http.Request) {
 				n, err := savingsSvc.ExpireContracts(r.Context())
@@ -873,8 +905,12 @@ func run() error {
 
 	// Operator job triggers (/api/v1/admin/job/*) — reuse the same in-process job objects the mgmt
 	// /debug/run-* triggers use; the gated/per-id ones degrade to 202 inside the handler.
+	//
+	// Charge goes through chargeDispatch, not chargeJob.Charge: an operator triggering a charge on
+	// an external-provider deployment must drive the engine that deployment actually uses. Calling
+	// the in-tree rater directly would write a bill from the wrong engine, into the wrong database.
 	jobH := job.NewHandler(job.Runners{
-		Charge:           func(ctx context.Context, tu string) error { return chargeJob.Charge(ctx, tu, time.Now().UTC()) },
+		Charge:           chargeDispatch,
 		Metrics:          metricsJob.Run,
 		ServicesSync:     func(ctx context.Context) error { _, err := syncJob.Run(ctx); return err },
 		Collect:          func(ctx context.Context) error { _, err := collectSvc.CollectAll(ctx); return err },
@@ -895,7 +931,7 @@ func run() error {
 	}
 	mgmtSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Management.Port),
-		Handler:           server.MgmtRouter(h, cloudDebug, jobsDebug),
+		Handler:           server.MgmtRouter(h, cloudDebug, jobsDebug, billingCB),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -940,7 +976,18 @@ func startChargeConsumer(rabbit *atomic.Pointer[amqp.Client], charger chargefano
 // registerJobs wires the charge cron (minutely/hourly/monthly) + the gnocchi metrics job
 // with the verified cron specs + lock names/durations. The charge crons
 // share AtMostFor 5m / AtLeastFor 30s; the metrics job uses AtMostFor 10m / AtLeastFor 30s.
-func registerJobs(sched *scheduler.Scheduler, chargeDispatch func(context.Context, string) error, metrics *metricsjob.Job, sync *syncjob.Job, savings *billing.SavingsService, suspension *billing.SuspensionJob, collect *payment.CollectService, txnScan *payment.TransactionScanner, deletion *project.DeletionJob, billSend *billing.BillSendService, log *slog.Logger) {
+// registerJobs wires the scheduled jobs.
+//
+// billingProvider decides which of them run here. The charge jobs always do — they go through
+// chargeDispatch, which is provider-aware. The REST of the billing jobs (savings expiry and
+// reminders, transaction scanning, dunning, monthly bill send, collection) drive the in-tree engine
+// directly and have no provider indirection, so under the external provider they are NOT registered:
+// the external billing service runs its own copies, and running both would mean two dunning passes,
+// two sets of customer emails and two attempts to charge the same saved card.
+//
+// Jobs that are not about billing at all (metrics ingestion, cloud sync, project deletion) always
+// run — the external provider still depends on this pod keeping the resource cache fresh.
+func registerJobs(sched *scheduler.Scheduler, billingProvider string, chargeDispatch func(context.Context, string) error, metrics *metricsjob.Job, sync *syncjob.Job, savings *billing.SavingsService, suspension *billing.SuspensionJob, collect *payment.CollectService, txnScan *payment.TransactionScanner, deletion *project.DeletionJob, billSend *billing.BillSendService, log *slog.Logger) {
 	chargeFn := func(timeUnit string) func(context.Context) {
 		return func(ctx context.Context) {
 			if err := chargeDispatch(ctx, timeUnit); err != nil {
@@ -948,6 +995,18 @@ func registerJobs(sched *scheduler.Scheduler, chargeDispatch func(context.Contex
 			}
 		}
 	}
+	// The native-engine-only billing jobs. Under the external provider these are owned by the
+	// billing service instead; registering them here too would double every side effect.
+	nativeOnly := map[string]bool{
+		"savingsContractExpiration":         true,
+		"savingsContractExpiryReminders":    true,
+		"reminderNotifications":             true,
+		"paymentGatewayTransactionScanning": true,
+		"autoSuspensionJob":                 true,
+		"monthlyBill":                       true,
+		"monthlyCollect":                    true,
+	}
+
 	jobs := []scheduler.Job{
 		{Name: "minutelyCharge", Spec: scheduler.MinutelyChargeSpec, AtMostFor: 5 * time.Minute, AtLeastFor: 30 * time.Second, Fn: chargeFn(pricing.TimeUnitMinute)},
 		{Name: "hourlyCharge", Spec: scheduler.HourlyChargeSpec, AtMostFor: 5 * time.Minute, AtLeastFor: 30 * time.Second, Fn: chargeFn(pricing.TimeUnitHour)},
@@ -1021,10 +1080,20 @@ func registerJobs(sched *scheduler.Scheduler, chargeDispatch func(context.Contex
 			}
 		}},
 	}
+	external := billingProvider == billingprovider.External
+	var skipped []string
 	for _, j := range jobs {
+		if external && nativeOnly[j.Name] {
+			skipped = append(skipped, j.Name)
+			continue
+		}
 		if err := sched.Register(j); err != nil {
 			log.Error("register scheduled job", "name", j.Name, "err", err)
 		}
+	}
+	if len(skipped) > 0 {
+		log.Warn("billing provider is external: these jobs are owned by the billing service and are NOT scheduled here",
+			"jobs", strings.Join(skipped, ","))
 	}
 }
 

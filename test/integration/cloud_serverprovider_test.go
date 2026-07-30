@@ -12,7 +12,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/billingresource"
 	"github.com/menlocloud/stratos/internal/cloud/metrics"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // TestServerProviderBillingResources verifies the SERVER → BillingResources mapping: the
@@ -53,11 +53,11 @@ func TestServerProviderBillingResources(t *testing.T) {
 		},
 	}
 
-	brs, err := billingresource.NewServerProvider(gnocchiRepo).GetBillingInformation(ctx, pricing.BillingContext{}, server)
+	brs, err := billingresource.NewServerProvider(gnocchiRepo).GetBillingInformation(ctx, billingapi.BillingContext{}, server)
 	if err != nil {
 		t.Fatalf("getBillingInformation: %v", err)
 	}
-	byType := map[string]*pricing.BillingResource{}
+	byType := map[string]*billingapi.BillingResource{}
 	for _, br := range brs {
 		byType[br.ResourceType] = br
 	}

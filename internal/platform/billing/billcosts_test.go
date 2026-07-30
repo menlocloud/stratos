@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 )
 
@@ -38,7 +37,7 @@ func TestBillCostBreakdown_TopMergedAndSorted(t *testing.T) {
 	if res["id"] != "s1" {
 		t.Errorf("merged id should be the server id s1, got %v", res["id"])
 	}
-	if res["type"] != cloud.TypeServer {
+	if res["type"] != "SERVER" {
 		t.Errorf("merged type should be SERVER, got %v", res["type"])
 	}
 	numEq(t, "big-vm merged cost (100 + 5 traffic)", first["currentCost"], "105.00")

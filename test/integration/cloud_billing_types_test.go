@@ -9,7 +9,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/billingresource"
 	"github.com/menlocloud/stratos/internal/pgdoc"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // TestVolumeFipLbBillingResources verifies the VOLUME/FLOATING_IP/LOAD_BALANCER bridge: seeded
@@ -39,7 +39,7 @@ func TestVolumeFipLbBillingResources(t *testing.T) {
 		cloud.TypeFloatingIP:   billingresource.NewFloatingIPProvider(),
 		cloud.TypeLoadBalancer: billingresource.NewLoadBalancerProvider(),
 	}
-	brs, err := billingresource.GetBillingResources(ctx, repo, registry, projID, svcID, pricing.BillingContext{})
+	brs, err := billingresource.GetBillingResources(ctx, repo, registry, projID, svcID, billingapi.BillingContext{})
 	if err != nil {
 		t.Fatalf("GetBillingResources: %v", err)
 	}

@@ -22,6 +22,10 @@ type PayService struct {
 
 // ProfileReviewer re-evaluates a profile's suspension after its balance changes.
 // *SuspensionJob implements it.
+//
+// EXTRACTION SEAM: unlike the other three hooks this one does NOT become a network call — both
+// sides (PayService and SuspensionJob) move into the billing service together, so it stays an
+// in-process call. That is why it can keep taking a *BillingProfile rather than an id.
 type ProfileReviewer interface {
 	ReviewBillingProfile(ctx context.Context, profile *BillingProfile) error
 }

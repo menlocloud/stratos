@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/menlocloud/stratos/internal/cloud"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // volumeNotEligibleStatuses: a volume in one of these cinder
@@ -21,10 +21,10 @@ func NewVolumeProvider() *VolumeProvider { return &VolumeProvider{} }
 
 func (p *VolumeProvider) Type() string { return cloud.TypeVolume }
 
-func (p *VolumeProvider) GetBillingInformation(_ context.Context, _ pricing.BillingContext, cr *cloud.CloudResource) ([]*pricing.BillingResource, error) {
+func (p *VolumeProvider) GetBillingInformation(_ context.Context, _ billingapi.BillingContext, cr *cloud.CloudResource) ([]*billingapi.BillingResource, error) {
 	vol, ok := mapAt(cr.Data, "volume")
 	if !ok {
-		return []*pricing.BillingResource{}, nil
+		return []*billingapi.BillingResource{}, nil
 	}
 	values := map[string]any{
 		"size":              vol["size"],
@@ -38,7 +38,7 @@ func (p *VolumeProvider) GetBillingInformation(_ context.Context, _ pricing.Bill
 		dn = fmt.Sprintf("volume-%vgb-%v", vol["size"], vol["volume_type"])
 	}
 	values["display_name"] = dn
-	return []*pricing.BillingResource{{
+	return []*billingapi.BillingResource{{
 		ResourceID:            cr.ID,
 		ProjectID:             cr.ProjectID,
 		ResourceType:          "volume",
@@ -48,10 +48,14 @@ func (p *VolumeProvider) GetBillingInformation(_ context.Context, _ pricing.Bill
 	}}, nil
 }
 
-func volumeType() *pricing.BillingResourceType {
-	num := func(n string) pricing.ResourceAttribute { return pricing.ResourceAttribute{Name: n, Type: "number"} }
-	s := func(n string) pricing.ResourceAttribute { return pricing.ResourceAttribute{Name: n, Type: "string"} }
-	return &pricing.BillingResourceType{ResourceType: "volume", Attributes: []pricing.ResourceAttribute{
+func volumeType() *billingapi.BillingResourceType {
+	num := func(n string) billingapi.ResourceAttribute {
+		return billingapi.ResourceAttribute{Name: n, Type: "number"}
+	}
+	s := func(n string) billingapi.ResourceAttribute {
+		return billingapi.ResourceAttribute{Name: n, Type: "string"}
+	}
+	return &billingapi.BillingResourceType{ResourceType: "volume", Attributes: []billingapi.ResourceAttribute{
 		num("size"), {Name: "bootable", Type: "boolean"}, s("type"), s("status"),
 		s("availability_zone"), s("display_name"),
 	}}

@@ -19,6 +19,7 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/adminapi"
 	"github.com/menlocloud/stratos/internal/platform/affiliate"
 	"github.com/menlocloud/stratos/internal/platform/billing"
+	"github.com/menlocloud/stratos/internal/platform/billingcallback"
 	"github.com/menlocloud/stratos/internal/platform/catalog"
 	"github.com/menlocloud/stratos/internal/platform/feature"
 	"github.com/menlocloud/stratos/internal/platform/job"
@@ -150,9 +151,13 @@ func AppRouter(log *slog.Logger, corsOrigins []string, authn *auth.Authenticator
 }
 
 // MgmtRouter serves Actuator-compatible health on :8081 + a build/debug probe.
-func MgmtRouter(h *health.Handler, cloudDebug http.HandlerFunc, jobsDebug map[string]http.HandlerFunc) http.Handler {
+func MgmtRouter(h *health.Handler, cloudDebug http.HandlerFunc, jobsDebug map[string]http.HandlerFunc, billingCB *billingcallback.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /actuator/health", h.Liveness)
+	// Callbacks the billing service invokes to make stratos suspend/resume clouds, activate
+	// projects or send mail. Mounted here rather than on the API port because they are
+	// service-to-service and can pause a customer's fleet; nil (no token configured) mounts nothing.
+	billingCB.Routes(mux)
 	// Read-only cloud connectivity probe (mgmt port; nil when cloud disabled).
 	if cloudDebug != nil {
 		mux.HandleFunc("GET /debug/cloud", cloudDebug)

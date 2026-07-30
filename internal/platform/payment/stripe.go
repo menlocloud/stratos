@@ -6,6 +6,7 @@ package payment
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	stripe "github.com/stripe/stripe-go/v82"
 	scl "github.com/stripe/stripe-go/v82/client"
@@ -101,10 +102,32 @@ func NewStripeGateway(secretKey string) *StripeGateway {
 	return &StripeGateway{sc: api}
 }
 
+// escapeSearchValue escapes a value for interpolation into a Stripe Search Query Language string
+// literal.
+//
+// Stripe's search grammar is SQL-like: clauses can be combined with AND/OR and can reference other
+// fields. A raw double quote in an interpolated value therefore closes the literal and everything
+// after it is parsed as query syntax, so an id like `x" OR metadata["k"]:"y` would silently widen
+// the search and can resolve the WRONG CUSTOMER — which this function then charges or credits.
+//
+// Every caller today passes a pgdoc-generated hex id, so nothing can currently reach it. But
+// BillingProfileID is a plain exported string with no validation at the type boundary, and "no
+// caller does that yet" is not a control. Backslash is escaped first so it cannot be used to
+// re-escape the quote we add.
+func escapeSearchValue(v string) string {
+	v = strings.ReplaceAll(v, `\`, `\\`)
+	return strings.ReplaceAll(v, `"`, `\"`)
+}
+
 // GetOrCreateCustomer finds a Customer by the billingProfileId
 // metadata, else create one with that metadata (so the lookup is idempotent).
 func (g *StripeGateway) GetOrCreateCustomer(_ context.Context, in CustomerInput) (string, error) {
-	q := fmt.Sprintf(`metadata["billingProfileId"]:"%s"`, in.BillingProfileID)
+	// Refuse an empty id outright: an empty search value matches broadly, and the customer we would
+	// then return belongs to somebody else.
+	if strings.TrimSpace(in.BillingProfileID) == "" {
+		return "", fmt.Errorf("stripe: refusing to look up a customer with an empty billingProfileId")
+	}
+	q := fmt.Sprintf(`metadata["billingProfileId"]:"%s"`, escapeSearchValue(in.BillingProfileID))
 	iter := g.sc.Customers.Search(&stripe.CustomerSearchParams{SearchParams: stripe.SearchParams{Query: q}})
 	for iter.Next() {
 		return iter.Customer().ID, nil

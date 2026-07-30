@@ -25,6 +25,10 @@ type ActivationService struct {
 	notifier Notifier       // nil-safe: suspension/resume customer emails
 	// activateProjects enables + bootstraps every non-ENABLED project of the profile with the
 	// owning org's memberships. Best-effort (per-project errors are swallowed).
+	//
+	// EXTRACTION SEAM: org/project ownership stays in stratos, so this becomes a billing→stratos
+	// callback (POST /internal/v1/billing-profiles/{id}/activate-projects). Already wire-ready:
+	// context-first, profile id only.
 	activateProjects func(ctx context.Context, bpID string) error
 	loginURL         string // ApplicationUrlHolder.getUiBaseUrl — the {{loginUrl}} mail var
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/menlocloud/stratos/internal/platform/org"
 	"github.com/menlocloud/stratos/internal/platform/pricing"
 	"github.com/menlocloud/stratos/internal/platform/project"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // Deps are the collaborators the charge driver needs. Registry maps a CloudResourceType to
@@ -149,7 +150,11 @@ func (s *Service) chargeBillingResource(
 		plans := pricing.SelectPricePlansForService(s.d.Pricing.PlanSource(ctx), planIDs, includePublic, es.ID)
 		rules := pricing.ApplicableRules(plans, s.d.Pricing.RuleSource(ctx), timeUnit)
 		adjust := s.billAdjuster(ctx, profile, plans, cycleStart, cycleEnd)
-		if _, err := pricing.ChargeBillingResources(ctx, s.d.Pricing, s.d.Engine, rc, bc, profile.ID, rules, resources, cycleStart, cycleEnd, cycleTimestamp, profile.Currency, adjust); err != nil {
+		// THE CHARGE SEAM: everything above is resolution (cloud cache → billable units, in the
+		// billingapi wire contract); everything below is rating (price them onto the bill). When
+		// billing moves out, resolution stays here and the wire resources are POSTed to the billing
+		// service, which performs exactly this FromAPIResources + ChargeBillingResources step.
+		if _, err := pricing.ChargeBillingResources(ctx, s.d.Pricing, s.d.Engine, rc, bc, profile.ID, rules, pricing.FromAPIResources(resources), cycleStart, cycleEnd, cycleTimestamp, profile.Currency, adjust); err != nil {
 			return err
 		}
 	}
@@ -169,7 +174,9 @@ func (s *Service) billAdjuster(ctx context.Context, profile *billing.BillingProf
 	if len(savings) == 0 && len(rules) == 0 {
 		return nil
 	}
-	catalog := billingresource.Catalog()
+	// The catalog is produced by the resolution side in the billingapi wire contract; the engine
+	// (rating side) takes its own types.
+	catalog := pricing.FromAPIResourceTypes(billingresource.Catalog())
 	return func(bill *pricing.Bill) {
 		s.d.Engine.ApplySavingsContractDiscounts(bill, savings, catalog)
 		s.d.Engine.ApplyPriceAdjustmentRules(bill, rules, catalog)
@@ -236,9 +243,9 @@ func (s *Service) activeProjectsWithServices(ctx context.Context, billingProfile
 // billingResources builds the billing resources (project-scoped): for each
 // project attached to the external service, dispatch its cloud resources through the
 // type→Provider registry into priced BillingResources.
-func (s *Service) billingResources(ctx context.Context, bc pricing.BillingContext, projects []project.Project, serviceID string) ([]*pricing.BillingResource, error) {
-	out := []*pricing.BillingResource{}
-	pbc := pricing.BillingContext{TimeUnitLimits: bc.TimeUnitLimits}
+func (s *Service) billingResources(ctx context.Context, bc pricing.BillingContext, projects []project.Project, serviceID string) ([]*billingapi.BillingResource, error) {
+	out := []*billingapi.BillingResource{}
+	pbc := pricing.ToAPIBillingContext(bc)
 	for i := range projects {
 		p := &projects[i]
 		if !p.HasService(serviceID) {

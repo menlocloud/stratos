@@ -189,6 +189,17 @@ The charge job reads the PostgreSQL **cache** (`cloudResource` + `gnocchiMetrics
 `pricePlan`), never live cloud — populating that cache is the separate sync +
 metrics jobs.
 
+### Which engine charges (native vs external)
+
+Everything in this document describes the **native** provider: the billing engine
+in this repository, which is the default and needs no external service.
+
+`STRATOS_BILLING_PROVIDER=external` changes exactly one step — the rating and
+accrual — by POSTing the resolved resources to a separate billing service instead
+of pricing them here. Resolution stays local because it reads the OpenStack
+resource cache. Under `external` the billing-only crons in section 14 are not
+scheduled here; the billing service owns them. See `docs/configuration.md`.
+
 ### In-process loop vs RabbitMQ fan-out
 
 By default the cron runs the charge loop **in-process** under a distributed lock.
@@ -718,9 +729,16 @@ runs each tick.
 
 ## 15. Config flags
 
+- **`STRATOS_BILLING_PROVIDER`** (`stratos.billing.provider`, default `native`) —
+  which engine charges bills. `native` is everything documented in this file,
+  running in-process against PostgreSQL. `external` delegates only the rating step
+  to a separate billing service (`STRATOS_BILLING_URL` + `STRATOS_BILLING_TOKEN`
+  become required); stratos still resolves what to bill. See
+  `internal/platform/billingprovider` and `docs/configuration.md`.
 - **`STRATOS_JOBS_RABBIT_FANOUT`** (`stratos.jobs.rabbit-fanout`, default off) —
-  route the charge cron through RabbitMQ (one message per active profile) instead
-  of the in-process loop.
+  fan the native charge cron out across pods via RabbitMQ (one message per active
+  profile) instead of charging every profile in one pod. Ignored by the external
+  provider.
 - **`billingConfiguration.baseCurrency`** — the product/base currency all bills
   accrue in.
 - **`billingConfiguration.settings.timeUnitLimits`** — per-time-unit charge caps

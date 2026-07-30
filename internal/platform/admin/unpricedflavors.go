@@ -70,7 +70,8 @@ func (h *Handler) unpricedFlavors(w http.ResponseWriter, r *http.Request) {
 	var instanceType *pricing.BillingResourceType
 	for _, t := range billingresource.Catalog() {
 		if t.ResourceType == "instance" {
-			instanceType = t
+			// Catalog speaks the billingapi wire contract; the engine wants its own type.
+			instanceType = pricing.FromAPIResourceType(t)
 			break
 		}
 	}
