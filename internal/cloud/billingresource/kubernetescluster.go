@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/menlocloud/stratos/internal/cloud"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 // KubernetesClusterProvider maps a KUBERNETES_CLUSTER → a "kubernetes_cluster" BillingResource:
@@ -17,7 +17,7 @@ func NewKubernetesClusterProvider() *KubernetesClusterProvider { return &Kuberne
 
 func (p *KubernetesClusterProvider) Type() string { return cloud.TypeKubernetesCluster }
 
-func (p *KubernetesClusterProvider) GetBillingInformation(_ context.Context, _ pricing.BillingContext, cr *cloud.CloudResource) ([]*pricing.BillingResource, error) {
+func (p *KubernetesClusterProvider) GetBillingInformation(_ context.Context, _ billingapi.BillingContext, cr *cloud.CloudResource) ([]*billingapi.BillingResource, error) {
 	values := map[string]any{}
 	notEligible := true
 	if c, ok := mapAt(cr.Data, "cluster"); ok {
@@ -35,7 +35,7 @@ func (p *KubernetesClusterProvider) GetBillingInformation(_ context.Context, _ p
 		values["endpoint"] = endpoint
 		notEligible = endpoint == ""
 	}
-	return []*pricing.BillingResource{{
+	return []*billingapi.BillingResource{{
 		ResourceID:            cr.ID,
 		ProjectID:             cr.ProjectID,
 		ResourceType:          "kubernetes_cluster",
@@ -45,10 +45,10 @@ func (p *KubernetesClusterProvider) GetBillingInformation(_ context.Context, _ p
 	}}, nil
 }
 
-func kubernetesClusterType() *pricing.BillingResourceType {
-	s := func(n string) pricing.ResourceAttribute { return pricing.ResourceAttribute{Name: n, Type: "string"} }
-	n := func(nm string) pricing.ResourceAttribute { return pricing.ResourceAttribute{Name: nm, Type: "number"} }
-	return &pricing.BillingResourceType{ResourceType: "kubernetes_cluster", Attributes: []pricing.ResourceAttribute{
+func kubernetesClusterType() *billingapi.BillingResourceType {
+	s := func(n string) billingapi.ResourceAttribute { return billingapi.ResourceAttribute{Name: n, Type: "string"} }
+	n := func(nm string) billingapi.ResourceAttribute { return billingapi.ResourceAttribute{Name: nm, Type: "number"} }
+	return &billingapi.BillingResourceType{ResourceType: "kubernetes_cluster", Attributes: []billingapi.ResourceAttribute{
 		s("display_name"), s("version"), s("status"), s("endpoint"), n("cp_replicas"), n("node_groups"),
 	}}
 }

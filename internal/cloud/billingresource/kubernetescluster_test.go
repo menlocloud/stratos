@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/menlocloud/stratos/internal/cloud"
-	"github.com/menlocloud/stratos/internal/platform/pricing"
+	"github.com/menlocloud/stratos/pkg/billingapi"
 )
 
 func TestKubernetesClusterBilling(t *testing.T) {
@@ -18,7 +18,7 @@ func TestKubernetesClusterBilling(t *testing.T) {
 			"node_groups": []any{map[string]any{"name": "w"}},
 		}},
 	}
-	brs, err := p.GetBillingInformation(context.Background(), pricing.BillingContext{}, cr)
+	brs, err := p.GetBillingInformation(context.Background(), billingapi.BillingContext{}, cr)
 	if err != nil || len(brs) != 1 {
 		t.Fatalf("brs = %v, %v", brs, err)
 	}
@@ -32,7 +32,7 @@ func TestKubernetesClusterBilling(t *testing.T) {
 
 	// Still provisioning (no endpoint yet) → not billed.
 	cr.Data = map[string]any{"cluster": map[string]any{"name": "new", "status": "PENDING"}}
-	brs, _ = p.GetBillingInformation(context.Background(), pricing.BillingContext{}, cr)
+	brs, _ = p.GetBillingInformation(context.Background(), billingapi.BillingContext{}, cr)
 	if !brs[0].NotEligibleForBilling {
 		t.Error("provisioning cluster must not bill")
 	}
