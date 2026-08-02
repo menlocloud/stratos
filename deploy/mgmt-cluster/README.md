@@ -5,8 +5,7 @@ the Kamaji operator + cluster-api-operator/CAPO — infra-ops `kamaji-cluster-az
 equivalent). Stratos does not apply these itself: they create the identity and guardrails
 stratos then operates *within*.
 
-Full operator runbook: [`docs/managed-k8s.md`](../../docs/managed-k8s.md). Design source:
-`tasks/managed-k8s-plan.md`.
+Full operator runbook: [`docs/managed-k8s.md`](../../docs/managed-k8s.md).
 
 ## Prerequisites
 

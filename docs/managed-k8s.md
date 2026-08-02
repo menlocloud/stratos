@@ -1,8 +1,8 @@
 # Managed Kubernetes (kamaji provider) — operator runbook
 
 How to stand up, operate and debug the `kamaji` managed-Kubernetes provider. This is the
-operational companion to the design doc — **`tasks/managed-k8s-plan.md` stays the design
-source**; section references (§) below point into it. Release posture is **internal-first**
+operational companion to the internal design plan (kept out of this repo); section
+references (§) below point into it. Release posture is **internal-first**
 (plan §3.5): we run this ourselves, hardened by these procedures, before customer exposure.
 
 > ## Chart contract: VERIFIED BY RENDER — runtime semantics still need the drill

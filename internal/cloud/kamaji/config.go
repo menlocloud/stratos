@@ -3,7 +3,7 @@
 // registry, pinned targetRevision + full generated values), applied through the management
 // cluster's own API (the Application CRD — no ArgoCD API/auth involved). ArgoCD renders,
 // syncs and health-checks; stratos reads status back off the Application + the Kamaji
-// TenantControlPlane + CAPI MachineDeployments. See tasks/managed-k8s-plan.md (D3/D7/§9).
+// TenantControlPlane + CAPI MachineDeployments.
 package kamaji
 
 import (

@@ -506,7 +506,7 @@ of panicking). It carries up to two S3/admin clients:
   (`internal/cloud/cephcred`), kept **off** the project document (which is serialized to the
   client, so the secret would leak).
 
-Admin Ops quirks that only a live cluster surfaced (see `tasks/lessons.md`): every request needs
+Admin Ops quirks that only a live cluster surfaced: every request needs
 an explicit `X-Amz-Content-Sha256` header; the query must be sorted (SigV4 canonicalization);
 `PUT /admin/user?key` returns a **bare array**; `max-buckets=-1` **forbids** a user from creating
 buckets (the opposite of the usual convention).
@@ -564,7 +564,7 @@ website toggle and per-key grants never clobber each other or a customer's own s
 
 **Not built** (blocked by infra, not code): server-side encryption (needs a KMS/Vault backend —
 `PutBucketEncryption` returns 200 but then bricks writes without one), cross-zone replication
-(single-zone cluster), MFA delete. See `tasks/ceph-s3-object-storage-plan.md` §10.
+(single-zone cluster), MFA delete.
 
 ---
 
@@ -594,7 +594,6 @@ Operational documentation lives elsewhere — this section is just the pointer:
   troubleshooting): [`docs/managed-k8s.md`](managed-k8s.md)
 - **Management-cluster manifests** (stratos RBAC, AppProject guardrail, ArgoCD health
   checks): `deploy/mgmt-cluster/`
-- **Design source**: `tasks/managed-k8s-plan.md`
 
 ---
 

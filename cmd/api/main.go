@@ -251,7 +251,7 @@ func run() error {
 	cephCredRepo := cephcred.New(pg, enc)
 	projectH.SetCephCreds(cephCredRepo, cephcred.NewKeyRepo(pg, enc))
 	// Kamaji Managed Kubernetes — enables kamaji provisioning + the KUBERNETES_CLUSTER write
-	// surface (Application CRs on the provider's management cluster; tasks/managed-k8s-plan.md).
+	// surface (Application CRs on the provider's management cluster).
 	projectH.SetKamaji(func(es *externalservice.ExternalService) (*kamaji.Service, error) {
 		return kamaji.New(es.KamajiConfig(), es.ID)
 	})
