@@ -655,8 +655,13 @@ addons:
           certgen:
             image:
               repository: "registry.menlo.ai/quay-io/cilium/certgen"
+          # Hubble flow observability is on for every cluster: the per-node
+          # Hubble server plus the relay aggregation endpoint (what the
+          # `hubble`/`cilium` CLIs and the UI talk to). The UI stays opt-in.
           hubble:
+            enabled: true
             relay:
+              enabled: true
               image:
                 repository: "registry.menlo.ai/quay-io/cilium/hubble-relay"
             ui:

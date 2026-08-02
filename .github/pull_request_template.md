@@ -19,7 +19,7 @@
 - [ ] `gofmt` clean and `go vet ./...` passes
 - [ ] `go test ./...` passes (and `make test-integration` if behavior needs it)
 - [ ] For UI changes: `npm run lint` and `npm run build` pass in the affected `web/*` app
-- [ ] For chart changes under `deploy/chart/**`: bumped `Chart.yaml` `version`
+- [ ] For chart changes under `deploy/charts/stratos/**`: bumped `Chart.yaml` `version`
 - [ ] Updated docs / `CHANGELOG.md` where relevant
 - [ ] No secrets or environment-specific values committed
 

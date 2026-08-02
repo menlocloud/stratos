@@ -49,7 +49,7 @@ api:
   # set a strong random value (e.g. `openssl rand -hex 32`) or point api.existingSecret at a
   # pre-made Secret. A chart-managed install with this empty FAILS by design (a known key would
   # let anyone decrypt/forge stored secrets). For a throwaway local dev install use
-  # `-f deploy/chart/values-dev.yaml`.
+  # `-f deploy/charts/stratos/values-dev.yaml`.
   encryptionKey: ""
 
   # Name of a pre-created Secret that replaces the chart-managed one.

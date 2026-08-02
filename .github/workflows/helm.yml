@@ -1,6 +1,6 @@
 name: helm
 
-# Chart release for deploy/chart — tag-driven, unified with the image tags:
+# Chart release for deploy/charts/stratos — tag-driven, unified with the image tags:
 #   - PR (chart paths): lint + template only.
 #   - push tag v*:      package the chart at that version (v0.1.2 -> 0.1.2) and
 #                       push to oci://ghcr.io/<owner>/charts. Idempotent: skips
@@ -17,11 +17,10 @@ on:
     branches:
       - main
     paths:
-      - 'deploy/chart/**'
       - 'deploy/charts/**'
 
 env:
-  CHART_DIR: deploy/chart
+  CHART_DIR: deploy/charts/stratos
   CHART_NAME: stratos
   OCI_REPO: oci://ghcr.io/${{ github.repository_owner }}/charts
   # The Managed Kubernetes cluster chart (deploy/charts) is versioned by its own Chart.yaml, not by

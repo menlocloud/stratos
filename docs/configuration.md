@@ -2,7 +2,7 @@
 
 How the Stratos API (`stratos-api`) is configured, for contributors and operators.
 The source of truth is `internal/config/config.go` (plus a few subsystems that read
-their own env, noted below). Deployment wiring lives in `deploy/chart`.
+their own env, noted below). Deployment wiring lives in `deploy/charts/stratos`.
 
 ## Sources and precedence
 
@@ -17,7 +17,7 @@ Configuration is a **config file overlaid by environment variables**, and
 
 The Helm chart mounts a rendered `application.yml` (from `values.yaml`) at the
 default path and injects the secret/connection env vars into the pod
-(`deploy/chart/templates/api/configmap.yaml` and `deploy/chart/templates/api/deployment.yaml`).
+(`deploy/charts/stratos/templates/api/configmap.yaml` and `deploy/charts/stratos/templates/api/deployment.yaml`).
 
 Required config is validated at startup (`Config.Validate`): the service refuses
 to start without `STRATOS_DB_URL` and a RabbitMQ host.
@@ -174,7 +174,7 @@ service uses a no-op mailer and gated email side-effects silently do nothing.
 
 Set these in Helm via the first-class `api.mail.smtp.*` block (plus `api.mail.from`),
 which the chart injects into the pod as the `STRATOS_MAIL_*` env vars above
-(see `deploy/chart/templates/api/deployment.yaml`). Mail is env-only — nothing
+(see `deploy/charts/stratos/templates/api/deployment.yaml`). Mail is env-only — nothing
 renders into `application.yml`.
 
 ### Feature set
@@ -198,6 +198,6 @@ Toggle the bundled component off and fill in the matching `external*` block:
 | Keycloak (OIDC) | `keycloakx.enabled` (codecentric/keycloakx) | set `auth.main.issuer` / `auth.admin.issuer` (+ `auth.adminApi.issuer`) to the external issuer |
 
 For the deployment side — ingress, TLS, Gateway API routes, secrets wiring, and the
-external-IdP checklist — see `deploy/chart/README.md` and
-`deploy/chart/values.yaml` (a minimal starting point is in
+external-IdP checklist — see `deploy/charts/stratos/README.md` and
+`deploy/charts/stratos/values.yaml` (a minimal starting point is in
 `values-dev.yaml`).
