@@ -40,4 +40,14 @@ func TestSchedulerRunLocked(t *testing.T) {
 	if ran, _ := s.RunLocked(ctx, "sendBill", 5*time.Minute, 0, now.Add(10*time.Minute), fn); !ran || runs != 2 {
 		t.Fatalf("expected independent job to run: ran=%v runs=%d", ran, runs)
 	}
+
+	// a PANICKING job is contained by RunLocked (an unguarded panic in a cron fn crashes the
+	// whole API pod — the prod midnight-bill outage) and still releases its lock.
+	boom := func(context.Context) { panic("poison doc") }
+	if ran, err := s.RunLocked(ctx, "monthlyBill", 5*time.Minute, 0, now, boom); err != nil || !ran {
+		t.Fatalf("expected panicking job to be contained: ran=%v err=%v", ran, err)
+	}
+	if ran, err := s.RunLocked(ctx, "monthlyBill", 5*time.Minute, 0, now.Add(time.Second), fn); err != nil || !ran || runs != 3 {
+		t.Fatalf("expected lock released after panic: ran=%v runs=%d err=%v", ran, runs, err)
+	}
 }

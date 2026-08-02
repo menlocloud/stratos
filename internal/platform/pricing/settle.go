@@ -133,14 +133,18 @@ func SettleBillAmount(bill *Bill, amount decimal.Decimal, promoCredits []*Promot
 // AppliedAccountCredit per settlement (invoiceAmount = scaleHalfUp(invoiceExchangeRate
 // × settled); grossAmount = tax(invoiceAmount); amount = scaleHalfUp(settled)) and
 // decrements the running gross by the RAW settled. Returns the leftover gross.
-// Precondition: a settled credit's InvoiceExchangeRate is non-nil (a nil rate panics otherwise).
+// A nil InvoiceExchangeRate defaults to 1: some stored credits lack the field, and a settleable
+// credit already passed the same-currency identity exchange above, where the rate is exactly 1.
 func settleAccountCreditLeg(bill *Bill, accountCredits []*AccountCredit, grossDiff decimal.Decimal, taxRates []TaxRate, baseCurrency string, x *Exchanger, now time.Time) (decimal.Decimal, []AccountCreditSettlement, error) {
 	settlements, err := SettleAccountCredits(accountCredits, grossDiff, baseCurrency, x, now)
 	if err != nil {
 		return decimal.Zero, nil, err
 	}
 	for _, s := range settlements {
-		invRate := *s.AccountCredit.InvoiceExchangeRate
+		invRate := dOne
+		if s.AccountCredit.InvoiceExchangeRate != nil {
+			invRate = *s.AccountCredit.InvoiceExchangeRate
+		}
 		invoiceAmount := scaleHalfUp(invRate.Mul(s.Settled))
 		gross := CalculateGrossAmount(invoiceAmount, taxRates)
 		amt := scaleHalfUp(s.Settled)

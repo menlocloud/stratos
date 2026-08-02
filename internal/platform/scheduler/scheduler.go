@@ -5,6 +5,8 @@ package scheduler
 
 import (
 	"context"
+	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -86,12 +88,26 @@ func (s *Scheduler) Stop()  { s.c.Stop() }
 // RunLocked acquires the job's distributed lock, runs fn iff acquired, then releases honouring
 // atLeastFor. Returns whether fn ran. Exposed (with an injected `now`) so the lock guard is
 // deterministically testable without the cron clock.
+//
+// fn runs panic-guarded: a panicking job must not take down the process (robfig/cron
+// does not recover, so an unguarded panic in any job crashes the whole API pod) — it is
+// logged with its stack and the lock is still released.
 func (s *Scheduler) RunLocked(ctx context.Context, name string, atMostFor, atLeastFor time.Duration, now time.Time, fn func(ctx context.Context)) (bool, error) {
 	ok, err := s.lock.Lock(ctx, name, atMostFor, now)
 	if err != nil || !ok {
 		return false, err
 	}
 	defer func() { _ = s.lock.Unlock(ctx, name, atLeastFor, now, time.Now().UTC()) }()
-	fn(ctx)
+	runRecovered(ctx, name, fn)
 	return true, nil
+}
+
+// runRecovered runs fn, converting a panic into an error log (job name + stack).
+func runRecovered(ctx context.Context, name string, fn func(ctx context.Context)) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("scheduled job panic", "job", name, "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	fn(ctx)
 }
