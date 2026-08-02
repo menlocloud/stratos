@@ -30,6 +30,7 @@ type K8sAPI interface {
 	ListApplications(ctx context.Context, ns, labelSelector string) ([]map[string]any, error)
 	DeleteApplication(ctx context.Context, ns, name string) error
 	GetService(ctx context.Context, ns, name string) (map[string]any, error)
+	GetVPA(ctx context.Context, ns, name string) (map[string]any, error)
 }
 
 // defaultFinalizeGrace: a net-share marker secret younger than this is never treated as an

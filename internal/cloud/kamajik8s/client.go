@@ -24,6 +24,7 @@ const (
 	pathSecrets             = "/api/v1/namespaces/%s/secrets"
 	pathServices            = "/api/v1/namespaces/%s/services"
 	pathNetworkPolicies     = "/apis/networking.k8s.io/v1/namespaces/%s/networkpolicies"
+	pathVPAs                = "/apis/autoscaling.k8s.io/v1/namespaces/%s/verticalpodautoscalers"
 	pathNamespaces          = "/api/v1/namespaces"
 	fieldManager            = "stratos"
 )
@@ -304,6 +305,14 @@ func (c *Client) DeleteApplication(ctx context.Context, ns, name string) error {
 // the Octavia VIP back off .status.loadBalancer.ingress of chart-rendered LoadBalancer Services.
 func (c *Client) GetService(ctx context.Context, ns, name string) (map[string]any, error) {
 	return c.get(ctx, fmt.Sprintf(pathServices, ns), name)
+}
+
+// GetVPA returns an autoscaling.k8s.io/v1 VerticalPodAutoscaler, or nil when absent (also nil
+// when the VPA CRD is not installed — the 404 shape is identical). Read-only: the dbaas
+// autoscale tick consumes .status.recommendation; the VPA runs in updateMode Off and never
+// mutates pods itself.
+func (c *Client) GetVPA(ctx context.Context, ns, name string) (map[string]any, error) {
+	return c.get(ctx, fmt.Sprintf(pathVPAs, ns), name)
 }
 
 // GetTenantControlPlane returns the Kamaji TCP, or nil when absent.

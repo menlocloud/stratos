@@ -431,6 +431,18 @@
       "modifiers": []
     },
     {
+      "name": "Managed Database: autoscale surcharge (per database while enabled)",
+      "timeUnit": "hour",
+      "resourceType": "database_cluster",
+      "pricePlanId": "<PLAN_ID>",
+      "applyMethod": "ADD_TO_TOTAL",
+      "prices": [
+        { "attributeName": "autoscale_enabled", "tiers": [{ "value": "0.0137" }] }
+      ],
+      "filters": [],
+      "modifiers": []
+    },
+    {
       "name": "Managed Database: OpenSearch (DigitalOcean-parity)",
       "timeUnit": "hour",
       "resourceType": "database_cluster",

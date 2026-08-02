@@ -122,6 +122,16 @@ func databaseDataWithHost(app map[string]any, host string) map[string]any {
 	if sc := digStr(values, "storage", "storageClassName"); sc != "" {
 		d["storage_class"] = sc
 	}
+	// Autoscale opt-in: 1/0 as a JSON number — the billing surcharge attribute keys on it.
+	if enabled, _ := dig(values, "autoscale", "enabled").(bool); enabled {
+		d["autoscale_enabled"] = 1
+		auto, _ := values["autoscale"].(map[string]any)
+		d["autoscale_max_cpu"] = intAt(auto, "maxCpu")
+		d["autoscale_max_memory_gib"] = intAt(auto, "maxMemoryGi")
+		d["autoscale_max_storage_gib"] = intAt(auto, "maxStorageGi")
+	} else {
+		d["autoscale_enabled"] = 0
+	}
 	if cidrs, ok := dig(values, "network", "allowedCidrs").([]any); ok && len(cidrs) > 0 {
 		d["allowed_cidrs"] = cidrs
 	}

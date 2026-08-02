@@ -33,6 +33,9 @@ func (p *DatabaseClusterProvider) GetBillingInformation(_ context.Context, _ bil
 		values["vcpus_total"] = num(d["cpu"]) * replicas
 		values["ram_gb_total"] = num(d["memory_gib"]) * replicas
 		values["storage_gb_total"] = num(d["storage_gib"]) * replicas
+		// Autoscale surcharge flag (1/0): a flat per-database fee while enabled. The scaled-up
+		// capacity itself bills through the totals above — the tick raises the declared size.
+		values["autoscale_enabled"] = num(d["autoscale_enabled"])
 		// Gate on the tenant-side endpoint (the Octavia VIP): while it is absent the charge is
 		// DEFERRED, not waived — the pricing engine freezes the bill-item watermark at
 		// createdAt and, once the endpoint appears, back-bills the elapsed hours of the current
@@ -58,7 +61,7 @@ func databaseClusterType() *billingapi.BillingResourceType {
 	n := func(nm string) billingapi.ResourceAttribute { return billingapi.ResourceAttribute{Name: nm, Type: "number"} }
 	return &billingapi.BillingResourceType{ResourceType: "database_cluster", Attributes: []billingapi.ResourceAttribute{
 		s("display_name"), s("engine"), s("version"), s("status"), s("endpoint"),
-		n("replicas"), n("vcpus_total"), n("ram_gb_total"), n("storage_gb_total"),
+		n("replicas"), n("vcpus_total"), n("ram_gb_total"), n("storage_gb_total"), n("autoscale_enabled"),
 	}}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/dbaas"
 	"github.com/menlocloud/stratos/internal/cloud/kamaji"
+	"github.com/menlocloud/stratos/internal/cloud/metrics"
 	"github.com/menlocloud/stratos/internal/cloud/providers"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
 	"github.com/menlocloud/stratos/internal/platform/project"
@@ -337,6 +338,23 @@ func (j *Job) syncDbaasService(ctx context.Context, p *project.Project, es *exte
 	st, err := providers.Reconcile(ctx, ds.SyncProvider(region, p.ID), j.cloud, es.ID, j.now())
 	if err != nil {
 		j.log.Error("syncjob: reconcile dbaas databases", "project", p.ID, "serviceId", es.ID, "region", region, "err", err)
+	}
+	// Autoscale tick rides the same cadence: VPA recommendation (brain) → bounded values patch
+	// (hand) — declared size moves, so billing follows automatically. Disk leg only when the
+	// provider carries a Prometheus metrics config (kubelet volume-stats fill ratios).
+	var diskUsage dbaas.DiskUsageFunc
+	if es.MetricsSource() == externalservice.MetricsSourcePrometheus {
+		if prom, perr := metrics.NewPrometheus(es.PrometheusMetricsConfig()); perr == nil {
+			diskUsage = func(ctx context.Context, ns string) (map[string]float64, error) {
+				q := fmt.Sprintf(`max by (persistentvolumeclaim) (kubelet_volume_stats_used_bytes{namespace=%q} / kubelet_volume_stats_capacity_bytes{namespace=%q})`, ns, ns)
+				return prom.InstantValues(ctx, q, "persistentvolumeclaim")
+			}
+		} else {
+			j.log.Warn("syncjob: dbaas prometheus client", "serviceId", es.ID, "err", perr)
+		}
+	}
+	if bumped, aerr := ds.AutoscaleTick(ctx, p.ID, diskUsage); aerr != nil {
+		j.log.Warn("syncjob: dbaas autoscale tick", "project", p.ID, "serviceId", es.ID, "bumped", bumped, "err", aerr)
 	}
 	return st.Created + st.Updated
 }

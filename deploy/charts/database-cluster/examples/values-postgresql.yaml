@@ -32,3 +32,10 @@ postgresql:
     shared_buffers: 1GB
   superuserAccess: false
 restartedAt: ""
+# Exercises templates/autoscale/vpa.yaml in CI — the other examples leave the
+# block absent (renders nothing), matching a real pre-opt-in values document.
+autoscale:
+  enabled: true
+  maxCpu: 4
+  maxMemoryGi: 8
+  maxStorageGi: 100

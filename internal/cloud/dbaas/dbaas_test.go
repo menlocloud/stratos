@@ -24,6 +24,7 @@ type fakeAPI struct {
 	netpols     map[string]map[string]any
 	apps        map[string]map[string]any // key ns/name
 	services    map[string]map[string]any // key ns/name
+	vpas        map[string]map[string]any // key ns/name
 	ops         []string
 	failApply   bool
 	failDelete  map[string]bool // secret names whose DeleteSecret fails
@@ -38,6 +39,7 @@ func newFakeAPI() *fakeAPI {
 		netpols:     map[string]map[string]any{},
 		apps:        map[string]map[string]any{},
 		services:    map[string]map[string]any{},
+		vpas:        map[string]map[string]any{},
 		failDelete:  map[string]bool{},
 	}
 }
@@ -181,6 +183,10 @@ func (f *fakeAPI) DeleteApplication(_ context.Context, ns, name string) error {
 }
 func (f *fakeAPI) GetService(_ context.Context, ns, name string) (map[string]any, error) {
 	return f.services[key(ns, name)], nil
+}
+
+func (f *fakeAPI) GetVPA(_ context.Context, ns, name string) (map[string]any, error) {
+	return f.vpas[key(ns, name)], nil
 }
 
 // matchesSelector honours the label selectors the Service actually uses (k=v comma lists).

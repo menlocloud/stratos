@@ -118,6 +118,26 @@ backup:
 # annotation). Empty = never restarted.
 restartedAt: ""
 
+# -- Vertical autoscale, stamped by the SET_AUTOSCALE action (absent in real
+# values documents until the customer opts in; enabled:false here so the bare
+# default renders nothing). When enabled the chart renders ONLY a
+# VerticalPodAutoscaler in updateMode "Off" (templates/autoscale/vpa.yaml) —
+# recommendation-only, it must NEVER evict database pods itself. Stratos is
+# the actuator: each autoscale tick reads .status.recommendation off the VPA,
+# clamps it into the max* ceilings below and applies the scale-up through this
+# very values document (resources/storage), so the operator performs its own
+# safe rolling change. Grow-only; the max* keys are the customer's ceilings.
+autoscale:
+  enabled: false
+  # -- Ceiling for resources.cpu (whole vCPUs).
+  maxCpu: 0
+  # -- Ceiling for resources.memoryGi.
+  maxMemoryGi: 0
+  # -- Ceiling for storage.sizeGi. 0 = disk leg off (also implied for engines
+  # without RESIZE_STORAGE: valkey, opensearch). Read by the stratos tick
+  # only, never by a template.
+  maxStorageGi: 0
+
 # =============================================================================
 # Per-engine sub-blocks. Only the block matching `engine` is read.
 # =============================================================================

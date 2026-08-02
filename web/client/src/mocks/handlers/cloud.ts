@@ -177,6 +177,13 @@ on("POST /project/:pid/cloud/:resourceId/action", ({ params, opts }) => {
       case "SCALE_REPLICAS": d.replicas = data?.replicas; return ok()
       case "SET_ALLOWED_CIDRS": d.allowed_cidrs = data?.allowedCidrs ?? []; return ok()
       case "SET_SSO": d.status = "UPDATING"; return ok("UPDATING")
+      case "SET_AUTOSCALE":
+        d.autoscale_enabled = data?.enabled ? 1 : 0
+        d.autoscale_max_cpu = data?.maxCpu ?? 0
+        d.autoscale_max_memory_gib = data?.maxMemoryGiB ?? 0
+        d.autoscale_max_storage_gib = data?.maxStorageGiB ?? 0
+        d.status = "UPDATING"
+        return ok("UPDATING")
       case "RESTART": return ok()
     }
   }

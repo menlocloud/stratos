@@ -94,6 +94,13 @@ rules:
   - apiGroups: ["kafka.strimzi.io"]
     resources: ["kafkas", "kafkanodepools", "kafkausers"]
     verbs: ["get", "list"]
+  # Recommendation read for the autoscale tick (internal/cloud/dbaas/autoscale.go): stratos
+  # reads .status.recommendation off the chart-rendered <id>-vpa (updateMode Off) and applies
+  # the bounded scale-up itself via the values patch. Read-only — the chart (via ArgoCD) owns
+  # the VPA object.
+  - apiGroups: ["autoscaling.k8s.io"]
+    resources: ["verticalpodautoscalers"]
+    verbs: ["get", "list"]
   # opensearch-k8s-operator 3.0.2 (opensearch engine). BOTH api groups granted:
   # 3.x serves opensearch.opster.io (deprecated, what the chart renders) AND
   # its successor opensearch.org — granting both keeps status reads working

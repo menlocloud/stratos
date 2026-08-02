@@ -179,6 +179,24 @@ never changes it; the "flip to the new write node" happens INSIDE the cluster, b
 Clients see a few seconds of connection resets during a failover, reconnect to the SAME
 host:port, and land on the new primary. No floating-IP dance, no DNS TTL.
 
+## Vertical autoscale (opt-in, surcharge-priced)
+
+`SET_AUTOSCALE {enabled, maxCpu, maxMemoryGiB, maxStorageGiB}` — available on every engine.
+Design: **the VPA is the brain, stratos is the hand**. The chart renders a
+VerticalPodAutoscaler in `updateMode: Off` (recommendation only — a VPA that evicts database
+pods on its own schedule is a data-safety hazard); each sync cycle stratos reads the
+recommendation, clamps it into the customer's ceilings and applies it through the SAME values
+patch RESIZE uses, so the operator performs its own safe rolling change. Disk rides the same
+tick: when any of the database's PVCs passes 80% full (kubelet volume-stats via the provider's
+Prometheus metrics config), the volume grows 20% (grow-only), up to `maxStorageGiB`.
+
+Scale-UP only by design — automatic shrink flaps and is where databases lose caches; scaling
+down stays a deliberate customer RESIZE. Billing: the scaled-to size bills through the normal
+declared-size totals (the tick raises the declared values), plus a flat surcharge
+(`autoscale_enabled`, $0.0137/h ≈ $10/mo per database) while enabled. Prerequisites on the DB
+cluster: the VPA recommender, and Prometheus metrics config on the provider for the disk leg —
+see `deploy/dbaas-cluster/README.md`.
+
 ## Chart pin / platform update
 
 Databases keep their chart pin when the provider's `chartVersion` moves. Operator override:

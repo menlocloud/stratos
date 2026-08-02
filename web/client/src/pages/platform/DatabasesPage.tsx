@@ -4,7 +4,7 @@
 // runs on platform-owned infrastructure — only the tenant network for the private endpoint is
 // the customer's. Actions map to Go cloud_dbaas.go: create/delete + GET_CONNECTION_INFO /
 // RESIZE / RESIZE_STORAGE / SCALE_REPLICAS / RESTART / RESET_PASSWORD / SET_ALLOWED_CIDRS /
-// UPGRADE.
+// UPGRADE / SET_AUTOSCALE.
 import { useCallback, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -30,6 +30,7 @@ import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { apiFetch, type CloudScope } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useLocations, useProjectId, useProjectServices } from "@/lib/hooks"
@@ -442,7 +443,7 @@ export function DatabaseClusterDetailPage() {
   const pid = useProjectId()
   const navigate = useNavigate()
   const { resourceId = "" } = useParams()
-  const { clusters, enginesFor, platformVersionFor, rowServiceId, rowScope, invalidate, patchDatabase } =
+  const { clusters, serviceFor, enginesFor, platformVersionFor, rowServiceId, rowScope, invalidate, patchDatabase } =
     useDatabasesData(pid)
   const resource = (clusters.data ?? []).find((r) => r.id === resourceId)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -503,6 +504,7 @@ export function DatabaseClusterDetailPage() {
           scope={rowScope(resource)}
           resource={resource}
           engines={enginesFor(rowServiceId(resource))}
+          limits={serviceFor(rowServiceId(resource))?.databaseLimits}
           platformVersion={platformVersionFor(rowServiceId(resource))}
           onDeleted={() => setDeleteOpen(true)}
           onPatch={(patch) => patchDatabase(resource.id, patch)}
@@ -885,12 +887,13 @@ type ConnectionInfo = {
 }
 
 function DatabaseDetail({
-  pid, scope, resource, engines, platformVersion, onDeleted, onPatch,
+  pid, scope, resource, engines, limits, platformVersion, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
   resource: CloudResource
   engines: Record<string, DatabaseEngineOffer>
+  limits?: DatabaseLimits
   platformVersion: string
   onDeleted: () => void
   // Optimistically applies a partial data.database patch to the cached row — called after
@@ -912,6 +915,7 @@ function DatabaseDetail({
   const [resetOpen, setResetOpen] = useState(false)
   const [cidrsOpen, setCidrsOpen] = useState(false)
   const [ssoOpen, setSsoOpen] = useState(false)
+  const [autoscaleOpen, setAutoscaleOpen] = useState(false)
   // RESET_PASSWORD's result is shown exactly once and never stored anywhere else.
   const [newPassword, setNewPassword] = useState<string | null>(null)
 
@@ -961,7 +965,10 @@ function DatabaseDetail({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-lg border bg-card p-3">
             <div className="text-xs text-muted-foreground">Status</div>
-            <StatusBadge status={(d.status as string) || undefined} />
+            <div className="flex items-center gap-1.5">
+              <StatusBadge status={(d.status as string) || undefined} />
+              {Number(d.autoscale_enabled) === 1 && <Badge variant="outline">Autoscale</Badge>}
+            </div>
           </div>
           <div className="rounded-lg border bg-card p-3">
             <div className="text-xs text-muted-foreground">Engine</div>
@@ -1023,6 +1030,7 @@ function DatabaseDetail({
             <Button size="sm" variant="outline" onClick={() => setStorageOpen(true)}>Resize storage</Button>
           )}
           <Button size="sm" variant="outline" onClick={() => setReplicasOpen(true)}>Scale replicas</Button>
+          <Button size="sm" variant="outline" onClick={() => setAutoscaleOpen(true)}>Autoscale</Button>
           {supports(engine, "UPGRADE") && (
             <Button size="sm" variant="outline" onClick={() => setUpgradeOpen(true)}>Upgrade version</Button>
           )}
@@ -1113,6 +1121,27 @@ function DatabaseDetail({
             onPatch({ replicas, status: "PROGRESSING" })
             toast.success("Replica change started")
             setReplicasOpen(false)
+          }}
+        />
+      )}
+
+      {autoscaleOpen && (
+        <AutoscaleDialog
+          engine={engine}
+          d={d}
+          limits={limits}
+          onClose={() => setAutoscaleOpen(false)}
+          onSubmit={async (data) => {
+            await act("SET_AUTOSCALE", data)
+            onPatch({
+              status: "UPDATING",
+              autoscale_enabled: data.enabled ? 1 : 0,
+              autoscale_max_cpu: data.maxCpu,
+              autoscale_max_memory_gib: data.maxMemoryGiB,
+              autoscale_max_storage_gib: data.maxStorageGiB,
+            })
+            toast.success(data.enabled ? "Autoscale enabled" : "Autoscale disabled")
+            setAutoscaleOpen(false)
           }}
         />
       )}
@@ -1502,6 +1531,127 @@ function CidrsDialog({
                 .finally(() => setPending(false))
             }}
             disabled={pending}
+          >
+            {pending ? "Applying…" : "Apply"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// All engines — opt-in vertical autoscale (SET_AUTOSCALE) with customer-set ceilings.
+// Ceilings sit in [current size, provider databaseLimits]; the disk leg only exists where
+// RESIZE_STORAGE does (valkey/opensearch hide it), and 0/empty storage = disk leg off.
+function AutoscaleDialog({
+  engine, d, limits, onClose, onSubmit,
+}: {
+  engine: string
+  d: Db
+  limits?: DatabaseLimits
+  onClose: () => void
+  onSubmit: (data: { enabled: boolean; maxCpu: number; maxMemoryGiB: number; maxStorageGiB: number }) => Promise<void>
+}) {
+  const curCpu = Number(d.cpu) || 1
+  const curMemory = Number(d.memory_gib) || 1
+  const curStorage = Number(d.storage_gib) || 0
+  const capCpu = limits?.maxCpu || 0
+  const capMemory = limits?.maxMemoryGiB || 0
+  const capStorage = limits?.maxStorageGiB || 0
+  const hasDisk = supports(engine, "RESIZE_STORAGE")
+
+  const [enabled, setEnabled] = useState(Number(d.autoscale_enabled) === 1)
+  const [maxCpu, setMaxCpu] = useState(String(Number(d.autoscale_max_cpu) || curCpu))
+  const [maxMemory, setMaxMemory] = useState(String(Number(d.autoscale_max_memory_gib) || curMemory))
+  const [maxStorage, setMaxStorage] = useState(Number(d.autoscale_max_storage_gib) ? String(d.autoscale_max_storage_gib) : "")
+  const [pending, setPending] = useState(false)
+
+  const cpuOk = Number(maxCpu) >= curCpu && (!capCpu || Number(maxCpu) <= capCpu)
+  const memoryOk = Number(maxMemory) >= curMemory && (!capMemory || Number(maxMemory) <= capMemory)
+  const storageN = Number(maxStorage) || 0 // 0/empty = disk leg off
+  const storageOk = !hasDisk || storageN === 0 || (storageN >= curStorage && (!capStorage || storageN <= capStorage))
+  const valid = !enabled || (cpuOk && memoryOk && storageOk)
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Autoscale</DialogTitle>
+          <DialogDescription>
+            Scales up automatically within your limits (VPA-guided, never scales down; storage
+            grows at 80% full). Billed at the size actually scaled to, plus a small hourly fee
+            while enabled.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="as-enabled">Enable autoscale</Label>
+            <Switch id="as-enabled" checked={enabled} onCheckedChange={setEnabled} />
+          </div>
+          {enabled && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="as-cpu">Max vCPU (current: {curCpu})</Label>
+                  <Input
+                    id="as-cpu" type="number" min={curCpu} max={capCpu || undefined}
+                    value={maxCpu} onChange={(e) => setMaxCpu(e.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="as-mem">Max RAM (GiB, current: {curMemory})</Label>
+                  <Input
+                    id="as-mem" type="number" min={curMemory} max={capMemory || undefined}
+                    value={maxMemory} onChange={(e) => setMaxMemory(e.target.value)}
+                  />
+                </div>
+              </div>
+              {!cpuOk && (
+                <p className="text-xs text-destructive">
+                  Max vCPU must be at least the current {curCpu}{capCpu ? ` and at most ${capCpu}` : ""}.
+                </p>
+              )}
+              {!memoryOk && (
+                <p className="text-xs text-destructive">
+                  Max RAM must be at least the current {curMemory} GiB{capMemory ? ` and at most ${capMemory} GiB` : ""}.
+                </p>
+              )}
+              {hasDisk && (
+                <div className="grid gap-2">
+                  <Label htmlFor="as-storage">Max storage (GiB, current: {curStorage})</Label>
+                  <Input
+                    id="as-storage" type="number" min={0} max={capStorage || undefined}
+                    value={maxStorage} onChange={(e) => setMaxStorage(e.target.value)}
+                    placeholder="0 — storage autoscale off"
+                  />
+                  {!storageOk ? (
+                    <p className="text-xs text-destructive">
+                      Max storage must be 0 (off) or at least the current {curStorage} GiB
+                      {capStorage ? ` and at most ${capStorage} GiB` : ""}.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Empty or 0 leaves storage autoscale off.</p>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => {
+              setPending(true)
+              onSubmit({
+                enabled,
+                maxCpu: Number(maxCpu) || 0,
+                maxMemoryGiB: Number(maxMemory) || 0,
+                maxStorageGiB: hasDisk ? storageN : 0,
+              })
+                .catch((e: Error) => toast.error(e.message))
+                .finally(() => setPending(false))
+            }}
+            disabled={!valid || pending}
           >
             {pending ? "Applying…" : "Apply"}
           </Button>

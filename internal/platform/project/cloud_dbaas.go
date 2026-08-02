@@ -192,7 +192,7 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 	}
 
 	switch action {
-	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO":
+	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO", "SET_AUTOSCALE":
 		if !known[action] {
 			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support %s", engine, action)))
 			return true
@@ -341,6 +341,67 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 			}
 		}
 		httpx.OK(w, map[string]any{"result": map[string]any{"password": password}})
+		return true
+
+	case "SET_AUTOSCALE":
+		// Opt-in vertical autoscale with customer-set ceilings (surcharge-priced — billing
+		// keys on autoscale_enabled). enabled:false (or an empty body) turns it off.
+		enabled := false
+		if raw, has := data["enabled"]; has && raw != nil {
+			b, ok := raw.(bool)
+			if !ok {
+				h.fail(w, httpx.BadRequest("enabled must be true or false"))
+				return true
+			}
+			enabled = b
+		}
+		maxCPU, maxMem, maxStorage := intAny(data["maxCpu"]), intAny(data["maxMemoryGiB"]), intAny(data["maxStorageGiB"])
+		if enabled {
+			if maxCPU < 1 || (cfg.Limits.MaxCPU > 0 && maxCPU > cfg.Limits.MaxCPU) {
+				h.fail(w, httpx.BadRequest(fmt.Sprintf("maxCpu must be 1..%d", max(cfg.Limits.MaxCPU, 1))))
+				return true
+			}
+			if maxMem < 1 || (cfg.Limits.MaxMemoryGiB > 0 && maxMem > cfg.Limits.MaxMemoryGiB) {
+				h.fail(w, httpx.BadRequest(fmt.Sprintf("maxMemoryGiB must be 1..%d", max(cfg.Limits.MaxMemoryGiB, 1))))
+				return true
+			}
+			// maxStorageGiB 0 = disk leg off (also implied for engines without RESIZE_STORAGE).
+			if maxStorage < 0 || (cfg.Limits.MaxStorageGiB > 0 && maxStorage > cfg.Limits.MaxStorageGiB) {
+				h.fail(w, httpx.BadRequest(fmt.Sprintf("maxStorageGiB must be 0..%d", cfg.Limits.MaxStorageGiB)))
+				return true
+			}
+		}
+		err := ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+			if !enabled {
+				delete(values, "autoscale")
+				return nil
+			}
+			// Ceilings must sit at or above the CURRENT declared size (live values — the
+			// tick only scales up, a ceiling below current would wedge it).
+			res, _ := values["resources"].(map[string]any)
+			if res != nil {
+				if cur := intAny(res["cpu"]); maxCPU < cur {
+					return httpx.BadRequest(fmt.Sprintf("maxCpu must be >= the current %d vCPU", cur))
+				}
+				if cur := intAny(res["memoryGi"]); maxMem < cur {
+					return httpx.BadRequest(fmt.Sprintf("maxMemoryGiB must be >= the current %d GiB", cur))
+				}
+			}
+			if storage, _ := values["storage"].(map[string]any); storage != nil && maxStorage > 0 {
+				if cur := intAny(storage["sizeGi"]); maxStorage < cur {
+					return httpx.BadRequest(fmt.Sprintf("maxStorageGiB must be >= the current %d GiB", cur))
+				}
+			}
+			values["autoscale"] = map[string]any{
+				"enabled": true, "maxCpu": maxCPU, "maxMemoryGi": maxMem, "maxStorageGi": maxStorage,
+			}
+			return nil
+		})
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
 		return true
 
 	case "SET_SSO":
