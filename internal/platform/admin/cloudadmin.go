@@ -30,6 +30,12 @@ func (h *Handler) routeCloudAdmin(r chi.Router) {
 	r.Get("/service/os-images", h.osImagesAll)
 	r.Get("/service/regions", h.serviceRegionsList)
 	r.Get("/service/{id}/os-images", h.osImagesByService)
+	r.Get("/service/{id}/os-flavors", h.osFlavorsByService)
+	// Kamaji chart-pin surface: list every managed cluster's pin; re-pin one or all onto the
+	// provider's current chartVersion (the operator-side "platform update").
+	r.Get("/service/{id}/k8s-clusters", h.kamajiClusterPins)
+	r.Post("/service/{id}/k8s-clusters/bump-chart", h.kamajiClusterBumpAll)
+	r.Post("/service/{id}/k8s-clusters/{clusterId}/bump-chart", h.kamajiClusterBump)
 	r.Get("/service/{id}/gpu-info", h.gpuInfo)
 	r.Get("/service/{id}/unpriced-flavors", h.unpricedFlavors)
 	r.Get("/service/{id}/volume/types", h.volumeTypes)
@@ -173,6 +179,38 @@ func (h *Handler) osImagesByService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.List(w, h.imagesByLocation(r.Context(), es))
+}
+
+// osFlavorsByService lists the live Nova flavors of ONE service (all its regions, deduped by
+// id) — the kamaji-provider form's flavor/image pickers browse a linked OpenStack provider
+// instead of the operator hand-copying UUIDs out of Horizon. ADMIN_SERVICE_READ.
+func (h *Handler) osFlavorsByService(w http.ResponseWriter, r *http.Request) {
+	if !h.require(w, r, "admin:service:read") {
+		return
+	}
+	es, ok := h.loadServiceOr(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	out := []client.Flavor{}
+	seen := map[string]bool{}
+	for _, region := range h.serviceRegions(es) {
+		cc, err := h.cloudClient(r.Context(), es, region)
+		if err != nil || cc == nil {
+			continue
+		}
+		fs, err := cc.ListFlavors(r.Context())
+		if err != nil {
+			continue
+		}
+		for _, f := range fs {
+			if !seen[f.ID] {
+				seen[f.ID] = true
+				out = append(out, f)
+			}
+		}
+	}
+	httpx.List(w, out)
 }
 
 // osImagesAll handles getOsImages(): public images across all non-disabled CLOUD services. ADMIN_SERVICE_READ.

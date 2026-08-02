@@ -1,0 +1,29 @@
+---
+# =============================================================================
+# Minimal example — replace placeholders before applying
+# =============================================================================
+# Usage:
+#   helm template demo charts/openstack-kamaji-cluster \
+#     -f charts/openstack-kamaji-cluster/examples/values-minimal.yaml
+# =============================================================================
+
+# Reference an externally-managed Secret holding clouds.yaml. Do NOT inline
+# `clouds:` in committed values — it leaks the application credential secret.
+cloudCredentialsSecretName: openstack-creds
+
+kubernetesVersion: 1.34.1
+machineSSHKeyName: REPLACE_ME-ssh-key
+
+# Worker image (image must contain matching kubelet/kubeadm)
+machineImageId: REPLACE_ME-image-uuid
+
+clusterNetworking:
+  externalNetworkId: REPLACE_ME-external-network-uuid
+  internalNetwork:
+    networkFilter:
+      id: REPLACE_ME-internal-network-uuid
+
+nodeGroups:
+  - name: default-worker
+    machineCount: 3
+    machineFlavor: m5.large

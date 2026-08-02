@@ -52,7 +52,7 @@ function QuickActions({ pid }: { pid: string }) {
   ]
 
   return (
-    <div className="mt-6">
+    <div className="mb-6">
       <div className="text-eyebrow mb-2">Quick actions</div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {actions.map((a) => (
@@ -205,6 +205,9 @@ export function DashboardPage() {
         description="Live usage, balance and this month's spend for this project."
       />
 
+      {/* First thing on the page: what the user came to DO. Stats read; actions act. */}
+      <QuickActions pid={pid} />
+
       {costLoading ? (
         <div className="grid gap-4 md:grid-cols-3">
           {[0, 1, 2].map((i) => (
@@ -353,8 +356,6 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-
-      <QuickActions pid={pid} />
     </>
   )
 }

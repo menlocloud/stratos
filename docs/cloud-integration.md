@@ -91,8 +91,9 @@ free-form; typed accessors over the known keys live on the struct:
 | Accessor | Config key | Meaning |
 |---|---|---|
 | `IdentityURL()` | `config.identityUrl` | Keystone auth URL, normalized to end in `/v3` |
-| `Provider()` | `config.provider` | `openstack` (Keystone-backed) **or** `ceph-s3` (see [Ceph RGW S3](#ceph-rgw-s3-object-storage-a-second-object-store-backend)) |
+| `Provider()` | `config.provider` | `openstack` (Keystone-backed), `ceph-s3` (see [Ceph RGW S3](#ceph-rgw-s3-object-storage-a-second-object-store-backend)) **or** `kamaji` (see [Kamaji managed Kubernetes](#kamaji-managed-kubernetes-a-third-provider-kind)) |
 | `IsCephS3()` | `config.provider == "ceph-s3"` | a Keystone-free object-store-only provider |
+| `IsKamaji()` | `config.provider == "kamaji"` | a managed-Kubernetes provider driving a Kamaji management cluster |
 | `Shared()` | `config.shared` | region shared with other tenants (affects the portal menu) |
 | `GnocchiGranularity()` | `config.gnocchiGranularity` | measure granularity, default `300` |
 | `RegionNames()` | keys of `config.regions` | the regions this service serves |
@@ -567,6 +568,36 @@ website toggle and per-key grants never clobber each other or a customer's own s
 
 ---
 
+## Kamaji managed Kubernetes (a third provider kind)
+
+`config.provider == "kamaji"` registers a **Kamaji management cluster** as a provider for
+managed Kubernetes clusters (`KUBERNETES_CLUSTER` resources, client service slug
+`kubernetes`). It follows the same non-OpenStack provider pattern as `ceph-s3` — a provider
+discriminator, typed accessors (`internal/platform/externalservice/kamaji.go`), a dedicated
+client, its own bootstrap and sync legs — but is OpenStack-*adjacent* rather than
+OpenStack-free: cluster control planes run as pods on the management cluster (Kamaji
+`TenantControlPlane`), while worker VMs land in the customer's own Keystone tenant of the
+project's paired `openstack` service, so nodes/volumes/LBs bill through the existing
+instance/volume/load-balancer providers with no new billing code. Only the control-plane fee
+is new (`internal/cloud/billingresource/kubernetescluster.go`, resource type
+`kubernetes_cluster`).
+
+Provisioning is delivered through ArgoCD: stratos writes one `Application` CR per cluster
+(pinned `openstack-kamaji-cluster` OCI chart + full generated values —
+`internal/cloud/kamaji/*`) via a minimal management-cluster API client
+(`internal/cloud/kamajik8s`), and reads health back off the Application, the
+TenantControlPlane and the CAPI MachineDeployments.
+
+Operational documentation lives elsewhere — this section is just the pointer:
+
+- **Operator runbook** (provider setup, mgmt-cluster prerequisites, fleet upgrades,
+  troubleshooting): [`docs/managed-k8s.md`](managed-k8s.md)
+- **Management-cluster manifests** (stratos RBAC, AppProject guardrail, ArgoCD health
+  checks): `deploy/mgmt-cluster/`
+- **Design source**: `tasks/managed-k8s-plan.md`
+
+---
+
 ## Source files
 
 **Cloud domain and cache:**
@@ -606,6 +637,13 @@ website toggle and per-key grants never clobber each other or a customer's own s
 **External services:**
 
 - `internal/platform/externalservice/{externalservice,service,repo}.go`
+- `internal/platform/externalservice/kamaji.go` — kamaji provider accessors
+
+**Kamaji managed Kubernetes:**
+
+- `internal/cloud/kamaji/{config,values,application,cloudsyaml,service,syncprovider}.go` — naming, chart-values contract, Application builder, provider service + sync
+- `internal/cloud/kamajik8s/{client,kubeconfig}.go` — minimal management-cluster API client
+- `internal/cloud/billingresource/kubernetescluster.go` — control-plane billing bridge
 
 **Portal-facing:**
 

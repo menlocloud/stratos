@@ -1,0 +1,55 @@
+{{- if and .Values.openstack.enabled .Values.openstack.ccm.enabled }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "cluster-addons.componentName" (list . "ccm-openstack") }}-config
+  labels:
+    {{- include "cluster-addons.componentLabels" (list . "ccm-openstack") | nindent 4 }}
+    addons.stackhpc.com/watch: ""
+stringData:
+  defaults: |
+    secret:
+      create: false
+    cluster:
+      name: {{ include "cluster-addons.clusterName" . }}
+    controllerExtraArgs: |-
+      - --use-service-account-credentials=false
+    # MENLO FORK (Kamaji hosted control plane support):
+    # The upstream `openstack-cloud-controller-manager` chart hard-codes
+    # `nodeSelector: {node-role.kubernetes.io/control-plane: ""}` in its
+    # own values.yaml. Removing the key from this defaults Secret is NOT
+    # enough — Helm still picks up the upstream chart default. Setting
+    # the key explicitly to `null` here (and adding a worker label) forces
+    # Helm to drop the upstream value during coalescing.
+    nodeSelector:
+      node-role.kubernetes.io/control-plane: null
+      kubernetes.io/os: linux
+    tolerations:
+      - operator: Exists
+    {{- if .Values.reloader.enabled }}
+    commonAnnotations:
+      secret.reloader.stakater.com/reload: cloud-config
+    {{- end }}
+  overrides: |
+    {{- toYaml .Values.openstack.ccm.values | nindent 4 }}
+---
+apiVersion: addons.stackhpc.com/v1alpha1
+kind: HelmRelease
+metadata:
+  name: {{ include "cluster-addons.componentName" (list . "ccm-openstack") }}
+  labels: {{ include "cluster-addons.componentLabels" (list . "ccm-openstack") | nindent 4 }}
+spec:
+  clusterName: {{ include "cluster-addons.clusterName" . }}
+  bootstrap: true
+  chart: {{ toYaml .Values.openstack.ccm.chart | nindent 4 }}
+  targetNamespace: {{ .Values.openstack.targetNamespace }}
+  releaseName: ccm-openstack
+  valuesSources:
+    - secret:
+        name: {{ include "cluster-addons.componentName" (list . "ccm-openstack") }}-config
+        key: defaults
+    - secret:
+        name: {{ include "cluster-addons.componentName" (list . "ccm-openstack") }}-config
+        key: overrides
+{{- end }}

@@ -418,7 +418,22 @@ flowchart LR
   `SERVER`/`PORT`, fetch the month's billable traffic and persist `gnocchiMetrics`.
 - **`billingresource`** — the cloud→billing bridge: turn cached resources (plus
   Gnocchi usage for traffic-billed types) into the priced `BillingResource`s the
-  rating loop consumes.
+  rating loop consumes. Includes the flat control-plane fee for
+  `KUBERNETES_CLUSTER` (workers bill as ordinary servers) and per-GB `BUCKET`
+  pricing for object storage.
+- **`kamaji` / `kamajik8s`** — the Managed Kubernetes subsystem. A `kamaji`
+  provider is a *management cluster* reached over a stored kubeconfig, not a
+  Keystone cloud: each customer cluster is one ArgoCD `Application` of the
+  pinned `openstack-kamaji-cluster` chart (full generated values, applied via
+  the management cluster's own API — never the ArgoCD API). Control planes run
+  as pods on the management cluster (Kamaji `TenantControlPlane`); worker VMs
+  are CAPI/CAPO machines in the customer's own Keystone tenant, so they surface
+  and bill like any other servers. Management-side, next to each control plane,
+  run the OpenStack CCM and the Cinder CSI *controller* — the only components
+  holding the cloud credential; the workload cluster gets a credential-free CSI
+  node plugin and never sees a secret. Post-create changes (upgrade, node
+  groups, add-ons, chart re-pin) all flow through one full-object server-side
+  re-apply of the Application. Operator guide: **[managed-k8s.md](managed-k8s.md)**.
 
 ---
 

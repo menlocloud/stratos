@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openstack-kamaji-cluster.componentName" (list . "autoscaler") }}
+  labels: {{ include "openstack-kamaji-cluster.componentLabels" (list . "autoscaler") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{ .Values.projectPrefix }}/cluster: {{ include "openstack-kamaji-cluster.clusterName" . }}
+      {{ .Values.projectPrefix }}/component: autoscaler
+  template:
+    metadata:
+      labels:
+        {{ .Values.projectPrefix }}/cluster: {{ include "openstack-kamaji-cluster.clusterName" . }}
+        {{ .Values.projectPrefix }}/component: autoscaler
+    spec:
+      serviceAccountName: {{ include "openstack-kamaji-cluster.componentName" (list . "autoscaler") }}
+      {{- with .Values.autoscaler.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{ toYaml .Values.autoscaler.podSecurityContext | nindent 8 }}
+      containers:
+        - name: autoscaler
+          securityContext: {{ toYaml .Values.autoscaler.securityContext | nindent 12 }}
+          image: {{ printf "%s:%s" .Values.autoscaler.image.repository .Values.autoscaler.image.tag }}
+          imagePullPolicy: {{ .Values.autoscaler.image.pullPolicy }}
+          command:
+            - /cluster-autoscaler
+          args:
+            - --cloud-provider=clusterapi
+            - --kubeconfig=/mnt/kubeconfig/value
+            - --clusterapi-cloud-config-authoritative
+            - --node-group-auto-discovery=clusterapi:namespace={{ .Release.Namespace }},clusterName={{ include "openstack-kamaji-cluster.clusterName" . }}
+            {{- range $key, $value := .Values.autoscaler.extraArgs }}
+            - --{{ $key }}={{ $value }}
+            {{- end }}
+          {{- with .Values.autoscaler.livenessProbe }}
+          livenessProbe: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.autoscaler.readinessProbe }}
+          readinessProbe: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - containerPort: 8085
+          resources: {{ toYaml .Values.autoscaler.resources | nindent 12 }}
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /mnt/kubeconfig
+              readOnly: true
+      {{- with .Values.autoscaler.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.autoscaler.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.autoscaler.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.autoscaler.topologySpreadConstraints }}
+      topologySpreadConstraints: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        # Mount the kubeconfig for the workload cluster from the secret
+        - name: kubeconfig
+          secret:
+            secretName: {{ include "openstack-kamaji-cluster.componentName" (list . "kubeconfig") }}

@@ -37,8 +37,10 @@ export function useLocations(pid: string) {
 export function useCloudScope(pid: string): CloudScope | undefined {
   const { data } = useLocations(pid)
   // Generic compute/network/storage pages need an OpenStack scope. A project can
-  // also attach Ceph S3, which serves buckets only and may appear first.
-  const loc = data?.find((candidate) => candidate.provider !== "ceph-s3") ?? data?.[0]
+  // also attach Ceph S3 (buckets only) or Kamaji (managed Kubernetes control planes),
+  // and either may appear first — skip both, mirroring the backend's resolveServiceID.
+  const loc =
+    data?.find((candidate) => candidate.provider !== "ceph-s3" && candidate.provider !== "kamaji") ?? data?.[0]
   if (!loc?.serviceId || !loc?.region) return undefined
   return { serviceId: loc.serviceId, region: loc.region }
 }
@@ -67,7 +69,7 @@ export function useProjectGpuCapacity(pid: string, scope: CloudScope | undefined
 }
 
 // Cached cloud-resource list by type (POST /project/{pid}/resource?type=X).
-export function useCloudList(pid: string, type: string, extraQuery = "") {
+export function useCloudList(pid: string, type: string, extraQuery = "", refetchInterval: number | false = false) {
   const scope = useCloudScope(pid)
   return useQuery({
     queryKey: ["cloud", pid, type, extraQuery],
@@ -77,6 +79,7 @@ export function useCloudList(pid: string, type: string, extraQuery = "") {
         cloud: scope,
       }),
     enabled: !!pid && !!scope,
+    refetchInterval,
   })
 }
 

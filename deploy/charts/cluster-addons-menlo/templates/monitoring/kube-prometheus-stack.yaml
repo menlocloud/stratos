@@ -1,0 +1,177 @@
+{{- if .Values.monitoring.enabled }}
+{{-
+  $alertmanagerVolumeSize :=
+    dig
+      "alertmanager"
+      "alertmanagerSpec"
+      "storage"
+      "volumeClaimTemplate"
+      "spec"
+      "resources"
+      "requests"
+      "storage"
+      ""
+      .Values.monitoring.kubePrometheusStack.release.values
+}}
+{{-
+  $prometheusVolumeSize :=
+    dig
+      "prometheus"
+      "prometheusSpec"
+      "storageSpec"
+      "volumeClaimTemplate"
+      "spec"
+      "resources"
+      "requests"
+      "storage"
+      ""
+      .Values.monitoring.kubePrometheusStack.release.values
+}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "cluster-addons.componentName" (list . "kube-prometheus-stack") }}-config
+  labels:
+    {{- include "cluster-addons.componentLabels" (list . "kube-prometheus-stack") | nindent 4 }}
+    addons.stackhpc.com/watch: ""
+stringData:
+  defaults: |
+    alertmanager:
+      # Don't apply the namespace grouping by default
+      config:
+        route:
+          group_by: ['...']
+      alertmanagerSpec:
+        # Make sure that alertmanager finds configurations with the alertmanager name as a label
+        alertmanagerConfigSelector:
+          matchLabels:
+            alertmanager: kube-prometheus-stack-alertmanager
+        # Do NOT add the namespace matcher to routes from AlertmanagerConfig resources
+        alertmanagerConfigMatcherStrategy:
+          type: None
+    prometheus:
+      prometheusSpec:
+        # Tell Prometheus to pick up all monitors and alerting rules, regardless of labels
+        podMonitorSelectorNilUsesHelmValues: false
+        serviceMonitorSelectorNilUsesHelmValues: false
+        ruleSelectorNilUsesHelmValues: false
+        {{- if $prometheusVolumeSize }}
+        # Set the retention size to max 85% of the given volume size, to leave space for the WAL
+        # To get a valid storage request, we round down to the nearest whole number
+        {{- $storageAmount := mustRegexFind "^([0-9]*[.])?[0-9]+" $prometheusVolumeSize | float64 }}
+        {{- $storageUnits := mustRegexFind "(K|M|G|T|E|P)i?$" $prometheusVolumeSize }}
+        retentionSize: {{ mulf 0.85 $storageAmount | floor | int64 }}{{ trimSuffix "i" $storageUnits }}B
+        {{- end }}
+    grafana:
+      sidecar:
+        # Tell Grafana to include dashboards from all namespaces
+        dashboards:
+          searchNamespace: ALL
+  overrides: |
+    {{- toYaml .Values.monitoring.kubePrometheusStack.release.values | nindent 4 }}
+---
+apiVersion: addons.stackhpc.com/v1alpha1
+kind: HelmRelease
+metadata:
+  name: {{ include "cluster-addons.componentName" (list . "kube-prometheus-stack") }}
+  labels: {{ include "cluster-addons.componentLabels" (list . "kube-prometheus-stack") | nindent 4 }}
+spec:
+  clusterName: {{ include "cluster-addons.clusterName" . }}
+  bootstrap: true
+  chart: {{ toYaml .Values.monitoring.kubePrometheusStack.chart | nindent 4 }}
+  targetNamespace: {{ .Values.monitoring.kubePrometheusStack.release.namespace }}
+  releaseName: kube-prometheus-stack
+  valuesSources:
+    - secret:
+        name: {{ include "cluster-addons.componentName" (list . "kube-prometheus-stack") }}-config
+        key: defaults
+    - secret:
+        name: {{ include "cluster-addons.componentName" (list . "kube-prometheus-stack") }}-config
+        key: overrides
+  # StatefulSets do not allow their PVCs to be resized, but we can use lifecycle hooks to
+  # ensure that it happens correctly
+  lifecycleHooks:
+    {{- if or $alertmanagerVolumeSize $prometheusVolumeSize }}
+    preUpgrade:
+      {{- with $alertmanagerVolumeSize }}
+      - apiVersion: v1
+        kind: PersistentVolumeClaim
+        selector:
+          alertmanager: kube-prometheus-stack-alertmanager
+        action: patch
+        options:
+          data:
+            spec:
+              resources:
+                requests:
+                  storage: {{ . }}
+      {{- end }}
+      {{- with $prometheusVolumeSize }}
+      - apiVersion: v1
+        kind: PersistentVolumeClaim
+        selector:
+          operator.prometheus.io/name: kube-prometheus-stack-prometheus
+        action: patch
+        options:
+          data:
+            spec:
+              resources:
+                requests:
+                  storage: {{ . }}
+      {{- end }}
+    {{- end }}
+    {{- if or (not $alertmanagerVolumeSize) (not $prometheusVolumeSize) }}
+    postUpgrade:
+      {{- if not $alertmanagerVolumeSize }}
+      - apiVersion: v1
+        kind: PersistentVolumeClaim
+        selector:
+          alertmanager: kube-prometheus-stack-alertmanager
+        action: delete
+      {{- end }}
+      {{- if not $prometheusVolumeSize }}
+      - apiVersion: v1
+        kind: PersistentVolumeClaim
+        selector:
+          operator.prometheus.io/name: kube-prometheus-stack-prometheus
+        action: delete
+      {{- end }}
+    {{- end }}
+    # After deleting the release, remove the PVCs
+    postDelete:
+      - apiVersion: v1
+        kind: PersistentVolumeClaim
+        selector:
+          alertmanager: kube-prometheus-stack-alertmanager
+        action: delete
+      - apiVersion: v1
+        kind: PersistentVolumeClaim
+        selector:
+          operator.prometheus.io/name: kube-prometheus-stack-prometheus
+        action: delete
+---
+apiVersion: addons.stackhpc.com/v1alpha1
+kind: Manifests
+metadata:
+  name: {{ include "cluster-addons.componentName" (list . "kube-prometheus-stack-dashboards") }}
+  labels: {{ include "cluster-addons.componentLabels" (list . "kube-prometheus-stack-dashboards") | nindent 4 }}
+spec:
+  clusterName: {{ include "cluster-addons.clusterName" . }}
+  bootstrap: true
+  targetNamespace: {{ .Values.monitoring.kubePrometheusStack.release.namespace }}
+  releaseName: kube-prometheus-stack-dashboards
+  manifestSources:
+    - template: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: additional-grafana-dashboards
+          labels:
+            grafana_dashboard: "1"
+        data:
+          nvidia-dcgm-exporter-dashboard.json: |
+            {% raw %}
+            {{- .Files.Get "grafana-dashboards/nvidia-dcgm-exporter-dashboard_rev3.json" | nindent 12 }}
+            {% endraw %}
+{{- end }}

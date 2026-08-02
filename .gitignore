@@ -23,6 +23,7 @@ dist/
 
 # Vendored Helm subchart archives — pulled by `helm dependency build` from Chart.lock.
 /deploy/chart/charts/*.tgz
+/deploy/charts/*/charts/*.tgz
 
 # Internal task log — not for the public repo.
 /tasks/

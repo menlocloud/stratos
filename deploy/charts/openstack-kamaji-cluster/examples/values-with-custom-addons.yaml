@@ -1,0 +1,160 @@
+---
+# =============================================================================
+# Example: extra HelmRelease addons deployed by the cluster-addons subchart
+# =============================================================================
+# Usage:
+#   helm template demo charts/openstack-kamaji-cluster \
+#     -f charts/openstack-kamaji-cluster/examples/values-with-custom-addons.yaml \
+#     -f my-cluster-overrides.yaml
+#
+# Each entry under addons.custom is rendered as a HelmRelease (cluster-addons
+# subchart). Substitute CHANGE_ME placeholders before applying.
+# =============================================================================
+
+addons:
+  enabled: true
+
+  # Built-in cert-manager
+  certManager:
+    enabled: true
+    chart:
+      version: v1.18.2
+    release:
+      namespace: cert-manager
+      values:
+        crds:
+          enabled: true
+
+  # Built-in reloader
+  reloader:
+    enabled: true
+    chart:
+      repo: https://stakater.github.io/stakater-charts
+      name: reloader
+      version: 2.2.3
+    release:
+      namespace: reloader
+      values:
+        reloader:
+          autoReloadAll: false
+          isArgoRollouts: true
+          watchGlobally: true
+          enableHA: true
+        serviceMonitor:
+          enabled: true
+
+  custom:
+    # -- Argo Rollouts
+    argo-rollouts:
+      kind: HelmRelease
+      spec:
+        namespace: argo-rollouts
+        chart:
+          repo: https://argoproj.github.io/argo-helm
+          name: argo-rollouts
+          version: 2.37.8
+        values:
+          installCRDs: true
+          keepCRDs: true
+          controller:
+            replicas: 2
+            metrics:
+              enabled: true
+              serviceMonitor:
+                enabled: true
+
+    # -- External DNS (Cloudflare). Replace CF_API_KEY / CF_API_EMAIL.
+    external-dns:
+      kind: HelmRelease
+      spec:
+        namespace: external-dns
+        chart:
+          repo: https://kubernetes-sigs.github.io/external-dns
+          name: external-dns
+          version: 1.19.0
+        values:
+          provider:
+            name: cloudflare
+          env:
+            - name: CF_API_KEY
+              value: "CHANGE_ME"
+            - name: CF_API_EMAIL
+              value: "CHANGE_ME"
+          extraArgs:
+            annotation-filter: external-dns.alpha.kubernetes.io/hostname
+          sources:
+            - service
+            - ingress
+          policy: upsert-only
+          serviceMonitor:
+            enabled: true
+
+    # -- External Secrets
+    external-secrets:
+      kind: HelmRelease
+      spec:
+        namespace: external-secrets
+        chart:
+          repo: https://charts.external-secrets.io
+          name: external-secrets
+          version: 0.19.2
+        values:
+          installCRDs: true
+          crds:
+            createClusterExternalSecret: true
+            createClusterSecretStore: true
+            createClusterGenerator: true
+            createClusterPushSecret: true
+            createPushSecret: true
+            conversion:
+              enabled: true
+
+    # -- NGINX Gateway Fabric (OCI registry; mirror if your addon controller does not support OCI)
+    nginx-gateway-fabric:
+      kind: HelmRelease
+      spec:
+        namespace: nginx-gateway
+        chart:
+          repo: oci://ghcr.io/nginx/charts
+          name: nginx-gateway-fabric
+          version: 2.2.1
+        values:
+          nginxGateway:
+            replicas: 3
+            leaderElection:
+              enable: true
+          nginx:
+            kind: daemonSet
+
+    # -- Reflector
+    reflector:
+      kind: HelmRelease
+      spec:
+        namespace: reflector
+        chart:
+          repo: https://emberstack.github.io/helm-charts
+          name: reflector
+          version: 9.1.31
+        values: {}
+
+    # -- Robusta. Replace clusterName, account_id, signing_key, slack channel + api_key.
+    robusta:
+      kind: HelmRelease
+      spec:
+        namespace: robusta
+        chart:
+          repo: https://robusta-charts.storage.googleapis.com
+          name: robusta
+          version: 0.20.0
+        values:
+          clusterName: "CHANGE_ME"
+          enableHolmesGPT: false
+          sinksConfig:
+            - slack_sink:
+                name: main_slack_sink
+                slack_channel: "CHANGE_ME"
+                api_key: "CHANGE_ME"
+          globalConfig:
+            check_prometheus_flags: true
+            account_id: "CHANGE_ME"
+            signing_key: "CHANGE_ME"

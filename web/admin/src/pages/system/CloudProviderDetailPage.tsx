@@ -28,6 +28,13 @@ import { apiFetch, ApiError } from "@/lib/api"
 import { config } from "@/lib/config"
 import { useAdminGet } from "@/lib/hooks"
 import type { CloudProvider } from "./CloudProvidersPage"
+import {
+  KamajiProviderForm,
+  kamajiConfigBlocks,
+  kamajiFormFromService,
+  kamajiFormValid,
+  type KamajiFormState,
+} from "./kamajiProvider"
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 type Obj = Record<string, any>
@@ -189,6 +196,149 @@ type OpenstackAuthResponse = {
   roles?: string[]
   selectedProjectName?: string
 }
+// KamajiConnectionTab edits a Managed Kubernetes provider in place. PUT /admin/service/{id}
+// replaces top-level config keys wholesale and leaves the stored secret alone when the body omits
+// one — so `argocd` and `cluster` are always sent complete, and `secret` only when the operator
+// pastes a new kubeconfig.
+function KamajiConnectionTab({ id, provider }: TabProps) {
+  const [form, setForm] = useState<KamajiFormState>(() => kamajiFormFromService(provider))
+  const save = useEsSave(id)
+  const submit = () => {
+    const blocks = kamajiConfigBlocks(form)
+    save.mutate({
+      path: `/admin/service/${id}`,
+      body: {
+        name: form.name.trim(),
+        config: blocks,
+        ...(form.kubeconfig.trim() ? { secret: { kubeconfig: form.kubeconfig.trim() } } : {}),
+      },
+    })
+  }
+  return (
+    <>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-eyebrow">Managed Kubernetes (Kamaji) connection</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <KamajiProviderForm form={form} setForm={setForm} mode="edit" />
+        <Note>
+          Changing the chart version here only affects clusters created from now on — an existing
+          cluster keeps the version it was pinned to until it is explicitly moved. Removing a
+          Kubernetes version stops it being offered; clusters already on it keep running.
+        </Note>
+        <div className="flex justify-end">
+          <Button onClick={submit} disabled={!kamajiFormValid(form, false) || save.isPending}>
+            {save.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+    <KamajiClustersCard id={id} />
+    </>
+  )
+}
+
+// KamajiClustersCard — every stratos-managed cluster's pinned chart version, with explicit
+// re-pin controls. Clusters keep their pin when the provider's version moves (by design); this
+// card is the operator override, one cluster or all at once.
+function KamajiClustersCard({ id }: { id: string }) {
+  const qc = useQueryClient()
+  const q = useAdminGet<{
+    providerChartVersion?: string
+    clusters?: { id: string; name?: string; projectId?: string; chartVersion?: string }[]
+  }>(`/admin/service/${id}/k8s-clusters`)
+  const pin = q.data?.providerChartVersion ?? ""
+  const clusters = q.data?.clusters ?? []
+  const behind = clusters.filter((c) => pin && c.chartVersion !== pin)
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ["admin-get", `/admin/service/${id}/k8s-clusters`] })
+
+  const bumpOne = useMutation({
+    mutationFn: (clusterId: string) =>
+      apiFetch(`/admin/service/${id}/k8s-clusters/${clusterId}/bump-chart`, { method: "POST" }),
+    onSuccess: () => {
+      toast.success(`Cluster re-pinned to ${pin}`)
+      invalidate()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+  const bumpAll = useMutation({
+    mutationFn: () =>
+      apiFetch<{ bumped?: number; errors?: Record<string, string> }>(
+        `/admin/service/${id}/k8s-clusters/bump-chart`, { method: "POST" },
+      ),
+    onSuccess: (d) => {
+      const failed = Object.keys(d?.errors ?? {}).length
+      if (failed) toast.warning(`${d?.bumped ?? 0} re-pinned, ${failed} failed`)
+      else toast.success(`${d?.bumped ?? 0} cluster(s) re-pinned to ${pin}`)
+      invalidate()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-eyebrow">Managed clusters — platform (chart) versions</CardTitle>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => bumpAll.mutate()}
+          disabled={!pin || behind.length === 0 || bumpAll.isPending}
+        >
+          {bumpAll.isPending ? "Bumping…" : `Bump all to ${pin || "—"}`}
+        </Button>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-sm text-muted-foreground">
+          Provider pin: <span className="font-mono">{pin || "—"}</span>. Re-pinning re-renders the
+          chart for that cluster — platform components restart with a rolling update, and when the
+          node template changed between chart versions the nodes rotate too (surge-first).
+          Customers can also apply this themselves from the cluster page.
+        </p>
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Cluster</TableHead>
+              <TableHead>Project</TableHead>
+              <TableHead>Chart version</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {q.isLoading ? (
+              <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground">Loading…</TableCell></TableRow>
+            ) : clusters.length === 0 ? (
+              <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground">No managed clusters.</TableCell></TableRow>
+            ) : (
+              clusters.map((c) => (
+                <TableRow key={c.id}>
+                  <TableCell>
+                    <span className="font-medium">{c.name || c.id}</span>{" "}
+                    <span className="font-mono text-xs text-muted-foreground">{c.id}</span>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{c.projectId || "—"}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    {c.chartVersion || "—"}
+                    {pin && c.chartVersion === pin ? <span className="ml-2 text-xs text-muted-foreground">current</span> : null}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {pin && c.chartVersion !== pin ? (
+                      <Button size="sm" variant="outline" onClick={() => bumpOne.mutate(c.id)} disabled={bumpOne.isPending}>
+                        Bump to {pin}
+                      </Button>
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  )
+}
+
 function ConnectionTab({ id, provider }: TabProps) {
   const qc = useQueryClient()
   const auth = asObj(provider.config?.auth)
@@ -216,6 +366,12 @@ function ConnectionTab({ id, provider }: TabProps) {
     },
     onError: (e) => toast.error(errMsg(e)),
   })
+  // kamaji: no Keystone either, and unlike ceph its whole delivery plane (chart pin, ArgoCD
+  // AppProject, DNS zone, version→image matrix) is config an operator has to keep current — so this
+  // tab is the editable form rather than a read-only card.
+  if (provider.config?.provider === "kamaji") {
+    return <KamajiConnectionTab id={id} provider={provider} />
+  }
   // ceph-s3: no Keystone — show the S3/Admin Ops config instead of the identity card. There is no
   // backend test endpoint for RGW (the connection is exercised by bootstrap/sync), so no Test button.
   if (provider.config?.provider === "ceph-s3") {
@@ -235,6 +391,46 @@ function ConnectionTab({ id, provider }: TabProps) {
           <p className="mt-4 text-sm text-muted-foreground">
             Projects are provisioned as dedicated RGW users on entry (or via the project's "attach external
             service" action). The admin keys are stored encrypted and never returned by the API.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
+  // kamaji: no Keystone either — the provider IS a Kamaji management cluster reached over a
+  // kubeconfig, and clusters are delivered as ArgoCD Applications of the pinned chart. Show the
+  // read-only delivery config; the keystone Test-connection/Sync buttons would only 4xx here.
+  if (provider.config?.provider === "kamaji") {
+    const c = asObj(provider.config)
+    const argo = asObj(c.argocd)
+    const cluster = asObj(c.cluster)
+    const versions = Object.keys(asObj(cluster.versions)).sort()
+    const flavors = asArr(cluster.flavors).map(String).filter(Boolean)
+    const regions = Object.keys(asObj(c.regions)).sort()
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-eyebrow">Kamaji management cluster (delivery)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Row label="Kubeconfig" value="configured" />
+          <Row label="Regions" value={regions.join(", ")} />
+          <div className="text-eyebrow mt-6">ArgoCD delivery</div>
+          <Row label="Namespace" value={str(argo.namespace) || "argocd"} />
+          <Row label="AppProject (guardrail)" value={str(argo.project) || "stratos-k8s"} />
+          <Row label="Chart OCI repo" value={str(argo.chartRepo)} />
+          <Row label="Chart name" value={str(argo.chartName) || "openstack-kamaji-cluster"} />
+          <Row label="Chart version (pinned)" value={str(argo.chartVersion)} />
+          <div className="text-eyebrow mt-6">Cluster defaults</div>
+          <Row label="Kamaji DataStore" value={str(cluster.dataStoreName)} />
+          <Row label="Floating network ID (API LB)" value={str(cluster.floatingNetworkId)} />
+          <Row label="External network ID (workers)" value={str(cluster.externalNetworkId)} />
+          <Row label="DNS zone" value={str(cluster.dnsZone)} />
+          <Row label="Curated Kubernetes versions" value={versions.length ? String(versions.length) : ""} />
+          <Row label="Flavor allowlist" value={flavors.length ? `${flavors.length} flavor id(s)` : "all tenant flavors"} />
+          <p className="mt-4 text-sm text-muted-foreground">
+            The management-cluster kubeconfig is stored encrypted and never returned by the API. Clusters are
+            delivered as ArgoCD Applications of the pinned chart; worker nodes run in each customer's own
+            OpenStack tenant.
           </p>
         </CardContent>
       </Card>
@@ -1393,6 +1589,10 @@ const TAB_DEFS = [
 // machinery (quota, features, volume types, AZs, …) with nothing to configure on RGW.
 const CEPH_TAB_KEYS = new Set(["connection", "services", "configuration"])
 
+// A kamaji provider serves ONLY managed Kubernetes off its management cluster — same trimmed set
+// (connection = kubeconfig/chart pin, services = the kubernetes toggle, configuration = raw doc).
+const KAMAJI_TAB_KEYS = CEPH_TAB_KEYS
+
 const crumbs = (label: string) => (
   <Breadcrumb>
     <BreadcrumbList>
@@ -1430,7 +1630,12 @@ export default function CloudProviderDetailPage() {
     )
   }
   const p = data
-  const tabs = p.config?.provider === "ceph-s3" ? TAB_DEFS.filter((t) => CEPH_TAB_KEYS.has(t.v)) : TAB_DEFS
+  const tabs =
+    p.config?.provider === "ceph-s3"
+      ? TAB_DEFS.filter((t) => CEPH_TAB_KEYS.has(t.v))
+      : p.config?.provider === "kamaji"
+        ? TAB_DEFS.filter((t) => KAMAJI_TAB_KEYS.has(t.v))
+        : TAB_DEFS
 
   return (
     <>

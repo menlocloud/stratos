@@ -1,0 +1,24 @@
+cluster-addons-menlo Helm chart
+Copyright 2026 Menlo Cloud
+
+This chart is a modified derivative of the "cluster-addons" Helm chart from
+the Azimuth project's capi-helm-charts, © StackHPC Ltd and the Azimuth
+contributors, licensed under the Apache License, Version 2.0:
+  https://github.com/azimuth-cloud/capi-helm-charts
+
+It delivers add-ons through the Cluster API Addon Provider,
+© the Azimuth contributors, Apache License 2.0:
+  https://github.com/azimuth-cloud/cluster-api-addon-provider
+
+Modifications by Menlo Cloud include (non-exhaustive): mirror-registry image
+pins, Menlo Grafana dashboards, the Kamaji-specific addon set (no
+workload-cluster etcd defrag, management-side CCM posture), and default
+toggles curated for the Stratos managed-Kubernetes product.
+
+The add-ons themselves (cert-manager, ingress-nginx, metrics-server,
+kube-prometheus-stack, Loki, Cilium, Calico, node-feature-discovery, GPU
+operators, and others) are independent projects under their own licenses,
+fetched from their upstream chart repositories at install time.
+
+Licensed under the Apache License, Version 2.0 (the "License"); see the
+LICENSE file distributed with this chart.

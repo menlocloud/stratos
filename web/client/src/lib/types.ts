@@ -52,6 +52,10 @@ export type CloudResource = {
   name?: string
   status?: string
   externalId?: string
+  // Which cloud service/region the resource lives on — set on rows synced after the fields
+  // were introduced; consumers must fall back to a project-level location when absent.
+  serviceId?: string
+  region?: string
   projectId?: string
   createdAt?: string
   info?: { createdAt?: string; updatedAt?: string }
@@ -64,6 +68,17 @@ export type ProjectService = {
   name?: string
   type?: string
   status?: string
+  // Managed-Kubernetes (kamaji) services only: curated cluster versions, plus an optional
+  // admin allowlist of node-group flavor ids (present and non-empty only when configured).
+  kubernetesVersions?: string[]
+  kubernetesFlavorIds?: string[]
+  // Curated node-image variant names per version (e.g. {"1.35.4": ["nvidia"]}) — a node group
+  // may pick one instead of the version's default image. Present only when configured.
+  kubernetesImageVariants?: Record<string, string[]>
+  // The provider's pinned platform (chart) version — feeds the opt-in "platform update" offer.
+  kubernetesPlatformVersion?: string
+  // The default StorageClass clusters ship with (name + optional Cinder volume type).
+  kubernetesStorage?: { className?: string; volumeType?: string }
   [k: string]: unknown
 }
 

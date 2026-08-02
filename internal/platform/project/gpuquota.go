@@ -13,6 +13,7 @@ import (
 	"net/http"
 
 	"github.com/menlocloud/stratos/internal/cloud"
+	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/pkg/httpx"
 )
 
@@ -84,6 +85,81 @@ func (h *Handler) enforceGPUQuota(ctx context.Context, proj *Project, svcID, fla
 		return httpx.NewError(http.StatusConflict, http.StatusConflict, fmt.Sprintf(
 			"GPU quota exceeded for %s: %d in use + %d requested exceeds the project limit of %d",
 			model, used, want, limit))
+	}
+	return nil
+}
+
+// enforceGPUQuotaForNodeGroups is the same tier-1 gate for kamaji node groups: without it, a
+// user blocked from creating a GPU server could still request GPU worker VMs through a node
+// group and have CAPO create them in the tenant, bypassing the quota entirely. Demand per GPU
+// model = Σ nodes × flavor devices, where nodes = count, or MAX for an autoscale group (the
+// autoscaler can reach max with no further gate). prevGroups (the cluster's current groups, on
+// a node-group edit) subtract out — their workers are already counted in gpuUsage once the
+// server sync picks them up. osSvcID is the project's OPENSTACK binding (where the worker VMs
+// and flavors live), not the kamaji service. Fail-open like enforceGPUQuota.
+func (h *Handler) enforceGPUQuotaForNodeGroups(ctx context.Context, proj *Project, osSvcID string, groups, prevGroups []kamaji.NodeGroup) error {
+	if len(proj.Quota) == 0 || len(groups) == 0 || osSvcID == "" {
+		return nil
+	}
+	cc, ok := h.tryTenantClient(ctx, proj, osSvcID)
+	if !ok {
+		return nil
+	}
+	flavorGPU := map[string]struct {
+		model string
+		n     int
+	}{}
+	gpuOf := func(flavorID string) (string, int) {
+		if flavorID == "" {
+			return "", 0
+		}
+		if g, ok := flavorGPU[flavorID]; ok {
+			return g.model, g.n
+		}
+		model, n := "", 0
+		if fl, err := cc.GetFlavor(ctx, flavorID); err == nil {
+			model, n = cloud.GPUFromFlavor(fl["extra_specs"])
+		}
+		flavorGPU[flavorID] = struct {
+			model string
+			n     int
+		}{model, n}
+		return model, n
+	}
+	nodes := func(ng kamaji.NodeGroup) int {
+		if ng.Autoscale {
+			return ng.Max
+		}
+		return ng.Count
+	}
+	demand := map[string]int{}
+	for _, ng := range groups {
+		if model, n := gpuOf(ng.FlavorID); n > 0 {
+			demand[model] += n * nodes(ng)
+		}
+	}
+	for _, ng := range prevGroups {
+		if model, n := gpuOf(ng.FlavorID); n > 0 {
+			demand[model] -= n * nodes(ng)
+		}
+	}
+	var usage map[string]int
+	for model, want := range demand {
+		if want <= 0 {
+			continue
+		}
+		limit, limited := gpuLimitFor(proj.Quota, model)
+		if !limited {
+			continue
+		}
+		if usage == nil {
+			usage = h.gpuUsage(ctx, proj.ID)
+		}
+		if usage[model]+want > limit {
+			return httpx.NewError(http.StatusConflict, http.StatusConflict, fmt.Sprintf(
+				"GPU quota exceeded for %s: %d in use + %d requested by node groups exceeds the project limit of %d",
+				model, usage[model], want, limit))
+		}
 	}
 	return nil
 }

@@ -1,0 +1,6 @@
+dependencies:
+- name: cluster-addons-menlo
+  repository: file://../cluster-addons-menlo
+  version: 0.28.0
+digest: sha256:46ad6f702eba603a412998310df498eeaab8a2612b1d9436615de98c8a06f23b
+generated: "2026-08-02T14:53:39.4944455+07:00"

@@ -1,0 +1,21 @@
+apiVersion: v2
+appVersion: 71f3de1
+description: |
+  Menlo fork of azimuth-cloud cluster-addons (capi-helm-charts).
+  Based on upstream 0.27.0; diverges to support hosted control planes
+  (Kamaji), where there are no `node-role.kubernetes.io/control-plane`
+  nodes, and to track newer cloud-provider-openstack releases:
+    - templates/openstack/ccm.yaml: removed default nodeSelector that
+      pinned CCM DaemonSet to control-plane nodes (the addons.stackhpc.com
+      operator merges defaults with user overrides but does NOT drop keys
+      on `null`, so the upstream default cannot be unset via values).
+    - values.yaml: dropped the same control-plane nodeSelector from the
+      Cinder CSI controller plugin (it was left behind when the CCM one was
+      removed, and made the controller unschedulable on Kamaji).
+    - values.yaml: CCM 2.36.1 / Cinder CSI 2.36.0 / Manila CSI 2.36.0
+      (appVersion v1.36.0) for OpenStack 2026.1 compatibility.
+    - values.yaml: Nginx stays the default ingress controller (upstream
+      0.27.0 switched its default to Traefik).
+name: cluster-addons-menlo
+type: application
+version: 0.28.0

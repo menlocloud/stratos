@@ -1,0 +1,129 @@
+{{/*
+  Machine templates are immutable, so we need to make a new one when the spec changes.
+  To do this, we create a new template whenever the checksum of the spec changes.
+*/}}
+{{- define "openstack-kamaji-cluster.nodegroup.mt.spec" -}}
+{{- $ctx := index . 0 -}}
+{{- $nodeGroup := index . 1 -}}
+template:
+  spec:
+    identityRef:
+      name: {{ include "openstack-kamaji-cluster.cloudCredentialsSecretName" $ctx }}
+      cloudName: openstack
+    {{- if $nodeGroup.machineFlavorId }}
+    {{- /* By ID — flavorID takes precedence over flavor in CAPO. A Nova flavor ID in the `flavor`
+           (name) field fails the lookup with "no flavors were found: name=<uuid>". */}}
+    flavorID: {{ $nodeGroup.machineFlavorId }}
+    {{- else if regexMatch "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" ($nodeGroup.machineFlavor | toString) }}
+    {{- /* A UUID in machineFlavor is an ID that predates the machineFlavorId key — route it to
+           flavorID too, so older rendered values heal on a chart bump alone. */}}
+    flavorID: {{ $nodeGroup.machineFlavor }}
+    {{- else }}
+    flavor: {{ $nodeGroup.machineFlavor | required (printf "no flavor specified for node group '%s'" $nodeGroup.name) }}
+    {{- end }}
+    {{- with $ctx.Values.machineSSHKeyName }}
+    sshKeyName: {{ . }}
+    {{- end }}
+    {{- if or $nodeGroup.machineConfigDrive $nodeGroup.additionalBlockDevices }}
+    configDrive: true
+    {{- end }}
+    {{- with $nodeGroup.machineRootVolume }}
+    {{- if .diskSize }}
+    rootVolume:
+      sizeGiB: {{ .diskSize }}
+      {{- with .volumeType }}
+      type: {{ . }}
+      {{- end }}
+      availabilityZone:
+        {{- if .availabilityZone }}
+        from: Name
+        name: {{ .availabilityZone }}
+        {{- else }}
+        from: Machine
+        {{- end }}
+    {{- end }}
+    {{- end }}
+    image:
+      {{- if $nodeGroup.machineImageId }}
+      id: {{ $nodeGroup.machineImageId }}
+      {{- else if $nodeGroup.machineImage }}
+      filter:
+        name: {{ tpl $nodeGroup.machineImage $ctx }}
+      {{- else if $ctx.Values.machineImageId }}
+      id: {{ $ctx.Values.machineImageId }}
+      {{- else if $ctx.Values.machineImage }}
+      filter:
+        name: {{ tpl $ctx.Values.machineImage $ctx }}
+      {{- else }}
+      {{- fail "One of nodeGroupDefaults.machineImageId, nodeGroupDefaults.machineImage, machineImageId or machineImage is required" }}
+      {{- end }}
+    {{- with $nodeGroup.additionalBlockDevices }}
+    additionalBlockDevices:
+      {{- range $name, $blockDevice := . }}
+      - name: {{ $name }}
+        sizeGiB: {{ required "size is required for a block device" $blockDevice.size }}
+        storage:
+          type: {{ default "Volume" $blockDevice.type }}
+          volume:
+            {{- with $blockDevice.volumeType }}
+            type: {{ . }}
+            {{- end }}
+            availabilityZone:
+              {{- if $blockDevice.availabilityZone }}
+              from: Name
+              name: {{ $blockDevice.availabilityZone }}
+              {{- else }}
+              from: Machine
+              {{- end }}
+      {{- end }}
+    {{- end }}
+    {{- with $nodeGroup.machineNetworking.ports }}
+    ports: {{ include "openstack-kamaji-cluster.convert.neutronPortsFilter" . | nindent 6 }}
+    {{- end }}
+    {{- with $nodeGroup.serverGroupId }}
+    serverGroup:
+      id: {{ . }}
+    {{- end }}
+    {{- if $nodeGroup.machineFloatingIP }}
+    floatingIPPoolRef:
+      apiGroup: infrastructure.cluster.x-k8s.io
+      kind: OpenStackFloatingIPPool
+      name: {{ include "openstack-kamaji-cluster.componentName" (list $ctx $nodeGroup.name) }}-fip
+    {{- end }}
+    {{- with mergeOverwrite $ctx.Values.machineMetadata $nodeGroup.machineMetadata }}
+    serverMetadata:
+      {{- range $k, $v := . }}
+      - key: {{ quote $k }}
+        value: {{ quote $v }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- define "openstack-kamaji-cluster.nodegroup.mt.checksum" -}}
+{{- include "openstack-kamaji-cluster.nodegroup.mt.spec" . | sha256sum }}
+{{- end }}
+
+{{- define "openstack-kamaji-cluster.nodegroup.mt.name" -}}
+{{- $ctx := index . 0 }}
+{{- $nodeGroup := index . 1 }}
+{{- $checksum := include "openstack-kamaji-cluster.nodegroup.mt.checksum" . }}
+{{- include "openstack-kamaji-cluster.componentName" (list $ctx $nodeGroup.name) }}-{{ trunc 8 $checksum }}
+{{- end }}
+
+{{- range $nodeGroupOverrides := .Values.nodeGroups }}
+{{- $nodeGroup := deepCopy $.Values.nodeGroupDefaults | mustMerge $nodeGroupOverrides }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: OpenStackMachineTemplate
+metadata:
+  name: {{ include "openstack-kamaji-cluster.nodegroup.mt.name" (list $ $nodeGroup) }}
+  labels:
+    {{- include "openstack-kamaji-cluster.componentLabels" (list $ "worker") | nindent 4 }}
+    {{ $.Values.projectPrefix }}/node-group: {{ $nodeGroup.name }}
+  annotations:
+    {{ $.Values.projectPrefix }}/template-checksum: {{ include "openstack-kamaji-cluster.nodegroup.mt.checksum" (list $ $nodeGroup) }}
+    # Cluster API complains when old templates disappear before it has rolled all the machines over
+    # When deploying with Helm, leave the resource behind and let Cluster API clean it up
+    helm.sh/resource-policy: keep
+spec: {{ include "openstack-kamaji-cluster.nodegroup.mt.spec" (list $ $nodeGroup) | nindent 2 }}
+{{- end }}

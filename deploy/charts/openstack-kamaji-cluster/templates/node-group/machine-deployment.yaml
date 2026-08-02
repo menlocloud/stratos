@@ -1,0 +1,72 @@
+{{- range $nodeGroupOverrides := .Values.nodeGroups }}
+{{- $nodeGroup := deepCopy $.Values.nodeGroupDefaults | mustMerge $nodeGroupOverrides }}
+{{- if not (regexMatch "^[a-z][a-z0-9\\-]+[a-z0-9]$" $nodeGroup.name) }}
+{{- fail (printf "Node group name must be at least three characters long and must contain only lower-case alphanumeric characters and dashes (found name: %s)" $nodeGroup.name) }}
+{{- end }}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: {{ include "openstack-kamaji-cluster.componentName" (list $ $nodeGroup.name) }}
+  labels:
+    {{- include "openstack-kamaji-cluster.componentLabels" (list $ "worker") | nindent 4 }}
+    {{ $.Values.projectPrefix }}/node-group: {{ $nodeGroup.name }}
+  annotations:
+    {{- if $nodeGroup.autoscale }}
+    {{-
+      $machineCountMin := $nodeGroup.machineCountMin |
+        required (printf "no minimum machine count specified for node group '%s'" $nodeGroup.name)
+    }}
+    {{- if lt $machineCountMin 1.0 }}
+    {{- fail "autoscaling node groups with a minimum machine count < 1 are not currently supported" }}
+    {{- end }}
+    {{-
+      $machineCountMax := $nodeGroup.machineCountMax |
+        required (printf "no maximum machine count specified for node group '%s'" $nodeGroup.name)
+    }}
+    {{- if lt $machineCountMax $machineCountMin }}
+    {{- fail (printf "maximum machine count < minimum machine count for node group '%s'" $nodeGroup.name) }}
+    {{- end }}
+    cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: {{ quote $machineCountMin }}
+    cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: {{ quote $machineCountMax }}
+    {{- end }}
+spec:
+  clusterName: {{ include "openstack-kamaji-cluster.clusterName" $ }}
+  {{- if not $nodeGroup.autoscale }}
+  replicas: {{ $nodeGroup.machineCount | required (printf "no machine count specified for node group '%s'" $nodeGroup.name) }}
+  {{- end }}
+  strategy: {{ toYaml $nodeGroup.rolloutStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "openstack-kamaji-cluster.componentSelectorLabels" (list $ "worker") | nindent 6 }}
+      {{ $.Values.projectPrefix }}/node-group: {{ $nodeGroup.name }}
+      cluster.x-k8s.io/cluster-name: {{ include "openstack-kamaji-cluster.clusterName" $ }}
+  template:
+    metadata:
+      labels:
+        {{- include "openstack-kamaji-cluster.componentSelectorLabels" (list $ "worker") | nindent 8 }}
+        {{ $.Values.projectPrefix }}/node-group: {{ $nodeGroup.name }}
+    spec:
+      clusterName: {{ include "openstack-kamaji-cluster.clusterName" $ }}
+      version: v{{
+        $nodeGroup.kubernetesVersion |
+          default $.Values.kubernetesVersion |
+          required (printf "unable to determine Kubernetes version for node group '%s'" $nodeGroup.name) |
+          trimPrefix "v"
+      }}
+      {{- with $nodeGroup.failureDomain }}
+      failureDomain: {{ . }}
+      {{- end }}
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+          kind: KubeadmConfigTemplate
+          name: {{ include "openstack-kamaji-cluster.nodegroup.kct.name" (list $ $nodeGroup) }}
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: OpenStackMachineTemplate
+        name: {{ include "openstack-kamaji-cluster.nodegroup.mt.name" (list $ $nodeGroup) }}
+      nodeDrainTimeout: {{ $nodeGroup.nodeDrainTimeout }}
+      nodeVolumeDetachTimeout: {{ $nodeGroup.nodeVolumeDetachTimeout }}
+      nodeDeletionTimeout: {{ $nodeGroup.nodeDeletionTimeout }}
+{{- end }}

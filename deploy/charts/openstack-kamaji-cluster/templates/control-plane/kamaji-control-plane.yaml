@@ -1,0 +1,117 @@
+---
+# =============================================================================
+# KamajiControlPlane - Hosted Control Plane via Kamaji
+# =============================================================================
+# This replaces KubeadmControlPlane. Instead of provisioning VMs for the
+# control plane, Kamaji runs the API server, controller-manager, scheduler,
+# and etcd as pods in the management cluster.
+#
+# The KamajiControlPlane controller:
+#   1. Creates a TenantControlPlane in the management cluster
+#   2. Creates a LoadBalancer Service to expose the API server
+#   3. Updates the OpenStackCluster's apiServerFixedIP with the LB IP
+#   4. Generates kubeconfig and certificates for worker nodes to join
+#
+# Reference: https://github.com/clastix/cluster-api-control-plane-provider-kamaji
+# =============================================================================
+{{- $network := .Values.kamajiControlPlane.network | default dict }}
+{{- $extDNS := $network.externalDNS | default dict }}
+{{- /* Resolve OIDC config from inline values or existing Secret */}}
+{{- $oidc := include "openstack-kamaji-cluster.oidc.resolve" . | fromYaml }}
+{{- /* Build serviceAnnotations: merge user-supplied + external-dns auto-injected */}}
+{{- $svcAnnotations := deepCopy ($network.serviceAnnotations | default dict) }}
+{{- if $extDNS.enabled }}
+{{- if not $extDNS.hostname }}
+{{- fail "kamajiControlPlane.network.externalDNS.enabled=true requires kamajiControlPlane.network.externalDNS.hostname" }}
+{{- end }}
+{{- $_ := set $svcAnnotations "external-dns.alpha.kubernetes.io/hostname" $extDNS.hostname }}
+{{- $_ := set $svcAnnotations "external-dns.alpha.kubernetes.io/ttl" (printf "%v" ($extDNS.ttl | default 60)) }}
+{{- range $k, $v := ($extDNS.extraAnnotations | default dict) }}
+{{- $_ := set $svcAnnotations $k $v }}
+{{- end }}
+{{- end }}
+{{- /* Build certSANs: user list + externalDNS hostname (when enabled) */}}
+{{- $certSANs := concat ($network.certSANs | default list) (list) }}
+{{- if and $extDNS.enabled $extDNS.hostname }}
+{{- $certSANs = append $certSANs $extDNS.hostname }}
+{{- end }}
+{{- $certSANs = $certSANs | uniq | compact }}
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+kind: KamajiControlPlane
+metadata:
+  name: {{ include "openstack-kamaji-cluster.componentName" (list . "kamaji-cp") }}
+  labels: {{ include "openstack-kamaji-cluster.componentLabels" (list . "control-plane") | nindent 4 }}
+  annotations:
+    # We let Cluster API clean up the control plane resource
+    helm.sh/resource-policy: keep
+spec:
+  dataStoreName: {{ .Values.kamajiControlPlane.dataStoreName | default "default" }}
+  replicas: {{ .Values.kamajiControlPlane.replicas | default 2 }}
+  version: {{ .Values.kubernetesVersion | required ".Values.kubernetesVersion is required" | trimPrefix "v" | quote }}
+  {{- with .Values.kamajiControlPlane.addons }}
+  addons:
+    {{- if hasKey . "coreDNS" }}
+    coreDNS: {{ toYaml .coreDNS | nindent 6 }}
+    {{- end }}
+    {{- if hasKey . "kubeProxy" }}
+    kubeProxy: {{ toYaml .kubeProxy | nindent 6 }}
+    {{- end }}
+    {{- if hasKey . "konnectivity" }}
+    konnectivity: {{ toYaml .konnectivity | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  kubelet:
+    cgroupfs: {{ .Values.kamajiControlPlane.kubelet.cgroupfs | default "systemd" }}
+    preferredAddressTypes: {{ toYaml .Values.kamajiControlPlane.kubelet.preferredAddressTypes | nindent 6 }}
+  network:
+    serviceType: {{ $network.serviceType | default "LoadBalancer" }}
+    {{- /*
+      advertiseAddress intentionally NOT set from externalDNS.hostname:
+      Kamaji passes spec.network.advertiseAddress to kube-apiserver's
+      `--advertise-address` flag, which only accepts IPs (FQDN fails with
+      `invalid argument ... for "--advertise-address" flag: failed to parse IP`).
+      Workers join via the LB fixed IP (apiServerFixedIP). external-dns
+      annotations + certSANs below still publish the FQDN for kubectl/Lens.
+    */}}
+    {{- with $svcAnnotations }}
+    serviceAnnotations: {{ toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $network.serviceLabels }}
+    serviceLabels: {{ toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $network.ingress }}
+    ingress: {{ toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $certSANs }}
+    certSANs: {{ toYaml . | nindent 6 }}
+    {{- end }}
+  {{- /* Build extraArgs: merge user extraArgs with OIDC args when enabled.
+         KamajiControlPlane CRD expects spec.apiServer.extraArgs as a LIST
+         of `--flag=value` strings — NOT a top-level map. Previous versions
+         wrote `spec.extraArgs` which was silently dropped by the CAPI
+         provider, leaving the apiserver without any OIDC config. */ -}}
+  {{- $extraArgs := deepCopy (.Values.kamajiControlPlane.extraArgs | default dict) }}
+  {{- if $oidc.issuerUrl }}
+  {{- $_ := set $extraArgs "oidc-issuer-url" $oidc.issuerUrl }}
+  {{- $_ := set $extraArgs "oidc-client-id" (required "oidc.clientId is required when oidc.issuerUrl is set" $oidc.clientId) }}
+  {{- $_ := set $extraArgs "oidc-username-claim" ($oidc.usernameClaim | default "sub") }}
+  {{- $_ := set $extraArgs "oidc-username-prefix" ($oidc.usernamePrefix | default "oidc:") }}
+  {{- $_ := set $extraArgs "oidc-groups-claim" ($oidc.groupsClaim | default "groups") }}
+  {{- $_ := set $extraArgs "oidc-groups-prefix" ($oidc.groupsPrefix | default "oidc:") }}
+  {{- $_ := set $extraArgs "oidc-signing-algs" ($oidc.signingAlgs | default "RS256") }}
+  {{- end }}
+  {{- if or $extraArgs .Values.kamajiControlPlane.resources }}
+  apiServer:
+    {{- with $extraArgs }}
+    extraArgs:
+      {{- range $k, $v := . }}
+      - {{ printf "--%s=%v" $k $v | quote }}
+      {{- end }}
+    {{- end }}
+    {{- with .Values.kamajiControlPlane.resources }}
+    resources: {{ toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- with .Values.kamajiControlPlane.deployment }}
+  deployment: {{ toYaml . | nindent 4 }}
+  {{- end }}

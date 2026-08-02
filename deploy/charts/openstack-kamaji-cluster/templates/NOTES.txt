@@ -1,0 +1,62 @@
+========================================================================
+  OpenStack Kamaji Cluster (CAPI) - {{ include "openstack-kamaji-cluster.clusterName" . }}
+========================================================================
+
+Your Kubernetes cluster is being provisioned using:
+  - Cluster API (CAPI) for infrastructure lifecycle
+  - CAPO (Cluster API Provider OpenStack) for OpenStack integration
+  - Kamaji as the hosted control plane provider
+
+Architecture:
+  - Control Plane: Hosted by Kamaji (runs as pods in management cluster)
+  - Workers: OpenStack VMs managed by CAPO MachineDeployments
+  - Kubernetes Version: {{ .Values.kubernetesVersion }}
+
+Control Plane (Kamaji):
+  - DataStore: {{ .Values.kamajiControlPlane.dataStoreName | default "default" }}
+  - Replicas: {{ .Values.kamajiControlPlane.replicas | default 2 }}
+  - Service Type: {{ .Values.kamajiControlPlane.network.serviceType | default "LoadBalancer" }}
+
+Worker Node Groups:
+{{- range .Values.nodeGroups }}
+  - {{ .name }}: {{ .machineCount | default "autoscaled" }} machine(s)
+    {{- with .machineFlavor }}
+    Flavor: {{ . }}
+    {{- end }}
+{{- end }}
+
+To check cluster status:
+  kubectl get cluster {{ include "openstack-kamaji-cluster.clusterName" . }} -n {{ .Release.Namespace }}
+
+To get the kubeconfig:
+  kubectl get secret {{ include "openstack-kamaji-cluster.clusterName" . }}-kubeconfig -n {{ .Release.Namespace }} -o jsonpath='{.data.value}' | base64 -d > kubeconfig
+
+OpenStack cloud-controller-manager: {{ ternary "management-side" "NOT DEPLOYED by this chart" .Values.kamajiControlPlane.cloudControllerManager.enabled }}
+{{- if .Values.kamajiControlPlane.cloudControllerManager.enabled }}
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "openstack-kamaji-cluster.componentName" (list . "ccm-openstack") }}
+It runs here, in the management cluster, and reaches the tenant API through
+{{ include "openstack-kamaji-cluster.kamajiAdminKubeconfigSecretName" . }} — so the workload cluster holds no
+OpenStack credential. It stays in CreateContainerConfigError until Kamaji has
+issued that Secret; that is normal on a fresh install.
+{{- end }}
+
+{{- if .Values.addons.enabled }}
+Cluster addons are managed by the bundled cluster-addons subchart:
+  - CNI: {{ .Values.addons.cni.type | default "calico" }} ({{ ternary "enabled" "disabled" .Values.addons.cni.enabled }})
+  - In-cluster OpenStack integrations (CCM + Cinder CSI + cloud-config push): {{ ternary "ENABLED" "disabled" .Values.addons.openstack.enabled }}
+{{- if .Values.addons.openstack.enabled }}
+  WARNING: this pushes the cluster's clouds.yaml into the workload cluster as
+  openstack-system/cloud-config, where any cluster-admin of the tenant can read
+  it. It also gives you a second CCM alongside the management-side one.
+{{- else }}
+  No Cinder CSI ⇒ no dynamic block storage yet. Nothing in the workload cluster
+  holds an OpenStack credential.
+{{- end }}
+{{- else }}
+Addons are DISABLED. You must install a CNI yourself, and make sure its pods
+tolerate the CAPI/cloud-provider taints — with Kamaji every node is a worker
+and carries them at bootstrap.
+{{- end }}
+
+For more information on Kamaji + OpenStack:
+  https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/master/docs/providers-openstack.md
