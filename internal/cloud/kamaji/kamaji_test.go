@@ -338,7 +338,20 @@ func TestClusterAddons(t *testing.T) {
 	}
 	plain := BuildValues(testCfg(), testSpec())
 	if _, has := plain["addons"]; has {
-		t.Error("no picks must render no addons block")
+		t.Error("no picks and no appcred must render no addons block")
+	}
+
+	// Storage rides on the per-cluster appcred: present (CSI on, CCM stays management-side)
+	// exactly when the cluster runs on its own tenant-scoped credential — never for the
+	// admin-fallback (plan D7 fail-closed).
+	withCred := testSpec()
+	withCred.AppCredID = "cred-1"
+	storage := BuildValues(testCfg(), withCred)["addons"].(map[string]any)["openstack"].(map[string]any)
+	if storage["enabled"] != true || storage["ccm"].(map[string]any)["enabled"] != false {
+		t.Errorf("storage leg = %v", storage)
+	}
+	if av := AddonValues(nil, false); len(av) != 0 {
+		t.Errorf("no picks, no cred: %v", av)
 	}
 
 	// The menu's defaults are a CONTRACT: they must mirror the chart's effective defaults (and

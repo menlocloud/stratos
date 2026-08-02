@@ -478,6 +478,24 @@ func (s *Service) SetChartVersion(ctx context.Context, clusterID, version string
 	})
 }
 
+// ClusterHasAppCred reports whether the cluster runs on its own tenant-scoped application
+// credential (the mint annotations on its clouds.yaml secret) — the gate for pushing the
+// credential-consuming storage addon into the workload cluster. False on any doubt.
+func (s *Service) ClusterHasAppCred(ctx context.Context, projectID, clusterID string) bool {
+	secrets, err := s.api.ListSecrets(ctx, NamespaceFor(projectID), "")
+	if err != nil {
+		return false
+	}
+	want := CloudSecretName(clusterID)
+	for _, sec := range secrets {
+		if digStr(sec, "metadata", "name") != want {
+			continue
+		}
+		return digStr(sec, "metadata", "annotations", AnnotationAppCredID) != ""
+	}
+	return false
+}
+
 // ClusterPin is one managed cluster's chart pin — the admin bump surface's row.
 type ClusterPin struct {
 	ID           string `json:"id"`

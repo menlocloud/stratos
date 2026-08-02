@@ -107,20 +107,33 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 		}
 	}
 
-	// The addons block carries ONLY the customer's curated toggles (ClusterAddons) — one
-	// `addons.<name>.enabled` per pick, deep-merged over the chart's own defaults. Everything
-	// else about the addons stack (the CNI, mirror pins, and crucially `addons.openstack.enabled`
-	// — the CAAPH clouds.yaml push into the workload cluster, deliberately OFF per plan D7) lives
-	// in the vendored chart's values.yaml and is never rendered here, so a client request cannot
-	// reach it (Validate rejects unknown add-on names).
-	if len(spec.Addons) > 0 {
-		addons := map[string]any{}
-		for name, enabled := range spec.Addons {
-			addons[name] = map[string]any{"enabled": enabled}
-		}
+	// The addons block: the customer's curated toggles (ClusterAddons, one
+	// `addons.<name>.enabled` per pick) plus the STRATOS-OWNED storage block. Everything else in
+	// the addons stack (the CNI, mirror pins) lives in the vendored chart's values.yaml and is
+	// never rendered here; a client request cannot reach `openstack` (Validate rejects it).
+	if addons := AddonValues(spec.Addons, spec.AppCredID != ""); len(addons) > 0 {
 		values["addons"] = addons
 	}
 	return values
+}
+
+// AddonValues renders the addons block: customer picks + the Cinder-CSI storage leg. Storage is
+// enabled ONLY for a cluster running on its own tenant-scoped application credential — the CSI
+// push copies the cluster's cloud credential into the workload cluster where any cluster-admin
+// can read it, which is fine for the customer's own appcred and NEVER fine for the
+// admin-fallback credential (plan D7 fail-closed). The CCM stays management-side either way.
+func AddonValues(picks map[string]bool, hasAppCred bool) map[string]any {
+	addons := map[string]any{}
+	for name, enabled := range picks {
+		addons[name] = map[string]any{"enabled": enabled}
+	}
+	if hasAppCred {
+		addons["openstack"] = map[string]any{
+			"enabled": true,
+			"ccm":     map[string]any{"enabled": false},
+		}
+	}
+	return addons
 }
 
 // OIDCValues renders the chart's oidc block from the customer-supplied config — shared by

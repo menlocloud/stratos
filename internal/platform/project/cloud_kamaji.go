@@ -352,14 +352,19 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 				return true
 			}
 		}
+		// The storage leg rides along: preserved when already present, and (for clusters created
+		// before storage shipped) added once the appcred check passes — never dropped by an
+		// addon edit, and never added for an admin-fallback cluster.
+		hasAppCred := ks.ClusterHasAppCred(r.Context(), proj.ID, cr.ExternalID)
 		err = ks.PatchClusterValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
-			if len(addons) == 0 {
+			prev, _ := values["addons"].(map[string]any)
+			block := kamaji.AddonValues(addons, hasAppCred)
+			if prevStorage, ok := prev["openstack"]; ok && block["openstack"] == nil {
+				block["openstack"] = prevStorage
+			}
+			if len(block) == 0 {
 				delete(values, "addons") // back to the chart's defaults
 				return nil
-			}
-			block := map[string]any{}
-			for name, enabled := range addons {
-				block[name] = map[string]any{"enabled": enabled}
 			}
 			values["addons"] = block
 			return nil

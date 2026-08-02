@@ -113,10 +113,16 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 	if ext := digStr(values, "clusterNetworking", "externalNetworkId"); ext != "" {
 		c["external_network_id"] = ext
 	}
-	// Customer add-on toggles, read back for the UI (absent block = chart defaults).
+	// Customer add-on toggles, read back for the UI (absent block = chart defaults). Filtered to
+	// the curated menu: the stratos-owned `openstack` storage leg (and any operator hand-edit)
+	// must not surface as a customer toggle — it would round-trip into SET_ADDONS and be
+	// rejected as an unknown add-on.
 	if adds, ok := dig(values, "addons").(map[string]any); ok {
 		out := map[string]any{}
 		for name, raw := range adds {
+			if _, curated := ClusterAddons[name]; !curated {
+				continue
+			}
 			if m, ok := raw.(map[string]any); ok {
 				if enabled, ok := m["enabled"].(bool); ok {
 					out[name] = enabled

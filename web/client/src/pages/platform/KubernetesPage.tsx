@@ -1258,12 +1258,12 @@ function ClusterDetail({
   const [editOpen, setEditOpen] = useState(false)
   const [oidcEditOpen, setOidcEditOpen] = useState(false)
   const [addonsOpen, setAddonsOpen] = useState(false)
-  // Prefill from the synced picks; a cluster created before the addons menu existed starts on
-  // the defaults (which mirror the chart's own).
-  const [addonsDraft, setAddonsDraft] = useState<Record<string, boolean>>(() => ({
-    ...defaultAddons(),
-    ...((c.addons as Record<string, boolean>) ?? {}),
-  }))
+  // Prefill from the synced picks, menu keys only; a cluster created before the addons menu
+  // existed starts on the defaults (which mirror the chart's own).
+  const [addonsDraft, setAddonsDraft] = useState<Record<string, boolean>>(() => {
+    const synced = (c.addons as Record<string, boolean>) ?? {}
+    return Object.fromEntries(ADDONS.map((a) => [a.key, synced[a.key] ?? a.on]))
+  })
   const current = (c.version as string) ?? ""
   // Only versions the server would accept (same major; same minor higher patch, or minor+1) —
   // never offer downgrades or multi-minor jumps that would just 400. A target must also carry
