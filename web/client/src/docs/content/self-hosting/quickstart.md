@@ -104,7 +104,7 @@ rabbitmq:
     password: "stratos"
 ```
 
-(Equivalently, add `-f deploy/chart/values-dev.yaml` to the install for these dev secrets.)
+(Equivalently, add `-f deploy/charts/stratos/values-dev.yaml` to the install for these dev secrets.)
 
 Then install straight from the OCI registry:
 

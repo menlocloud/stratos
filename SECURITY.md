@@ -38,7 +38,7 @@ release / image.
   environment variables or Kubernetes Secrets — not source.
 - Deployment value overlays that may carry secrets are already excluded by
   `.gitignore` (the local value-overlay files under `deploy/` listed there). The
-  tracked `deploy/chart/values.yaml` holds secret-free chart defaults — keep it
+  tracked `deploy/charts/stratos/values.yaml` holds secret-free chart defaults — keep it
   that way.
 - Sensitive config values can be encrypted at rest using the built-in
   `pkg/textcrypt` support and decrypted with a key injected at runtime

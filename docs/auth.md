@@ -247,5 +247,5 @@ In Helm, when bringing your own OIDC provider (`keycloakx.enabled: false`), set:
 The auth domain and admin domain are independent and may differ. On the external
 IdP you must create, per realm, a public OIDC client (standard flow + PKCE) with
 the matching client id, redirect URIs, and web origins; the chart provisions
-nothing on an external provider. See `deploy/chart/values.yaml` and the
+nothing on an external provider. See `deploy/charts/stratos/values.yaml` and the
 chart README for the full checklist.

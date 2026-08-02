@@ -119,7 +119,7 @@ in `web/`.
    `npm run build` all pass.
 4. Open a pull request against `main` and fill in the
    [PR template](.github/pull_request_template.md). CI builds the images and, if
-   you touched `deploy/chart/**`, requires a `Chart.yaml` version bump.
+   you touched `deploy/charts/stratos/**`, requires a `Chart.yaml` version bump.
 5. Address review feedback; a maintainer merges once CI is green.
 
 ## Reporting bugs & requesting features

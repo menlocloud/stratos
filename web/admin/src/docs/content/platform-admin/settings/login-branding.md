@@ -58,7 +58,7 @@ keycloakx:
 Apply the change:
 
 ```bash
-helm --namespace stratos upgrade stratos deploy/chart -f values.yaml
+helm --namespace stratos upgrade stratos deploy/charts/stratos -f values.yaml
 ```
 
 Since the volume is an `emptyDir`, the copy runs on every pod start — bump the image tag (or leave `imagePullPolicy: Always` in place) to roll out theme updates.

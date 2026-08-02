@@ -2,7 +2,7 @@
 // wire-compatible with the deployment contract: a mounted application.yml
 // overlaid with a small set of injected environment variables.
 //
-// The Helm chart (deploy/chart) mounts application.yml at
+// The Helm chart (deploy/charts/stratos) mounts application.yml at
 // /opt/stratos/api/application.yml and injects STRATOS_DB_URL,
 // STRATOS_RABBITMQ_USERNAME/PASSWORD and STRATOS_ENCRYPTION_DEFAULT_KEY as env
 // vars. We reproduce exactly that merge so the chart values/secrets work

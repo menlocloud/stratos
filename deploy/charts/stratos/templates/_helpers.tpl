@@ -75,11 +75,11 @@ externalPostgresql.existingSecret is empty). Credentials are URL-encoded.
 {{- /* urlquery encodes space as "+", which URL userinfo parsing keeps literal — force %20. */ -}}
 {{- if .Values.cnpg.enabled -}}
 {{- $u := .Values.postgresql.auth.username | urlquery | replace "+" "%20" -}}
-{{- $p := .Values.postgresql.auth.password | required "postgresql.auth.password is required (CloudNativePG owner) — set a strong password or use cnpg.existingSecret; for dev use -f deploy/chart/values-dev.yaml" | urlquery | replace "+" "%20" -}}
+{{- $p := .Values.postgresql.auth.password | required "postgresql.auth.password is required (CloudNativePG owner) — set a strong password or use cnpg.existingSecret; for dev use -f deploy/charts/stratos/values-dev.yaml" | urlquery | replace "+" "%20" -}}
 postgres://{{ $u }}:{{ $p }}@{{ include "stratos.pgHost" . }}:5432/{{ .Values.postgresql.auth.database }}?sslmode=require
 {{- else if .Values.postgresql.enabled -}}
 {{- $u := .Values.postgresql.auth.username | urlquery | replace "+" "%20" -}}
-{{- $p := .Values.postgresql.auth.password | required "postgresql.auth.password is required (bundled PostgreSQL) — set a strong password or use externalPostgresql.existingSecret; for dev use -f deploy/chart/values-dev.yaml" | urlquery | replace "+" "%20" -}}
+{{- $p := .Values.postgresql.auth.password | required "postgresql.auth.password is required (bundled PostgreSQL) — set a strong password or use externalPostgresql.existingSecret; for dev use -f deploy/charts/stratos/values-dev.yaml" | urlquery | replace "+" "%20" -}}
 postgres://{{ $u }}:{{ $p }}@{{ include "stratos.pgHost" . }}:5432/{{ .Values.postgresql.auth.database }}?sslmode=disable
 {{- else -}}
 {{- $u := .Values.externalPostgresql.username | urlquery | replace "+" "%20" -}}

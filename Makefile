@@ -1,6 +1,6 @@
 REGISTRY ?= registry.menlo.ai/library/stratos
 TAG      ?= go-m1-$(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
-CHART    ?= deploy/chart
+CHART    ?= deploy/charts/stratos
 NS       ?= stratos-test
 KUBECTX  ?= kamaji-sysadmin-cluster-oidc
 # Optional env-specific values overlay (gitignored, bring your own): make deploy VALUES=deploy/my-values.yaml

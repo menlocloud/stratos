@@ -1,6 +1,6 @@
 # Throwaway DEV overrides for a local / disposable Stratos install.
 #
-#   helm install stratos deploy/chart -n stratos --create-namespace -f deploy/chart/values-dev.yaml
+#   helm install stratos deploy/charts/stratos -n stratos --create-namespace -f deploy/charts/stratos/values-dev.yaml
 #
 # These are INSECURE, well-known values — never use them for anything reachable by others or
 # holding real data. The chart ships NO default secrets on purpose (a known encryption key would

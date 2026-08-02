@@ -1,4 +1,12 @@
-# deploy/charts — the Managed Kubernetes cluster chart
+# deploy/charts — every Helm chart this repo ships
+
+Three charts live here:
+
+- **`stratos`** — the application chart: the stratos API plus its bundled PostgreSQL,
+  RabbitMQ and Keycloak. This is what `make deploy` installs and what CI publishes to
+  `oci://ghcr.io/<owner>/charts` at the release tag (see its own README).
+- **`openstack-kamaji-cluster`** (+ its vendored subchart **`cluster-addons-menlo`**) — the
+  Managed Kubernetes cluster chart, described below.
 
 `openstack-kamaji-cluster` is the chart stratos installs, once per customer cluster, on a Kamaji
 management cluster: a CAPI `Cluster` + `OpenStackCluster`, a `KamajiControlPlane` (the control plane

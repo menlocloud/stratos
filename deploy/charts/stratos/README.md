@@ -9,8 +9,8 @@ bundled PostgreSQL and RabbitMQ (bitnami subcharts, pinned to the frozen
 ## Install
 
 ```sh
-helm dependency build deploy/chart
-helm install stratos deploy/chart -n stratos --create-namespace \
+helm dependency build deploy/charts/stratos
+helm install stratos deploy/charts/stratos -n stratos --create-namespace \
   --set api.encryptionKey=$(openssl rand -hex 32) \
   --set postgresql.auth.password=$(openssl rand -hex 16) \
   --set rabbitmq.auth.password=$(openssl rand -hex 16)
@@ -25,7 +25,7 @@ The chart ships **no default secrets** — `api.encryptionKey` and the bundled
 install that leaves them empty, so a known key/password never reaches a live
 Secret; use `api.existingSecret` / `external*.existingSecret` to supply your
 own). For a throwaway local dev install, pass the insecure sample values with
-`-f deploy/chart/values-dev.yaml`.
+`-f deploy/charts/stratos/values-dev.yaml`.
 
 A fresh database needs the base configuration documents seeded before the
 billing/project endpoints work — see `deploy/seed/` in the repo.
@@ -133,6 +133,6 @@ on purpose — never expose it.
 ## Upgrade / uninstall
 
 ```sh
-helm upgrade stratos deploy/chart -n stratos -f my-values.yaml
+helm upgrade stratos deploy/charts/stratos -n stratos -f my-values.yaml
 helm uninstall stratos -n stratos   # PVCs from bundled datastores survive
 ```

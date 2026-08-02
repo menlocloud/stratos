@@ -127,7 +127,7 @@ helm install stratos oci://ghcr.io/menlocloud/charts/stratos \
   -n stratos --create-namespace
 ```
 
-See [`deploy/chart/README.md`](deploy/chart/README.md) for values,
+See [`deploy/charts/stratos/README.md`](deploy/charts/stratos/README.md) for values,
 external PostgreSQL/OIDC wiring, and ingress / Gateway API exposure.
 
 ## 📂 Repository layout
@@ -174,7 +174,7 @@ console (source under `web/client/src/docs/content` and `web/admin/src/docs/cont
 the customer manual, operator manual, administrator manual, and the interactive
 Admin API + MCP reference.
 
-For operations and deployment, see the [Helm chart README](deploy/chart/README.md).
+For operations and deployment, see the [Helm chart README](deploy/charts/stratos/README.md).
 For contributing and local development, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## 🧪 Build & test

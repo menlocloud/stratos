@@ -23,7 +23,7 @@ consumer can pull a versioned artifact instead of building from source.
 
 ## Decision
 
-Ship a single **application** Helm chart, `deploy/chart`, that owns all of
+Ship a single **application** Helm chart, `deploy/charts/stratos`, that owns all of
 its own templates (`templates/`, with a local `_helpers.tpl`). It renders the
 API `Deployment`, the two UI `Deployment`s, their services/ingress/routes (the
 ingress exposes the public API paths, including `/mcp`), the encryption secret,
@@ -54,7 +54,7 @@ nothing outside the chart.
   git tag (`v*`) publishes under that tag name; a pull request builds only, no
   push. Auth is the built-in `GITHUB_TOKEN` (`packages: write`) — no external
   registry secrets.
-- **Chart** — `.github/workflows/helm.yml` packages `deploy/chart` and
+- **Chart** — `.github/workflows/helm.yml` packages `deploy/charts/stratos` and
   pushes it to `oci://ghcr.io/<owner>/charts`. The chart `version` in
   `Chart.yaml` drives it: a PR that changes chart source must bump the version
   (CI fails otherwise), and a push to `main` publishes only if that version has
