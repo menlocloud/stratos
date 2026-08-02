@@ -35,7 +35,7 @@ INSERT INTO "pricePlanRule" (id, doc) VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- Managed Kubernetes CONTROL-PLANE fee (kubernetes_cluster, priced per cp_replicas).
--- Deliberately commented: the CP-pricing decision is still open (tasks/managed-k8s-plan.md §6 —
+-- Deliberately commented: the CP-pricing decision is still open (design plan §6 —
 -- free CP + paid HA vs flat fee). Uncomment after that decision; keep in sync with the
 -- kubernetes_cluster entry in price-plan-seed.json. Worker VMs/volumes/LBs already bill via
 -- the instance/volume/load_balancer rules above — never add k8s worker rules here.

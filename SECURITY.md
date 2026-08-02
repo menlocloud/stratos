@@ -37,7 +37,7 @@ release / image.
   secrets, Stripe keys, and OpenStack passwords are supplied at runtime via
   environment variables or Kubernetes Secrets — not source.
 - Deployment value overlays that may carry secrets are already excluded by
-  `.gitignore` (e.g. `deploy/stratos-values.yaml`, `deploy/values-*.yaml`). The
+  `.gitignore` (the local value-overlay files under `deploy/` listed there). The
   tracked `deploy/chart/values.yaml` holds secret-free chart defaults — keep it
   that way.
 - Sensitive config values can be encrypted at rest using the built-in

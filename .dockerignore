@@ -9,7 +9,7 @@ docs
 tasks
 test
 deploy/values-*.yaml
+deploy/*-values.yaml
 deploy/seed
 **/*_test.go
 web
-deploy/stratos-cloud-values.yaml

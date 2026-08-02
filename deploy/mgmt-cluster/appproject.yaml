@@ -1,5 +1,5 @@
 # ArgoCD AppProject `stratos-k8s` — the guardrail around every stratos-created Application
-# (tasks/managed-k8s-plan.md D3 / §3.0). Every customer-cluster Application stratos applies
+# (design plan D3 / §3.0). Every customer-cluster Application stratos applies
 # carries `spec.project: stratos-k8s` (internal/cloud/kamaji/application.go), so even a
 # compromised stratos credential can only:
 #   * source charts from OUR pinned OCI registry (never an arbitrary git/helm repo),

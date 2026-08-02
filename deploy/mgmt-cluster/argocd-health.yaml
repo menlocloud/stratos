@@ -1,5 +1,5 @@
 # Custom ArgoCD health checks for the CRDs the openstack-kamaji-cluster chart renders
-# (tasks/managed-k8s-plan.md D3/§3.0: ArgoCD has NO built-in health for TenantControlPlane /
+# (design plan D3/§3.0: ArgoCD has NO built-in health for TenantControlPlane /
 # Cluster / MachineDeployment — without these, every customer-cluster Application reports
 # Healthy the moment manifests apply, long before the control plane or workers exist, and the
 # stratos status mapping (Argo health → cluster status, internal/cloud/kamaji/syncprovider.go)
