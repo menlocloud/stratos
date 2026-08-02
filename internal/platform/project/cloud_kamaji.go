@@ -338,6 +338,39 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 		httpx.OK(w, map[string]any{"result": "ROTATING"})
 		return true
 
+	case "SET_ADDONS":
+		// Post-create add-on (re)configuration — the same curated menu the create wizard offers,
+		// replacing the customer-toggle block wholesale (the UI always sends the full set).
+		addons, err := kamajiAddons(data["addons"])
+		if err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		for name := range addons {
+			if _, ok := kamaji.ClusterAddons[name]; !ok {
+				h.fail(w, httpx.BadRequest(fmt.Sprintf("unknown add-on %q", name)))
+				return true
+			}
+		}
+		err = ks.PatchClusterValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+			if len(addons) == 0 {
+				delete(values, "addons") // back to the chart's defaults
+				return nil
+			}
+			block := map[string]any{}
+			for name, enabled := range addons {
+				block[name] = map[string]any{"enabled": enabled}
+			}
+			values["addons"] = block
+			return nil
+		})
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
+		return true
+
 	case "APPLY_PLATFORM_UPDATE":
 		// Re-pins the cluster onto the provider's CURRENT chart version — the customer's opt-in
 		// "platform update". The target is server-side authority (never client-supplied): the
@@ -552,13 +585,12 @@ func kamajiSpecFromData(projectID string, d map[string]any) (kamaji.ClusterSpec,
 		}
 	}
 	// Curated add-on toggles ({name: bool}); Validate rejects names off the menu.
-	if adds, ok := d["addons"].(map[string]any); ok {
-		spec.Addons = map[string]bool{}
-		for name, v := range adds {
-			if b, ok := v.(bool); ok {
-				spec.Addons[name] = b
-			}
+	if raw, has := d["addons"]; has && raw != nil {
+		addons, err := kamajiAddons(raw)
+		if err != nil {
+			return spec, err
 		}
+		spec.Addons = addons
 	}
 	groups, err := kamajiNodeGroups(d["nodeGroups"])
 	if err != nil {
@@ -566,6 +598,25 @@ func kamajiSpecFromData(projectID string, d map[string]any) (kamaji.ClusterSpec,
 	}
 	spec.NodeGroups = groups
 	return spec, nil
+}
+
+// kamajiAddons decodes the addons toggle map STRICTLY: a non-bool value is a 400, not a silent
+// drop — {"metricsServer": "false"} silently ignored would install metrics-server (the chart
+// default), the exact opposite of the request.
+func kamajiAddons(v any) (map[string]bool, error) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("addons must be an object of {name: true|false}")
+	}
+	out := make(map[string]bool, len(m))
+	for name, raw := range m {
+		b, ok := raw.(bool)
+		if !ok {
+			return nil, fmt.Errorf("addons: %q must be true or false", name)
+		}
+		out[name] = b
+	}
+	return out, nil
 }
 
 // kamajiNodeGroups decodes a free-form nodeGroups array via a JSON round-trip into the typed

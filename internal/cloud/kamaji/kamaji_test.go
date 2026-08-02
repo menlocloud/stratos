@@ -340,6 +340,22 @@ func TestClusterAddons(t *testing.T) {
 	if _, has := plain["addons"]; has {
 		t.Error("no picks must render no addons block")
 	}
+
+	// The menu's defaults are a CONTRACT: they must mirror the chart's effective defaults (and
+	// the client wizard's), or a wizard that always sends the full set silently diverges from
+	// what an API user gets by omitting the block. Update all three together, deliberately.
+	want := map[string]bool{
+		"certManager": false, "ingress": false, "metricsServer": true,
+		"monitoring": false, "nvidiaGPUOperator": false,
+	}
+	if len(ClusterAddons) != len(want) {
+		t.Errorf("ClusterAddons = %v, want %v", ClusterAddons, want)
+	}
+	for k, v := range want {
+		if got, ok := ClusterAddons[k]; !ok || got != v {
+			t.Errorf("ClusterAddons[%s] = %v/%v, want %v", k, got, ok, v)
+		}
+	}
 }
 
 func TestBuildValuesBYONetwork(t *testing.T) {

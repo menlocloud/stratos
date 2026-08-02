@@ -69,7 +69,7 @@ export function useProjectGpuCapacity(pid: string, scope: CloudScope | undefined
 }
 
 // Cached cloud-resource list by type (POST /project/{pid}/resource?type=X).
-export function useCloudList(pid: string, type: string, extraQuery = "") {
+export function useCloudList(pid: string, type: string, extraQuery = "", refetchInterval: number | false = false) {
   const scope = useCloudScope(pid)
   return useQuery({
     queryKey: ["cloud", pid, type, extraQuery],
@@ -79,6 +79,7 @@ export function useCloudList(pid: string, type: string, extraQuery = "") {
         cloud: scope,
       }),
     enabled: !!pid && !!scope,
+    refetchInterval,
   })
 }
 

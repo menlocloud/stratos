@@ -139,8 +139,6 @@ export interface DataTableProps<TData> {
   toolbar?: React.ReactNode | ((table: TanStackTable<TData>) => React.ReactNode)
   /** Renders a built-in search input bound to the global filter. */
   searchPlaceholder?: string
-  /** Pre-fills the global filter (e.g. from a ?q= deep link). */
-  initialSearch?: string
   initialSorting?: SortingState
   /** Client pagination is on by default; disable only for deliberately short lists. */
   pagination?: boolean
@@ -160,7 +158,6 @@ export function DataTable<TData>({
   getRowId,
   toolbar,
   searchPlaceholder,
-  initialSearch = "",
   initialSorting = [],
   pagination = true,
   pageSize = DEFAULT_PAGE_SIZE,
@@ -168,7 +165,7 @@ export function DataTable<TData>({
   className,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>(initialSorting)
-  const [globalFilter, setGlobalFilter] = useState(initialSearch)
+  const [globalFilter, setGlobalFilter] = useState("")
   const isDesktopTable = useDesktopTableLayout()
 
   const rows = data ?? (EMPTY as TData[])

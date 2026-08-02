@@ -463,9 +463,11 @@ nodeGroupDefaults:
   nodeVolumeDetachTimeout: 5m0s
   nodeDeletionTimeout: 5m0s
   # -- Surge-first rollout: bring the replacement node up, drain the old one (nodeDrainTimeout
-  # above bounds the drain), then delete — one node at a time, zero capacity dip. The old
-  # delete-first default (maxUnavailable 1 / maxSurge 0) took a node away before its
-  # replacement existed. Needs one machine of temporary quota headroom during rollouts.
+  # above bounds the drain), then delete — one node at a time PER GROUP, zero capacity dip. The
+  # old delete-first default (maxUnavailable 1 / maxSurge 0) took a node away before its
+  # replacement existed. Quota headroom needed during a rollout: one temporary machine per node
+  # group rolling CONCURRENTLY (a cluster-wide upgrade rolls every group at once); a tenant at
+  # its exact instance/GPU quota stalls until headroom frees, and resumes by itself.
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdate:
@@ -691,3 +693,30 @@ addons:
     enabled: false
   mellanoxNetworkOperator:
     enabled: false
+
+  # -- Monitoring runs STATELESS for now: workload clusters have no StorageClass (Cinder CSI is
+  # off until the controller/node split lands — see the openstack block above), so the subchart's
+  # PVC-backed Prometheus/Alertmanager/Loki defaults would sit Pending forever. Nulls delete the
+  # volume claims at helm coalesce; retention is trimmed to match memory-backed storage. Remove
+  # these overrides when dynamic storage ships.
+  monitoring:
+    kubePrometheusStack:
+      release:
+        values:
+          alertmanager:
+            alertmanagerSpec:
+              retention: 24h
+              storage: null
+          prometheus:
+            prometheusSpec:
+              retention: 24h
+              storageSpec: null
+    lokiStack:
+      release:
+        values:
+          loki:
+            config:
+              limits_config:
+                retention_period: 24h
+            persistence:
+              enabled: false

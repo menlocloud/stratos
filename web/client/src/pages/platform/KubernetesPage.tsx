@@ -122,13 +122,22 @@ const ADDONS = [
   { key: "metricsServer", label: "Metrics Server", hint: "kubectl top and autoscaling (HPA) metrics", on: true },
   { key: "certManager", label: "cert-manager", hint: "TLS certificates from Let's Encrypt or private CAs", on: false },
   { key: "ingress", label: "NGINX Ingress", hint: "HTTP(S) ingress controller for your Services", on: false },
-  { key: "monitoring", label: "Monitoring stack", hint: "Prometheus, Grafana dashboards and Loki logs (uses ~2 GB RAM)", on: false },
+  { key: "monitoring", label: "Monitoring stack", hint: "Prometheus, Grafana dashboards and Loki logs (~2 GB RAM; metrics/logs kept in memory, 24h retention)", on: false },
   { key: "nvidiaGPUOperator", label: "NVIDIA GPU Operator", hint: "Drivers and container toolkit for GPU node groups", on: false },
 ] as const
 const defaultAddons = () => Object.fromEntries(ADDONS.map((a) => [a.key, a.on])) as Record<string, boolean>
 
 function cluster(r: CloudResource): Cluster {
   return (r.data?.cluster as Cluster) ?? {}
+}
+
+// clusterBusy — "the platform is actively working on it". Deliberately NOT status !== READY:
+// a permanently DEGRADED/SUSPENDED cluster (dead node, stuck addon) is broken, not in
+// progress — treating it as busy would poll the management cluster forever and show a
+// "working on it" checklist over a cluster nobody is working on.
+function clusterBusy(c: Cluster): boolean {
+  const status = String(c.status ?? "")
+  return status === "PENDING" || status === "PROGRESSING" || String(c.sync_status ?? "") === "Progressing"
 }
 
 // Stable key for a location picker — the API array order is not stable, so never key by index.
@@ -333,14 +342,9 @@ function useKubernetesData(pid: string) {
       apiFetch<CloudResource[]>(`/project/${pid}/resource?type=KUBERNETES_CLUSTER`, { method: "POST", cloud: kScope }),
     enabled: !!pid && !!kScope,
     // While anything is provisioning/rolling, poll — the list is a live read-through off the
-    // management cluster, so each tick reflects real progress. Quiet clusters stop the polling.
-    refetchInterval: (query) => {
-      const busy = (query.state.data ?? []).some((r) => {
-        const c = cluster(r)
-        return (c.status && c.status !== "READY") || (c.sync_status && c.sync_status !== "Synced")
-      })
-      return busy ? 15000 : false
-    },
+    // management cluster, so each tick reflects real progress. Quiet (and broken-but-stable)
+    // clusters stop the polling.
+    refetchInterval: (query) => ((query.state.data ?? []).some((r) => clusterBusy(cluster(r))) ? 15000 : false),
   })
   const flavors = useQuery({
     queryKey: ["bulk-action", pid, "LIST_FLAVORS", osScope?.serviceId],
@@ -1185,11 +1189,13 @@ function ClusterDetail({
   const c = cluster(resource)
   const name = (c.name as string) || resource.externalId || resource.id
   const groups = (c.node_groups as Cluster[]) ?? []
+  const syncStatus = (c.sync_status as string) || ""
+  const busy = clusterBusy(c)
 
   // The cluster's worker VMs — regular SERVER resources whose names are prefixed with the
   // cluster id (CAPI machine names: <clusterID>-<group>-<hash>-<suffix>). AWS-style: list them
   // right here, click through to the server's own page.
-  const serversQ = useCloudList(pid, "SERVER")
+  const serversQ = useCloudList(pid, "SERVER", "", busy ? 15000 : false)
   const instances = useMemo(() => {
     const prefix = (resource.externalId || "") + "-"
     if (prefix === "-") return []
@@ -1208,8 +1214,6 @@ function ClusterDetail({
 
   // Provisioning/rollout progress — a plain-language checklist of what the platform is doing,
   // derived from the synced state (which the page polls live while anything is in flight).
-  const syncStatus = (c.sync_status as string) || ""
-  const busy = ((c.status as string) && c.status !== "READY") || (syncStatus && syncStatus !== "Synced")
   // Recomputed per render on purpose — the inputs are tiny and re-derived from the query row.
   const progressSteps = (() => {
     const endpointUp = !!(c.endpoint as string)
@@ -1253,6 +1257,13 @@ function ClusterDetail({
   const [rotateOpen, setRotateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [oidcEditOpen, setOidcEditOpen] = useState(false)
+  const [addonsOpen, setAddonsOpen] = useState(false)
+  // Prefill from the synced picks; a cluster created before the addons menu existed starts on
+  // the defaults (which mirror the chart's own).
+  const [addonsDraft, setAddonsDraft] = useState<Record<string, boolean>>(() => ({
+    ...defaultAddons(),
+    ...((c.addons as Record<string, boolean>) ?? {}),
+  }))
   const current = (c.version as string) ?? ""
   // Only versions the server would accept (same major; same minor higher patch, or minor+1) —
   // never offer downgrades or multi-minor jumps that would just 400. A target must also carry
@@ -1369,6 +1380,9 @@ function ClusterDetail({
             </Button>
             <Button size="sm" variant="outline" onClick={() => setOidcEditOpen(true)}>
               Configure OIDC
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setAddonsOpen(true)}>
+              Manage add-ons
             </Button>
             <Button size="sm" variant="destructive" onClick={onDeleted}>
               <Trash2 className="size-4" /> Delete
@@ -1508,6 +1522,50 @@ function ClusterDetail({
           </div>
         </div>
 
+        {/* Add-ons — same curated menu as the create wizard, SET_ADDONS full replace. */}
+        <Dialog open={addonsOpen} onOpenChange={setAddonsOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Manage add-ons</DialogTitle>
+              <DialogDescription>
+                Add-ons are installed and managed for you. Turning one off removes it from the
+                cluster (its data is not kept).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-3 py-2">
+              {ADDONS.map((a) => (
+                <div key={a.key} className="flex items-center justify-between gap-3">
+                  <div>
+                    <Label htmlFor={`m-addon-${a.key}`} className="text-sm">{a.label}</Label>
+                    <p className="text-xs text-muted-foreground">{a.hint}</p>
+                  </div>
+                  <Switch
+                    id={`m-addon-${a.key}`}
+                    checked={addonsDraft[a.key] ?? false}
+                    onCheckedChange={(on) => setAddonsDraft({ ...addonsDraft, [a.key]: on })}
+                  />
+                </div>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAddonsOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => {
+                  act("SET_ADDONS", { addons: addonsDraft })
+                    .then(() => {
+                      onPatch({ addons: { ...addonsDraft } })
+                      toast.success("Add-on changes are being applied")
+                      setAddonsOpen(false)
+                    })
+                    .catch((e: Error) => toast.error(e.message))
+                }}
+              >
+                Apply
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Platform update — opt-in re-pin onto the provider's current platform version. */}
         <Dialog open={platformOpen} onOpenChange={setPlatformOpen}>
           <DialogContent>
@@ -1548,7 +1606,9 @@ function ClusterDetail({
               <DialogTitle>Upgrade cluster</DialogTitle>
               <DialogDescription>
                 The control plane upgrades first (zero-downtime rollout), then node groups rotate to the new
-                version's image. Workloads move as nodes are replaced.
+                version's image — a new node comes up and is drained into before the old one is removed.
+                All groups roll at once, so the project needs temporary capacity for one extra instance per
+                node group; at the quota ceiling the rollout waits until room frees up, then continues.
               </DialogDescription>
             </DialogHeader>
             {upgradeTargets.length === 0 ? (

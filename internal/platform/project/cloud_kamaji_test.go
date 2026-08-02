@@ -47,6 +47,15 @@ func TestKamajiSpecFromData(t *testing.T) {
 	if _, err := kamajiSpecFromData("p1", map[string]any{"version": "1.35.4", "nodeGroups": []any{}}); err == nil {
 		t.Error("missing name: want error")
 	}
+	// A non-bool addon value must be a 400, not a silent drop — {"metricsServer": "false"}
+	// ignored would install metrics-server (the chart default), the opposite of the request.
+	if _, err := kamajiSpecFromData("p1", map[string]any{
+		"name": "x", "version": "1.35.4",
+		"nodeGroups": []any{map[string]any{"name": "w", "flavorId": "f", "count": 1}},
+		"addons":     map[string]any{"metricsServer": "false"},
+	}); err == nil || !strings.Contains(err.Error(), "metricsServer") {
+		t.Errorf("non-bool addon: err = %v", err)
+	}
 	if _, err := kamajiSpecFromData("p1", map[string]any{"name": "x", "version": "1"}); err == nil {
 		t.Error("missing nodeGroups: want error")
 	}
