@@ -22,9 +22,89 @@ references (§) below point into it. Release posture is **internal-first**
 > health checks against live CRDs. Also unproven: the management-side CCM actually clearing the
 > `node.cloudprovider.kubernetes.io/uninitialized` taint from where it runs.
 
+## 0. Bootstrap: from nothing to a management cluster
+
+Everything below assumes a **Kamaji management cluster** already runs inside the OpenStack
+cloud. This section is the one-time path that creates it. The shape is a three-stage
+bootstrap — each stage manages the next, and the only hand-installed piece is a
+deliberately tiny seed cluster:
+
+```mermaid
+flowchart LR
+    subgraph outside["Outside the cloud"]
+        seed["Seed cluster<br/>(tiny, hand-installed)<br/>cert-manager<br/>cluster-api-operator:<br/>CAPI core + kubeadm + CAPO"]
+    end
+    subgraph cloud["OpenStack cloud"]
+        subgraph mgmt["Management cluster<br/>(CAPI-created, scalable)"]
+            stack["Kamaji + DataStore<br/>cluster-api-operator:<br/>Kamaji CP provider + CAPO + CAAPH<br/>ArgoCD + AppProject"]
+        end
+        tcp["Tenant control planes<br/>(pods on the mgmt cluster)"]
+        vms["Customer worker VMs<br/>(each customer's own tenant)"]
+    end
+    stratos["Stratos"]
+    seed -- "creates + heals<br/>(Cluster API)" --> mgmt
+    stratos -- "Application CRs" --> mgmt
+    stack --> tcp
+    stack --> vms
+```
+
+Why two clusters? The management cluster should live *inside* the cloud (close to the VMs
+it manages, scalable through CAPI like everything else) — but a CAPI cluster cannot create
+itself. Something outside the cloud has to hold the Cluster API controllers that create it
+and, more importantly, heal it when the cloud has a bad day. That something is the seed
+cluster: small, boring, and touched only when the management cluster itself needs surgery.
+
+### 0.1 Seed cluster — outside OpenStack, installed by hand
+
+Any conformant distribution works (kubeadm, k3s, RKE2); a single small node is enough,
+three if you want the seed itself HA. It runs nothing but the machinery to manage the next
+hop. Install, in order:
+
+1. **cert-manager** (webhook certificates for the CAPI providers).
+2. **cluster-api-operator**, declaring four providers: CAPI **core**, the **kubeadm**
+   bootstrap + control-plane providers, and the **openstack** infrastructure provider
+   (CAPO).
+3. An OpenStack **application credential** for the target cloud, as a `clouds.yaml`
+   Secret — this is what CAPO authenticates with.
+
+### 0.2 Management cluster — inside OpenStack, created by the seed
+
+From the seed, create a **kubeadm-based** CAPI cluster (for example the
+`openstack-cluster` chart from capi-helm-charts). Kubeadm-based on purpose: this cluster
+will *host* other clusters' control planes, so its own control plane must be
+self-sufficient VMs, not a hosted one.
+
+Cloud prerequisites: an Ubuntu **CAPI node image** in Glance (kubelet/kubeadm baked in,
+matching the k8s version), flavors for CP + worker nodes, and an external network for the
+API-server LoadBalancer. Scaling is a values change (MachineDeployment replicas or the
+autoscaler); k8s upgrades are a new node image + rotation — both driven from the seed.
+
+### 0.3 Kamaji stack — on the management cluster
+
+| Component | Why |
+|---|---|
+| **Kamaji operator** + `kamaji-etcd` DataStore | Hosts tenant control planes as pods; the DataStore (`default`) is where their etcd state lives. |
+| **cluster-api-operator** with the **Kamaji control-plane provider**, kubeadm bootstrap provider and **CAPO** | The tenant-cluster machinery: KamajiControlPlane for CPs, CAPO for worker VMs in customer tenants. |
+| **CAAPH** (cluster-api-addon-provider-helm) | Delivers the in-cluster addons (CNI, metrics-server, …) the chart declares. |
+| **cert-manager** | Webhook certs for all of the above. |
+| **ArgoCD** | The delivery plane — stratos only writes `Application` CRs (§3). |
+| **external-dns** (optional) | Only if you want the `dnsZone` feature (§2). |
+| Registry mirror | The chart's image defaults pull through an internal mirror; make sure it is reachable from the cloud (§2 extras). |
+
+Then apply `deploy/mgmt-cluster/` (stratos RBAC, the `stratos-k8s` AppProject guardrail,
+the ArgoCD health checks) — that is §1 below, and the exact apply order lives in
+[`deploy/mgmt-cluster/README.md`](../deploy/mgmt-cluster/README.md).
+
+### 0.4 Attach to stratos
+
+Admin portal → *Cloud providers* → *Add provider* → *Kubernetes*, with the stratos SA
+kubeconfig from `deploy/mgmt-cluster/rbac.yaml`. Every field is documented in §2. Pair it
+with the OpenStack provider of the same region — worker VMs land in the customer's
+keystone tenant of that paired service.
+
 ## 1. Management-cluster prerequisites
 
-One-time, per management cluster (details + apply order: [`deploy/mgmt-cluster/README.md`](../deploy/mgmt-cluster/README.md)):
+One-time, per management cluster (details + apply order: [`deploy/mgmt-cluster/README.md`](../deploy/mgmt-cluster/README.md); no management cluster at all yet → start at §0):
 
 1. Kamaji stack live (Kamaji operator, cluster-api-operator + KamajiControlPlane provider,
    CAPO, CAAPH).
@@ -106,6 +186,10 @@ cloud credential **never enters the workload cluster**:
   NGINX Ingress, Monitoring stack, NVIDIA GPU Operator opt-in) at create and later via
   *Manage add-ons*. Unknown names 400 — the operator-only levers (CNI, the credential push,
   the storage-class override) are not client-reachable.
+- **CNI observability**: the CNI is Cilium with **Hubble and hubble-relay enabled by
+  default** (chart ≥ 0.7.0) — every cluster has flow observability out of the box
+  (`cilium hubble port-forward` + the `hubble` CLI against the relay). The Hubble UI stays
+  opt-in via the chart values; its images are already mirrored.
 - **Platform (chart) updates**: every cluster pins the chart version it was created with; the
   provider's `chartVersion` only affects NEW clusters. Moving an existing cluster is explicit:
   the customer's *Apply platform update* button (offered when behind the provider pin) or the
@@ -127,6 +211,25 @@ cloud credential **never enters the workload cluster**:
 - Example rules for both live in `deploy/seed/price-plan-seed.json`.
 
 ## 3. How provisioning works (what you'll see on the mgmt cluster)
+
+```mermaid
+sequenceDiagram
+    participant C as Customer
+    participant S as Stratos
+    participant K as Keystone (customer tenant)
+    participant A as ArgoCD (mgmt cluster)
+    participant KJ as Kamaji / CAPI
+    participant OS as OpenStack (customer tenant)
+    C->>S: Create cluster
+    S->>K: Mint per-cluster application credential
+    S->>A: st-project namespace + clouds.yaml Secret + Application CR (pinned chart, full values)
+    A->>KJ: Render + sync chart (TenantControlPlane, Cluster, MachineDeployments, addons)
+    KJ-->>A: CP pods up, API endpoint (LB) ready
+    KJ->>OS: CAPO creates worker VMs
+    S-->>C: Status = Application health + TCP + MachineDeployments
+    C->>S: Download kubeconfig
+    S->>KJ: Fetch admin-kubeconfig Secret on demand (never stored)
+```
 
 Create path (plan D3/D4/D7):
 
