@@ -174,6 +174,18 @@ func TestAddFundsDispatch(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("accountCredit count = %d, want 1", n)
 	}
+	// the minted credit must carry invoiceExchangeRate (=1 same-currency): a rate-less credit
+	// nil-panics the bill-settle leg (the prod midnight monthlyBill outage shape).
+	var credit struct {
+		InvoiceCurrency     string           `json:"invoiceCurrency"`
+		InvoiceExchangeRate *decimal.Decimal `json:"invoiceExchangeRate"`
+	}
+	if found, err := db.C("accountCredit").FindOne(ctx, pgdoc.M{"billingProfileId": bpID}, &credit); err != nil || !found {
+		t.Fatalf("minted credit not readable: %v / %v", found, err)
+	}
+	if credit.InvoiceCurrency != "USD" || credit.InvoiceExchangeRate == nil || !credit.InvoiceExchangeRate.Equal(decimal.NewFromInt(1)) {
+		t.Fatalf("minted credit invoice fields: ccy=%q rate=%v, want USD @ 1", credit.InvoiceCurrency, credit.InvoiceExchangeRate)
+	}
 	// idempotent: a second confirm must NOT create a duplicate credit.
 	if _, err := svc.ProcessAddFunds(ctx, resp.TransactionID); err != nil {
 		t.Fatalf("idempotent confirm: %v", err)

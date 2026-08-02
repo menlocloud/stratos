@@ -120,6 +120,27 @@ func TestSettleBillAmountWaterfall(t *testing.T) {
 	}
 }
 
+// TestSettleBillAmountNilInvoiceExchangeRate replicates the stored-credit shape that froze the
+// prod monthly bill run: invoiceCurrency set, invoiceExchangeRate ABSENT (a deposit-minted or
+// legacy credit). Settling must default the rate to 1 instead of nil-panicking.
+func TestSettleBillAmountNilInvoiceExchangeRate(t *testing.T) {
+	x := NewExchanger(&pairClient{})
+	bill := &Bill{InvoiceCurrency: "USD", Items: []BillItem{{NetAmount: mustDec("100")}}}
+	c := acctCredit("a1", "200", "USD", "USD", "1")
+	c.InvoiceExchangeRate = nil
+	_, acct, err := SettleBillAmount(bill, mustDec("100"), nil, []*AccountCredit{c}, nil, "USD", "USD", x, settleNow)
+	if err != nil || len(acct) != 1 {
+		t.Fatalf("acct=%v err=%v", acct, err)
+	}
+	aac := bill.AppliedAccountCredits[0]
+	if !aac.Amount.Equal(mustDec("100")) || !aac.ExchangeRate.Equal(mustDec("1")) || !aac.GrossAmount.Equal(mustDec("100")) {
+		t.Errorf("applied = %+v, want amount 100 @ rate 1", aac)
+	}
+	if !c.Amount.Equal(mustDec("100")) {
+		t.Errorf("credit balance = %v, want 100", c.Amount)
+	}
+}
+
 func TestSettleAccountCreditAmountScale(t *testing.T) {
 	x := NewExchanger(&pairClient{})
 	bill := &Bill{InvoiceCurrency: "USD", Items: []BillItem{{NetAmount: mustDec("10.005")}}}

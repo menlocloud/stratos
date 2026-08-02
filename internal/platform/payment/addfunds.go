@@ -447,6 +447,7 @@ func newAccountCredit(ctx context.Context, b *billing.Repo, billingProfileID, cu
 	now := time.Now().UTC()
 	baseCcy, _ := b.BaseCurrency(ctx)
 	amt := amount
+	rate := decimal.NewFromInt(1)
 	if currency != baseCcy {
 		x := pricing.NewExchanger(nil)
 		a, err := x.ExchangeToProductCurrency(amount, currency, baseCcy, now)
@@ -454,14 +455,22 @@ func newAccountCredit(ctx context.Context, b *billing.Repo, billingProfileID, cu
 			return nil, err
 		}
 		amt = a
+		r, err := x.GetExchangeRate(baseCcy, currency, now)
+		if err != nil {
+			return nil, err
+		}
+		rate = r
 	}
+	// invoiceExchangeRate must be stamped on every minted credit: the bill-settle leg
+	// (settleAccountCreditLeg) multiplies by it when the credit pays a bill.
 	return &pricing.AccountCredit{
-		BillingProfileID: billingProfileID,
-		InitialAmount:    &amt,
-		Amount:           &amt,
-		Currency:         baseCcy,
-		InvoiceCurrency:  currency,
-		CreatedAt:        &now,
+		BillingProfileID:    billingProfileID,
+		InitialAmount:       &amt,
+		Amount:              &amt,
+		Currency:            baseCcy,
+		InvoiceCurrency:     currency,
+		InvoiceExchangeRate: &rate,
+		CreatedAt:           &now,
 	}, nil
 }
 
