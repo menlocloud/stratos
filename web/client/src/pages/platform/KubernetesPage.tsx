@@ -374,26 +374,11 @@ function useKubernetesData(pid: string) {
   const projectQuota = useProjectQuota(pid, osScope)
   const gpuCapacity = useProjectGpuCapacity(pid, osScope, project?.gpuCapacityVisible === true)
 
-  // Nova availability zones of the worker cloud — the per-node-group AZ picker. Same live
-  // action the server create wizard uses.
-  const azsQ = useQuery({
-    queryKey: ["bulk-action", pid, "LIST_AVAILABILITY_ZONES", osScope?.serviceId],
-    queryFn: () =>
-      apiFetch<{ result?: { name?: string; displayName?: string }[] }>(`/project/${pid}/cloud/action`, {
-        method: "POST",
-        body: { action: "LIST_AVAILABILITY_ZONES" },
-        cloud: osScope,
-      }),
-    enabled: !!pid && !!osScope,
-    select: (d) => d?.result ?? [],
-  })
-  const azOptions = useMemo(
-    () =>
-      (azsQ.data ?? [])
-        .map((z) => ({ name: String(z.name ?? ""), label: String(z.displayName || z.name || "") }))
-        .filter((z) => z.name),
-    [azsQ.data],
-  )
+  // NOTE: no per-node-group AZ picker on purpose. In this platform's topology an availability
+  // zone IS a separate cloud (own network, own Kamaji management cluster; only Keystone is
+  // shared), so a cluster lives entirely in one zone — the zone choice is the LOCATION choice,
+  // and CAPI/Kamaji cannot span zones. The NodeGroup.availabilityZone API field still passes
+  // through to the chart's failureDomain for a future genuinely multi-AZ region.
 
   // Node-group flavor options, filtered and gated exactly like the create-server wizard:
   //  - no local ephemeral/swap disk (worker nodes boot from volume; backend rejects those),
@@ -445,7 +430,7 @@ function useKubernetesData(pid: string) {
   )
 
   return {
-    kLocs, kScope, osScope, clusters, azOptions,
+    kLocs, kScope, osScope, clusters,
     versionsFor, variantsFor, platformVersionFor, storageFor, rowServiceId, rowScope, flavorOptionsFor,
     invalidate, patchCluster,
   }
@@ -455,7 +440,7 @@ export default function KubernetesPage() {
   const pid = useProjectId()
   const navigate = useNavigate()
   const {
-    kLocs, kScope, clusters, azOptions, versionsFor, variantsFor, storageFor, rowServiceId, rowScope, flavorOptionsFor, invalidate,
+    kLocs, kScope, clusters, versionsFor, variantsFor, storageFor, rowServiceId, rowScope, flavorOptionsFor, invalidate,
   } = useKubernetesData(pid)
   const { data, isLoading, isError, error, refetch, isFetching } = clusters
 
@@ -646,7 +631,7 @@ export default function KubernetesPage() {
           variantsForVersion={(v) => variantsFor(createLoc?.serviceId, v)}
           storage={storageFor(createLoc?.serviceId)}
           flavors={createFlavorOptions}
-          azOptions={azOptions}
+         
           networks={networkOptions}
           locations={kLocs}
           locKey={createLoc ? locKeyOf(createLoc) : ""}
@@ -696,7 +681,7 @@ export function KubernetesClusterDetailPage() {
   const navigate = useNavigate()
   const { resourceId = "" } = useParams()
   const {
-    clusters, azOptions, versionsFor, variantsFor, platformVersionFor, rowServiceId, rowScope, flavorOptionsFor, invalidate, patchCluster,
+    clusters, versionsFor, variantsFor, platformVersionFor, rowServiceId, rowScope, flavorOptionsFor, invalidate, patchCluster,
   } = useKubernetesData(pid)
   const resource = (clusters.data ?? []).find((r) => r.id === resourceId)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -762,7 +747,7 @@ export function KubernetesClusterDetailPage() {
           variantsForVersion={(v) => variantsFor(rowServiceId(resource), v)}
           platformVersion={platformVersionFor(rowServiceId(resource))}
           flavors={flavorOptionsFor(rowServiceId(resource))}
-          azOptions={azOptions}
+         
           onDeleted={() => setDeleteOpen(true)}
           onPatch={(patch) => patchCluster(resource.id, patch)}
         />
@@ -791,7 +776,7 @@ export function KubernetesClusterDetailPage() {
 
 // ── create/edit form ─────────────────────────────────────────────────────────
 function ClusterFormDialog({
-  title, submitLabel, versions, variantsForVersion, storage, flavors, azOptions, networks, locations, locKey, onLocKey, onClose, onSubmit,
+  title, submitLabel, versions, variantsForVersion, storage, flavors, networks, locations, locKey, onLocKey, onClose, onSubmit,
 }: {
   title: string
   submitLabel: string
@@ -799,7 +784,6 @@ function ClusterFormDialog({
   variantsForVersion: (version: string) => string[]
   storage?: { className?: string; volumeType?: string }
   flavors: FlavorOption[]
-  azOptions: { name: string; label: string }[]
   networks: NetworkOption[]
   locations: Location[]
   locKey: string
@@ -866,11 +850,12 @@ function ClusterFormDialog({
         <div className="grid gap-4 py-2">
           {locations.length === 1 && (
             <p className="text-xs text-muted-foreground">
-              Region: <span className="font-medium">{locations[0].displayName || locations[0].region}</span>
+              Availability zone: <span className="font-medium">{locations[0].displayName || locations[0].region}</span>
               {locations[0].displayName && locations[0].displayName !== locations[0].region
                 ? <> (<span className="font-mono">{locations[0].region}</span>)</>
                 : null}{" "}
-              — the control plane is hosted here; worker nodes run in this region of your cloud.
+              — the entire cluster (control plane and every worker node) lives in this zone. A
+              cluster never spans zones; for another zone, create a cluster there.
             </p>
           )}
           {locations.length > 1 && (
@@ -900,7 +885,8 @@ function ClusterFormDialog({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Each location hosts its own clusters — offered versions and flavors may differ.
+                A cluster lives entirely in ONE zone (it never spans zones) — offered versions
+                and flavors may differ per zone.
               </p>
             </div>
           )}
@@ -939,7 +925,7 @@ function ClusterFormDialog({
             <Switch checked={ha} onCheckedChange={setHa} />
           </div>
 
-          <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} azOptions={azOptions} />
+          <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
 
           {storage?.className && (
             <p className="text-xs text-muted-foreground">
@@ -1094,15 +1080,13 @@ function OidcFields({
 }
 
 function NodeGroupsEditor({
-  groups, setGroups, flavors, variants, azOptions,
+  groups, setGroups, flavors, variants,
 }: {
   groups: NodeGroupRow[]
   setGroups: (g: NodeGroupRow[]) => void
   flavors: FlavorOption[]
   // Image-variant names offered for the cluster's version ("" = default is always offered).
   variants: string[]
-  // Nova AZs of the worker cloud; empty list hides the per-group AZ pin.
-  azOptions: { name: string; label: string }[]
 }) {
   const set = (i: number, patch: Partial<NodeGroupRow>) =>
     setGroups(groups.map((g, j) => (j === i ? { ...g, ...patch } : g)))
@@ -1147,26 +1131,6 @@ function NodeGroupsEditor({
               </Select>
             </div>
           </div>
-          {(azOptions.length > 0 || g.az) && (
-            <div className="grid gap-2">
-              <Label>Availability zone</Label>
-              {/* "any" is a sentinel — a Radix SelectItem value can't be the empty string. */}
-              <Select value={g.az || "any"} onValueChange={(v) => set(i, { az: v === "any" ? "" : v })}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="any">Cloud default</SelectItem>
-                  {g.az && !azOptions.some((z) => z.name === g.az) ? (
-                    <SelectItem value={g.az}>{g.az}</SelectItem>
-                  ) : null}
-                  {azOptions.map((z) => (
-                    <SelectItem key={z.name} value={z.name}>{z.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
           {(variants.length > 0 || g.variant) && (
             <div className="grid gap-2">
               <Label>Node image</Label>
@@ -1247,7 +1211,7 @@ function NodeGroupsEditor({
 
 // ── cluster detail body (the manage surface, rendered by the detail page) ────
 function ClusterDetail({
-  pid, scope, resource, versions, variantsForVersion, platformVersion, flavors, azOptions, onDeleted, onPatch,
+  pid, scope, resource, versions, variantsForVersion, platformVersion, flavors, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
@@ -1257,7 +1221,6 @@ function ClusterDetail({
   // The provider's pinned platform (chart) version; "" = unknown, no offer shown.
   platformVersion: string
   flavors: FlavorOption[]
-  azOptions: { name: string; label: string }[]
   onDeleted: () => void
   // Optimistically applies a partial data.cluster patch to the cached row (and this sheet's
   // resource prop) — MUST be called after every successful mutating action, or the next
@@ -1437,12 +1400,17 @@ function ClusterDetail({
             </div>
           </div>
 
-          {(c.network_id as string) && (
-            <p className="text-xs text-muted-foreground">
-              Network: <span className="font-mono">{c.network_id as string}</span>
-              {(c.subnet_id as string) ? <> · subnet <span className="font-mono">{c.subnet_id as string}</span></> : null}
-            </p>
-          )}
+          <p className="text-xs text-muted-foreground">
+            {resource.region ? (
+              <>Availability zone: <span className="font-medium">{resource.region}</span> (the whole cluster lives here)</>
+            ) : null}
+            {(c.network_id as string) ? (
+              <>
+                {resource.region ? " · " : ""}Network: <span className="font-mono">{c.network_id as string}</span>
+                {(c.subnet_id as string) ? <> · subnet <span className="font-mono">{c.subnet_id as string}</span></> : null}
+              </>
+            ) : null}
+          </p>
 
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => kubeconfig.mutate()} disabled={kubeconfig.isPending}>
@@ -1750,7 +1718,7 @@ function ClusterDetail({
             initial={dataGroupsToRows(c)}
             flavors={flavors}
             variants={variantsForVersion(current)}
-            azOptions={azOptions}
+           
             onClose={() => setEditOpen(false)}
             onSubmit={async (rows) => {
               await act("SET_NODE_GROUPS", { nodeGroups: groupsToData(rows) })
@@ -1822,12 +1790,11 @@ function OidcEditDialog({
 }
 
 function EditNodeGroupsDialog({
-  initial, flavors, variants, azOptions, onClose, onSubmit,
+  initial, flavors, variants, onClose, onSubmit,
 }: {
   initial: NodeGroupRow[]
   flavors: FlavorOption[]
   variants: string[]
-  azOptions: { name: string; label: string }[]
   onClose: () => void
   onSubmit: (rows: NodeGroupRow[]) => Promise<void>
 }) {
@@ -1844,7 +1811,7 @@ function EditNodeGroupsDialog({
             remaining groups.
           </DialogDescription>
         </DialogHeader>
-        <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} azOptions={azOptions} />
+        <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button

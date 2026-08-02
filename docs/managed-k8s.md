@@ -74,6 +74,16 @@ worker VMs land in the customer's keystone tenant of the project's **openstack**
   autoscaler) and the OCCM/CSI plugin images — the chart's image values default to
   `registry.menlo.ai/...` paths.
 
+### Topology: one cluster = one availability zone
+
+In this platform an "availability zone" is a **separate cloud** (its own network stack and its
+own Kamaji management cluster; only Keystone is shared), and CAPI/Kamaji provision a cluster
+inside exactly one of them. A cluster therefore NEVER spans zones — the zone choice is the
+location choice at create, full stop. The client UI states this explicitly; there is no
+per-node-group AZ picker (the `availabilityZone` API field still passes through to the chart's
+`failureDomain` for a future genuinely multi-AZ region). Deploy one kamaji provider per zone,
+named consistently with its paired openstack service.
+
 ## 2b. Storage — the split Cinder CSI (credential isolation)
 
 Every cluster ships a default StorageClass; PVCs work out of the box. The CSI is split so the
