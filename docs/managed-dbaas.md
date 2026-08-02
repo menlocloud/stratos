@@ -8,6 +8,28 @@ LoadBalancer Service and a NetworkPolicy. Stratos stays stateless about desired 
 Application's `helm.valuesObject` is the state store, status is read back off Application
 health + the LB Service.
 
+```mermaid
+flowchart LR
+    stratos["Stratos"]
+    subgraph cloud["OpenStack cloud"]
+        subgraph dbc["DB cluster (ops-built, OpenStack VMs)<br/>ArgoCD + AppProject stratos-dbaas<br/>CNPG · Percona PS · mariadb-op · valkey-op<br/>OCCM + cinder-csi"]
+            app["Application std-&lt;id&gt;<br/>(chart database-cluster)"]
+            pods["DB pods + PVCs<br/>ns st-&lt;projectId&gt;"]
+            lb["Service std-&lt;id&gt;-lb<br/>(LoadBalancer)"]
+        end
+        octavia["Octavia amphora<br/>(dbaas keystone project)"]
+        vip["VIP on the CUSTOMER's<br/>VPC subnet"]
+    end
+    client["Customer app<br/>(tenant VM)"]
+    stratos -- "Application CRs<br/>(kubeconfig, SSA)" --> app
+    stratos -- "neutron RBAC<br/>access_as_shared" --> vip
+    app --> pods
+    app --> lb
+    lb -- "OCCM" --> octavia
+    octavia --> vip
+    client -- "5432/3306/6379/27017" --> vip
+```
+
 Engines (all five ship in the chart; valkey is beta-gated):
 
 | Engine | Operator | HA semantics | Client port |
@@ -69,6 +91,30 @@ marker secret (`<id>-net-share`) on the DB cluster — the only durable revocati
 NetworkPolicy deliberately does NOT mirror them (post-LB source IPs are amphora/node IPs).
 
 ## Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant C as Customer
+    participant S as Stratos
+    participant N as Neutron (customer tenant)
+    participant A as ArgoCD (DB cluster)
+    participant OP as Engine operator
+    participant O as Octavia (via OCCM)
+    C->>S: Create database (engine, size, VPC network/subnet)
+    S->>S: Prove network/subnet belong to the tenant
+    S->>A: st-project namespace + default-deny NP + net-share marker Secret
+    S->>N: RBAC access_as_shared → dbaas keystone project
+    S->>A: (mariadb/valkey) auth Secret + Application CR (pinned chart, full values)
+    A->>OP: Render + sync chart (engine CR, LB Service, NetworkPolicy)
+    OP-->>A: Pods ready (Lua health)
+    O-->>A: VIP programmed on the tenant subnet (Service health)
+    S-->>C: Status READY + endpoint (sync reads Application + LB Service)
+    C->>S: GET_CONNECTION_INFO
+    S->>A: Read operator secret + LB ingress on demand (never stored)
+    C->>S: Delete database
+    S->>A: Delete Application (resources-finalizer cascades, LB torn down)
+    S->>N: Sweep revokes the RBAC share once the LB port is gone
+```
 
 - **Create** — client `POST /project/{id}/cloud` `{type: DATABASE_CLUSTER, data: {name,
   engine, version, replicas, cpu, memoryGiB, storageGiB, networkId, subnetId, allowedCidrs,
