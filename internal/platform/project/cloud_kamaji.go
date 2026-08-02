@@ -465,6 +465,30 @@ func nodeGroupsFromCache(cr *cloud.CloudResource) []kamaji.NodeGroup {
 	return out
 }
 
+// refreshKamajiClusters live-reconciles the project's KUBERNETES_CLUSTER cache off the
+// management cluster — the client list's read-through, so a provisioning cluster's
+// status/replica counts are current instead of up to 15 minutes stale (the services-sync
+// cadence). Same Reconcile the sync job runs (project-label leak-guard included); best-effort,
+// every failure just leaves the cache as the answer.
+func (h *Handler) refreshKamajiClusters(ctx context.Context, p *Project) {
+	if h.kamajiFor == nil {
+		return
+	}
+	for _, svcID := range p.ServiceIDs() {
+		es, err := h.esSvc.Get(ctx, svcID)
+		if err != nil || es == nil || !es.IsKamaji() {
+			continue
+		}
+		ks, err := h.kamajiFor(es)
+		if err != nil {
+			continue
+		}
+		if _, err := providers.Reconcile(ctx, ks.SyncProvider(es.KamajiRegion(), p.ID), h.cloud, es.ID, time.Now().UTC()); err != nil {
+			slog.Warn("kamaji: live cluster list refresh", "project", p.ID, "service", svcID, "err", err)
+		}
+	}
+}
+
 // kamajiOpenStackServiceID resolves the project's OPENSTACK binding id (worker-VM home) — the
 // service GPU quota and flavors resolve against. Empty when the project has none.
 func (h *Handler) kamajiOpenStackServiceID(ctx context.Context, p *Project) string {

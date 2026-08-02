@@ -143,6 +143,11 @@ func (h *Handler) cloudResourceList(w http.ResponseWriter, r *http.Request) {
 	// PORT/FLOATING_IP/SECURITY_GROUP feed the server-detail Networking + Security-Groups tabs (the
 	// cache never holds a server's auto-created port/secgroup, so these must be live).
 	switch typ {
+	case cloud.TypeKubernetesCluster:
+		// Read-through refresh: the services-sync cron runs every 15 minutes, far too stale for
+		// a provisioning cluster (ArgoCD already Healthy while the UI still shows Degraded /
+		// 0 ready nodes). Best-effort — the cache below is the answer either way.
+		h.refreshKamajiClusters(r.Context(), proj)
 	case cloud.TypeImage:
 		h.listImages(w, r, proj)
 		return

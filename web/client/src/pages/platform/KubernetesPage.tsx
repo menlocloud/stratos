@@ -6,10 +6,11 @@
 // allowlist. Actions map to Go cloud_kamaji.go: create/delete + GET_KUBECONFIG / UPGRADE /
 // SET_NODE_GROUPS / SET_OIDC.
 import { useCallback, useMemo, useState } from "react"
+import { useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { Boxes, Download, MoreHorizontal, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
+import { ArrowLeft, Boxes, Download, MoreHorizontal, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
@@ -27,9 +28,6 @@ import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import {
-  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
-} from "@/components/ui/sheet"
 import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { apiFetch, type CloudScope } from "@/lib/api"
@@ -259,8 +257,10 @@ function dataGroupsToRows(c: Cluster): NodeGroupRow[] {
   }))
 }
 
-export default function KubernetesPage() {
-  const pid = useProjectId()
+// useKubernetesData is the shared data layer of the cluster LIST page and the per-cluster
+// DETAIL page: kamaji locations/scopes, the (live read-through) cluster list query, curated
+// version/variant lookups, flavor options, and the optimistic cache patch.
+function useKubernetesData(pid: string) {
   const qc = useQueryClient()
   const locations = useLocations(pid)
   const services = useProjectServices(pid)
@@ -276,19 +276,12 @@ export default function KubernetesPage() {
   const kScope: CloudScope | undefined = kLoc?.serviceId && kLoc?.region ? { serviceId: kLoc.serviceId, region: kLoc.region } : undefined
   const osScope: CloudScope | undefined = osLoc?.serviceId && osLoc?.region ? { serviceId: osLoc.serviceId, region: osLoc.region } : undefined
 
-  // The create wizard's chosen kamaji location (auto-selects the sole one; picker when several).
-  const [createLocKey, setCreateLocKey] = useState("")
-  const createLoc = kLocs.find((l) => locKeyOf(l) === createLocKey) ?? kLocs[0]
-  const createScope: CloudScope | undefined =
-    createLoc?.serviceId && createLoc?.region ? { serviceId: createLoc.serviceId, region: createLoc.region } : undefined
-
   // Curated versions live on the kamaji service DTO — per service, so per selected location.
   const versionsFor = useCallback(
     (serviceId?: string) =>
       sortVersions((services.data?.find((s) => s.id === serviceId)?.kubernetesVersions ?? []).filter(Boolean)),
     [services.data],
   )
-  const createVersions = useMemo(() => versionsFor(createLoc?.serviceId), [versionsFor, createLoc?.serviceId])
 
   // Curated image-variant names for (service, version) — the node-group image picker feed.
   const variantsFor = useCallback(
@@ -315,7 +308,7 @@ export default function KubernetesPage() {
     [kLoc?.serviceId, kLocs],
   )
 
-  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
+  const clusters = useQuery({
     queryKey: ["cloud", pid, "KUBERNETES_CLUSTER"],
     queryFn: () =>
       apiFetch<CloudResource[]>(`/project/${pid}/resource?type=KUBERNETES_CLUSTER`, { method: "POST", cloud: kScope }),
@@ -368,6 +361,47 @@ export default function KubernetesPage() {
     },
     [services.data, flavors.data, projectQuota.data, gpuCapacity.data],
   )
+  const invalidate = useCallback(
+    () => void qc.invalidateQueries({ queryKey: ["cloud", pid, "KUBERNETES_CLUSTER"] }),
+    [qc, pid],
+  )
+
+  // Optimistic patch of a cluster row after a successful action. The list query is the single
+  // source both pages read, so patching it updates the detail view too — without the patch a
+  // second SET_NODE_GROUPS/SET_OIDC full-replaces with the STALE payload and silently reverts
+  // the first edit. The next (live read-through) refetch overwrites with truth, which is fine.
+  const patchCluster = useCallback(
+    (id: string, patch: Record<string, any>) => {
+      qc.setQueryData<CloudResource[]>(["cloud", pid, "KUBERNETES_CLUSTER"], (rows) =>
+        rows?.map((r) =>
+          r.id === id ? { ...r, data: { ...r.data, cluster: { ...(r.data?.cluster ?? {}), ...patch } } } : r,
+        ),
+      )
+    },
+    [qc, pid],
+  )
+
+  return {
+    kLocs, kScope, osScope, clusters,
+    versionsFor, variantsFor, rowServiceId, rowScope, flavorOptionsFor,
+    invalidate, patchCluster,
+  }
+}
+
+export default function KubernetesPage() {
+  const pid = useProjectId()
+  const navigate = useNavigate()
+  const {
+    kLocs, kScope, clusters, versionsFor, variantsFor, rowServiceId, rowScope, flavorOptionsFor, invalidate,
+  } = useKubernetesData(pid)
+  const { data, isLoading, isError, error, refetch, isFetching } = clusters
+
+  // The create wizard's chosen kamaji location (auto-selects the sole one; picker when several).
+  const [createLocKey, setCreateLocKey] = useState("")
+  const createLoc = kLocs.find((l) => locKeyOf(l) === createLocKey) ?? kLocs[0]
+  const createScope: CloudScope | undefined =
+    createLoc?.serviceId && createLoc?.region ? { serviceId: createLoc.serviceId, region: createLoc.region } : undefined
+  const createVersions = useMemo(() => versionsFor(createLoc?.serviceId), [versionsFor, createLoc?.serviceId])
   const createFlavorOptions = useMemo(
     () => flavorOptionsFor(createLoc?.serviceId),
     [flavorOptionsFor, createLoc?.serviceId],
@@ -397,25 +431,8 @@ export default function KubernetesPage() {
       .filter((n) => !!n.id && n.subnets.length > 0) // a network with no subnet cannot host nodes
   }, [networksQ.data, subnetsQ.data])
 
-  const invalidate = () => void qc.invalidateQueries({ queryKey: ["cloud", pid, "KUBERNETES_CLUSTER"] })
-
   const [createOpen, setCreateOpen] = useState(false)
   const [toDelete, setToDelete] = useState<CloudResource | null>(null)
-  const [manageFor, setManageFor] = useState<CloudResource | null>(null)
-
-  // Optimistic patch of a cluster row after a successful action. The mgmt-cluster sync only
-  // refreshes the cached row minutes later, and the manage sheet re-reads this row — without
-  // the patch a second SET_NODE_GROUPS/SET_OIDC full-replaces with the STALE payload and
-  // silently reverts the first edit. The next sync overwrites with live truth, which is fine.
-  const patchCluster = useCallback(
-    (id: string, patch: Record<string, any>) => {
-      const apply = (r: CloudResource): CloudResource =>
-        r.id === id ? { ...r, data: { ...r.data, cluster: { ...(r.data?.cluster ?? {}), ...patch } } } : r
-      qc.setQueryData<CloudResource[]>(["cloud", pid, "KUBERNETES_CLUSTER"], (rows) => rows?.map(apply))
-      setManageFor((m) => (m && m.id === id ? apply(m) : m))
-    },
-    [qc, pid],
-  )
 
   const del = useMutation({
     mutationFn: (r: CloudResource) =>
@@ -423,7 +440,6 @@ export default function KubernetesPage() {
     onSuccess: () => {
       toast.success("Cluster deletion requested")
       setToDelete(null)
-      setManageFor(null)
       setTimeout(invalidate, 1500)
     },
     onError: (e: Error) => toast.error(e.message),
@@ -440,7 +456,7 @@ export default function KubernetesPage() {
             className="inline-block py-1 font-medium hover:underline"
             onClick={(e) => {
               e.stopPropagation()
-              setManageFor(row.original)
+              navigate(row.original.id)
             }}
           >
             {getValue()}
@@ -456,9 +472,9 @@ export default function KubernetesPage() {
           const upgradable =
             !!current && versionsFor(rowServiceId(row.original)).some((v) => isUpgradeTarget(current, v))
           return (
-            <span className="flex items-center gap-2">
+            <span className="flex items-center gap-2 whitespace-nowrap">
               <span className="font-mono text-sm">{current || "—"}</span>
-              {upgradable ? <Badge variant="outline">Upgrade available</Badge> : null}
+              {upgradable ? <Badge variant="outline" className="whitespace-nowrap">Upgrade available</Badge> : null}
             </span>
           )
         },
@@ -503,7 +519,7 @@ export default function KubernetesPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => setManageFor(row.original)}>
+                <DropdownMenuItem onClick={() => navigate(row.original.id)}>
                   <Settings2 className="size-4" /> Manage
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -516,7 +532,7 @@ export default function KubernetesPage() {
         ),
       },
     ],
-    [versionsFor, rowServiceId],
+    [versionsFor, rowServiceId, navigate],
   )
 
   return (
@@ -555,7 +571,7 @@ export default function KubernetesPage() {
           isLoading={isLoading}
           error={isError ? (error as Error) : null}
           searchPlaceholder="Search clusters…"
-          onRowClick={(r) => setManageFor(r)}
+          onRowClick={(r) => navigate(r.id)}
         />
       )}
 
@@ -605,19 +621,103 @@ export default function KubernetesPage() {
         </DialogContent>
       </Dialog>
 
-      {manageFor && (
-        <ClusterManageSheet
+    </>
+  )
+}
+
+// ── cluster detail page (/p/:pid/kubernetes/:resourceId) ────────────────────
+export function KubernetesClusterDetailPage() {
+  const pid = useProjectId()
+  const navigate = useNavigate()
+  const { resourceId = "" } = useParams()
+  const {
+    clusters, versionsFor, variantsFor, rowServiceId, rowScope, flavorOptionsFor, invalidate, patchCluster,
+  } = useKubernetesData(pid)
+  const resource = (clusters.data ?? []).find((r) => r.id === resourceId)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+
+  const del = useMutation({
+    mutationFn: () =>
+      apiFetch(`/project/${pid}/cloud/${resourceId}`, { method: "DELETE", cloud: resource ? rowScope(resource) : undefined }),
+    onSuccess: () => {
+      toast.success("Cluster deletion requested")
+      setTimeout(invalidate, 1500)
+      navigate(`/p/${pid}/kubernetes`)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const name = resource ? (cluster(resource).name as string) || resource.externalId || resource.id : ""
+
+  return (
+    <>
+      <PageHeader
+        title={name || "Kubernetes cluster"}
+        eyebrow="Kubernetes cluster"
+        description={
+          resource ? ((cluster(resource).endpoint as string) || "endpoint pending…") : undefined
+        }
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => navigate(`/p/${pid}/kubernetes`)}>
+              <ArrowLeft className="size-4" /> All clusters
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void clusters.refetch()}
+              disabled={clusters.isFetching}
+              aria-label="Refresh"
+            >
+              <RefreshCw className={clusters.isFetching ? "size-4 animate-spin" : "size-4"} />
+            </Button>
+          </>
+        }
+      />
+
+      {clusters.isLoading ? (
+        <div className="py-20 text-center text-muted-foreground">Loading…</div>
+      ) : !resource ? (
+        <EmptyState
+          icon={Boxes}
+          title="Cluster not found"
+          hint="It may have been deleted, or the link is stale."
+          action={
+            <Button variant="outline" onClick={() => navigate(`/p/${pid}/kubernetes`)}>
+              <ArrowLeft className="size-4" /> Back to clusters
+            </Button>
+          }
+        />
+      ) : (
+        <ClusterDetail
           pid={pid}
-          scope={rowScope(manageFor)}
-          resource={manageFor}
-          versions={versionsFor(rowServiceId(manageFor))}
-          variantsForVersion={(v) => variantsFor(rowServiceId(manageFor), v)}
-          flavors={flavorOptionsFor(rowServiceId(manageFor))}
-          onClose={() => setManageFor(null)}
-          onDeleted={() => setToDelete(manageFor)}
-          onPatch={(patch) => patchCluster(manageFor.id, patch)}
+          scope={rowScope(resource)}
+          resource={resource}
+          versions={versionsFor(rowServiceId(resource))}
+          variantsForVersion={(v) => variantsFor(rowServiceId(resource), v)}
+          flavors={flavorOptionsFor(rowServiceId(resource))}
+          onDeleted={() => setDeleteOpen(true)}
+          onPatch={(patch) => patchCluster(resource.id, patch)}
         />
       )}
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete cluster</DialogTitle>
+            <DialogDescription>
+              Deletes “{name}” — its control plane and every worker node. Workloads and data on the
+              cluster are destroyed. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => del.mutate()} disabled={del.isPending}>
+              {del.isPending ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
@@ -1010,9 +1110,9 @@ function NodeGroupsEditor({
   )
 }
 
-// ── manage sheet ─────────────────────────────────────────────────────────────
-function ClusterManageSheet({
-  pid, scope, resource, versions, variantsForVersion, flavors, onClose, onDeleted, onPatch,
+// ── cluster detail body (the manage surface, rendered by the detail page) ────
+function ClusterDetail({
+  pid, scope, resource, versions, variantsForVersion, flavors, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
@@ -1020,7 +1120,6 @@ function ClusterManageSheet({
   versions: string[]
   variantsForVersion: (version: string) => string[]
   flavors: FlavorOption[]
-  onClose: () => void
   onDeleted: () => void
   // Optimistically applies a partial data.cluster patch to the cached row (and this sheet's
   // resource prop) — MUST be called after every successful mutating action, or the next
@@ -1104,17 +1203,8 @@ function ClusterManageSheet({
   })
 
   return (
-    <Sheet open onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-2xl">
-        <SheetHeader className="border-b">
-          <div className="text-eyebrow">Kubernetes cluster</div>
-          <SheetTitle className="font-display text-lg tracking-tight">{name}</SheetTitle>
-          <SheetDescription>
-            <span className="font-mono">{(c.endpoint as string) || "endpoint pending…"}</span>
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="space-y-6 px-4 pb-6">
+    <>
+        <div className="space-y-6">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-lg border bg-card p-3">
               <div className="text-xs text-muted-foreground">Status</div>
@@ -1300,8 +1390,7 @@ function ClusterManageSheet({
             }}
           />
         )}
-      </SheetContent>
-    </Sheet>
+    </>
   )
 }
 
