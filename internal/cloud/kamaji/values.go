@@ -201,6 +201,10 @@ func NodeGroupValues(d ClusterDefaults, version string, groups []NodeGroup) []an
 		if ng.ImageVariant != "" {
 			g["imageVariant"] = ng.ImageVariant
 		}
+		// The chart's failureDomain → CAPO schedules the pool's machines into that Nova AZ.
+		if ng.AvailabilityZone != "" {
+			g["failureDomain"] = ng.AvailabilityZone
+		}
 		if ng.Autoscale {
 			g["autoscale"] = true
 			// machineCount is the MachineDeployment's starting size — the floor, so the pool never
@@ -261,6 +265,9 @@ func NodeGroupsFromValues(values map[string]any) []map[string]any {
 		}
 		if v, _ := ng["imageVariant"].(string); v != "" {
 			g["image_variant"] = v
+		}
+		if v, _ := ng["failureDomain"].(string); v != "" {
+			g["availability_zone"] = v
 		}
 		if v, ok := ng["autoscale"].(bool); ok {
 			g["autoscale"] = v

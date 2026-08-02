@@ -232,7 +232,10 @@ type NodeGroup struct {
 	// "nvidia" for GPU nodes. Sticky across upgrades: the UPGRADE action re-resolves the group
 	// onto the target version's image of the same variant. Empty = the default image.
 	ImageVariant string `json:"imageVariant,omitempty"`
-	Count        int    `json:"count"`
+	// AvailabilityZone pins the pool's machines to one Nova AZ (the chart's failureDomain).
+	// Empty = the cloud scheduler places them (single-AZ clouds today).
+	AvailabilityZone string `json:"availabilityZone,omitempty"`
+	Count            int    `json:"count"`
 	Autoscale     bool              `json:"autoscale"`
 	Min           int               `json:"min,omitempty"`
 	Max           int               `json:"max,omitempty"`

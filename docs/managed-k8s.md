@@ -57,8 +57,64 @@ worker VMs land in the customer's keystone tenant of the project's **openstack**
 | Floating network id | `config.cluster.floatingNetworkId` | On the MANAGEMENT cluster's cloud. Floating network the Kamaji API-server LoadBalancer draws its public IP from — the address customers connect to. |
 | External network id | `config.cluster.externalNetworkId` | In the CUSTOMER's project. FALLBACK external network: the egress gateway (managed-network mode) and the `[LoadBalancer] floating-network-id` pool the mgmt-side CCM gives tenant LoadBalancer Services. Usually leave blank — a cluster placed on a chosen network derives this from that network's router at create time; this default only applies when nothing can be derived. **Required if the customer cloud has more than one external network** (CAPO's auto-discovery is a hard error otherwise). |
 | DNS zone | `config.cluster.dnsZone` | Optional. API FQDN = `<clusterId>.<zone>` (certSAN + external-dns). Stable across display renames — cluster ids (`stc-<8hex>`) never change (plan §9). |
-| Version → image matrix | `config.cluster.versions` | Curated map `k8s version → Glance image id` — the ONLY versions offered to customers. Keep tenant versions within Kamaji compat (mgmt ≥1.33 hosts v1.30–v1.35 today). New CVE node image = new Glance id here, then rotate node groups (§4 below). |
+| Version → image matrix | `config.cluster.versions` | Curated map `k8s version → Glance image id` — the ONLY versions offered to customers. Keep tenant versions within Kamaji compat (mgmt ≥1.33 hosts v1.30–v1.35 today). New CVE node image = new Glance id here, then rotate node groups (§4 below). Textarea grammar: `1.35.4=<image-id>` per line. |
+| Image variants | `config.cluster.imageVariants` | Alternative node-image builds of the SAME version, keyed by name — e.g. an `nvidia` GPU build. Textarea grammar: `1.35.4@nvidia=<image-id>`. Customers pick a variant per node group ("Node image"); upgrades keep each pool on its variant and refuse a target the variant doesn't cover. A variant line needs its version's default line too. |
 | Flavors allowlist | `config.cluster.flavors` | Flavor ids offered in the cluster-create wizard. **Empty array = no restriction** (full region flavor catalog). Use it to keep GPU/baremetal flavors out of node groups. |
+| Storage volume type | `config.cluster.storageVolumeType` | The Cinder volume type behind every cluster's default StorageClass. The class is **named after the type** (e.g. `multiattach`); unset = class `csi-cinder` on the cloud's default type. Shown to customers in the create wizard. |
+| Browse provider | `config.cluster.openstackServiceId` | Optional QoL: link the paired OpenStack provider and the form's flavor / node-image / volume-type fields become live-catalog pickers instead of hand-pasted UUIDs. |
+
+### Management-cluster extras the features assume
+
+- **external-dns** on the management cluster, watching Services — the DNS zone feature
+  publishes `<clusterId>.<zone>` off the API-server LoadBalancer's
+  `external-dns.alpha.kubernetes.io/hostname` annotation, and the downloaded kubeconfig is
+  rewritten to that name (the apiserver cert carries it as a SAN, stamped at create — set the
+  zone BEFORE creating clusters that should have it).
+- **Registry mirror / pull-through** for `registry.k8s.io` (sig-storage CSI sidecars,
+  autoscaler) and the OCCM/CSI plugin images — the chart's image values default to
+  `registry.menlo.ai/...` paths.
+
+## 2b. Storage — the split Cinder CSI (credential isolation)
+
+Every cluster ships a default StorageClass; PVCs work out of the box. The CSI is split so the
+cloud credential **never enters the workload cluster**:
+
+- The CSI **controller** (provisioner/attacher/resizer + the cinder plugin's controller
+  service — the only half that authenticates to OpenStack) runs on the MANAGEMENT cluster next
+  to the CCM, in the cluster's `st-<project>` namespace, driving the tenant api server through
+  the mounted Kamaji admin kubeconfig.
+- The workload cluster runs only the **node plugin** with a metadata-only `cloud.conf`
+  (verified against cloud-provider-openstack: node-only mode never constructs an OpenStack
+  client). `addons.openstack` (the credential push) stays hard-off; a client request can't
+  reach it.
+- The default class is named after `storageVolumeType` when pinned (see the provider table),
+  `csi-cinder` otherwise. `WaitForFirstConsumer`, expansion allowed, reclaim `Delete`.
+
+## 2c. Add-ons, platform updates, rollouts
+
+- **Add-ons**: customers toggle a curated menu (Metrics Server on by default; cert-manager,
+  NGINX Ingress, Monitoring stack, NVIDIA GPU Operator opt-in) at create and later via
+  *Manage add-ons*. Unknown names 400 — the operator-only levers (CNI, the credential push,
+  the storage-class override) are not client-reachable.
+- **Platform (chart) updates**: every cluster pins the chart version it was created with; the
+  provider's `chartVersion` only affects NEW clusters. Moving an existing cluster is explicit:
+  the customer's *Apply platform update* button (offered when behind the provider pin) or the
+  admin's per-cluster **Bump** / **Bump all** on the provider page. The update also scrubs any
+  legacy `addons.openstack` credential push from the values.
+- **Node rollouts** are surge-first (`maxSurge 1 / maxUnavailable 0`, drain bounded by
+  `nodeDrainTimeout`): a replacement node comes up and is drained into before the old one is
+  removed, one at a time PER GROUP. A cluster-wide upgrade rolls every group concurrently —
+  budget one machine of temporary quota headroom per node group; at the quota ceiling the
+  rollout waits and resumes by itself.
+
+## 2d. Billing
+
+- `kubernetes_cluster` — the EKS-style flat control-plane fee: price-plan rule on attribute
+  `existence` (e.g. `0.10`/hour). Charged only once the API endpoint exists; worker
+  VMs/volumes/LBs bill through the ordinary rules (never add k8s rules for them).
+- `bucket` — object storage: rule on `size_gb` (per stored GB-hour, ceil'd) or `existence`
+  (flat per bucket). Attach the plan to the ceph service.
+- Example rules for both live in `deploy/seed/price-plan-seed.json`.
 
 ## 3. How provisioning works (what you'll see on the mgmt cluster)
 
