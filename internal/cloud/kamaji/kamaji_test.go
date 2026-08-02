@@ -356,9 +356,12 @@ func TestClusterAddons(t *testing.T) {
 	// off the curated menu, so the client can neither set nor clear it.
 	cfg := testCfg()
 	cfg.Defaults.StorageVolumeType = "multiattach"
-	sc := BuildValues(cfg, testSpec())["addons"].(map[string]any)["csiCinderNode"].(map[string]any)
-	if sc["defaultStorageClass"].(map[string]any)["volumeType"] != "multiattach" {
-		t.Errorf("storage volume type = %v", sc)
+	sc := BuildValues(cfg, testSpec())["addons"].(map[string]any)["csiCinderNode"].(map[string]any)["defaultStorageClass"].(map[string]any)
+	if sc["volumeType"] != "multiattach" || sc["name"] != "multiattach" {
+		t.Errorf("storage class override = %v (the class is NAMED after the volume type)", sc)
+	}
+	if StorageClassName("") != "csi-cinder" || StorageClassName("multiattach") != "multiattach" {
+		t.Error("StorageClassName mapping")
 	}
 	if _, ok := ClusterAddons["csiCinderNode"]; ok {
 		t.Error("csiCinderNode must stay off the curated menu")

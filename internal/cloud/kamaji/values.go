@@ -129,10 +129,24 @@ func AddonValues(picks map[string]bool, storageVolumeType string) map[string]any
 	}
 	if storageVolumeType != "" {
 		addons["csiCinderNode"] = map[string]any{
-			"defaultStorageClass": map[string]any{"volumeType": storageVolumeType},
+			// The StorageClass is NAMED after the volume type (operator convention: `kubectl get
+			// sc` should read "multiattach", not an opaque driver name) and stays the default.
+			"defaultStorageClass": map[string]any{
+				"name":       storageVolumeType,
+				"volumeType": storageVolumeType,
+			},
 		}
 	}
 	return addons
+}
+
+// StorageClassName is the default StorageClass name a cluster ships with: the provider's volume
+// type when pinned (the class is named after it), else the chart's csi-cinder default.
+func StorageClassName(storageVolumeType string) string {
+	if storageVolumeType != "" {
+		return storageVolumeType
+	}
+	return "csi-cinder"
 }
 
 // OIDCValues renders the chart's oidc block from the customer-supplied config — shared by

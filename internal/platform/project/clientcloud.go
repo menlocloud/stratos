@@ -14,6 +14,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
+	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/platform/billing"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
 	"github.com/menlocloud/stratos/internal/platform/feature"
@@ -604,7 +605,8 @@ func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 			dto["kubernetesPlatformVersion"] = pin
 		}
 		// The default StorageClass every cluster ships with — informational, shown at create.
-		storage := map[string]any{"className": "csi-cinder"}
+		// Named after the pinned volume type when there is one.
+		storage := map[string]any{"className": kamaji.StorageClassName(defaults.StorageVolumeType)}
 		if vt := defaults.StorageVolumeType; vt != "" {
 			storage["volumeType"] = vt
 		}
