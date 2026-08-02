@@ -35,6 +35,13 @@ import {
   kamajiFormValid,
   type KamajiFormState,
 } from "./kamajiProvider"
+import {
+  DbaasProviderForm,
+  dbaasConfigBlocks,
+  dbaasFormFromService,
+  dbaasFormValid,
+  type DbaasFormState,
+} from "./dbaasProvider"
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 type Obj = Record<string, any>
@@ -239,6 +246,43 @@ function KamajiConnectionTab({ id, provider }: TabProps) {
   )
 }
 
+// DbaasConnectionTab edits a Managed Database provider in place — same wholesale-config,
+// blank-kubeconfig-keeps semantics as the kamaji tab above.
+function DbaasConnectionTab({ id, provider }: TabProps) {
+  const [form, setForm] = useState<DbaasFormState>(() => dbaasFormFromService(provider))
+  const save = useEsSave(id)
+  const submit = () => {
+    save.mutate({
+      path: `/admin/service/${id}`,
+      body: {
+        name: form.name.trim(),
+        config: dbaasConfigBlocks(form),
+        ...(form.kubeconfig.trim() ? { secret: { kubeconfig: form.kubeconfig.trim() } } : {}),
+      },
+    })
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-eyebrow">Managed Databases (DBaaS) connection</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <DbaasProviderForm form={form} setForm={setForm} mode="edit" />
+        <Note>
+          Changing the chart version here only affects databases created from now on — an existing
+          database keeps the version it was pinned to. Removing an engine or version stops it being
+          offered; databases already on it keep running.
+        </Note>
+        <div className="flex justify-end">
+          <Button onClick={submit} disabled={!dbaasFormValid(form, false) || save.isPending}>
+            {save.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 // KamajiClustersCard — every stratos-managed cluster's pinned chart version, with explicit
 // re-pin controls. Clusters keep their pin when the provider's version moves (by design); this
 // card is the operator override, one cluster or all at once.
@@ -371,6 +415,10 @@ function ConnectionTab({ id, provider }: TabProps) {
   // tab is the editable form rather than a read-only card.
   if (provider.config?.provider === "kamaji") {
     return <KamajiConnectionTab id={id} provider={provider} />
+  }
+  // dbaas: same delivery-config-heavy shape as kamaji — the tab IS the editable form.
+  if (provider.config?.provider === "dbaas") {
+    return <DbaasConnectionTab id={id} provider={provider} />
   }
   // ceph-s3: no Keystone — show the S3/Admin Ops config instead of the identity card. There is no
   // backend test endpoint for RGW (the connection is exercised by bootstrap/sync), so no Test button.
@@ -1593,6 +1641,10 @@ const CEPH_TAB_KEYS = new Set(["connection", "services", "configuration"])
 // (connection = kubeconfig/chart pin, services = the kubernetes toggle, configuration = raw doc).
 const KAMAJI_TAB_KEYS = CEPH_TAB_KEYS
 
+// A dbaas provider serves ONLY managed databases off its DB cluster — same trimmed set again
+// (connection = kubeconfig/chart pin/engine catalog, services = the database toggle).
+const DBAAS_TAB_KEYS = CEPH_TAB_KEYS
+
 const crumbs = (label: string) => (
   <Breadcrumb>
     <BreadcrumbList>
@@ -1635,7 +1687,9 @@ export default function CloudProviderDetailPage() {
       ? TAB_DEFS.filter((t) => CEPH_TAB_KEYS.has(t.v))
       : p.config?.provider === "kamaji"
         ? TAB_DEFS.filter((t) => KAMAJI_TAB_KEYS.has(t.v))
-        : TAB_DEFS
+        : p.config?.provider === "dbaas"
+          ? TAB_DEFS.filter((t) => DBAAS_TAB_KEYS.has(t.v))
+          : TAB_DEFS
 
   return (
     <>

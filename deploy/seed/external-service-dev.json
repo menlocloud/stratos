@@ -76,5 +76,45 @@
     "secret": {
       "kubeconfig": "__MGMT_CLUSTER_KUBECONFIG__"
     }
+  },
+  {
+    "_id": "svc-dbaas-dev",
+    "name": "dbaas dev (managed databases)",
+    "type": "CLOUD",
+    "status": "PRIVATE",
+    "config": {
+      "provider": "dbaas",
+      "region": "RegionOne",
+      "regions": {
+        "RegionOne": { "name": "RegionOne", "country": "", "displayName": "" }
+      },
+      "services": {
+        "database": { "RegionOne": true }
+      },
+      "argocd": {
+        "namespace": "argocd",
+        "project": "stratos-dbaas",
+        "chartRepo": "ghcr.io/menlocloud/stratos-charts",
+        "chartName": "database-cluster",
+        "chartVersion": "0.1.0"
+      },
+      "database": {
+        "osServiceId": "svc-openstack-dev",
+        "osProjectId": "__DBAAS_KEYSTONE_PROJECT_ID__",
+        "memberSubnetId": "__DBAAS_NODE_SUBNET_ID__",
+        "storageClasses": [],
+        "limits": { "maxCpu": 32, "maxMemoryGiB": 128, "maxStorageGiB": 2048 },
+        "engines": {
+          "postgresql": { "versions": ["16", "17", "18"], "default": "17", "replicas": [1, 2, 3] },
+          "mysql":      { "versions": ["8.4"], "default": "8.4", "replicas": [1, 3] },
+          "mariadb":    { "versions": ["10.11", "11.4"], "default": "11.4", "replicas": [1, 3] },
+          "valkey":     { "versions": ["8.1"], "default": "8.1", "replicas": [1, 3], "beta": true },
+          "ferretdb":   { "versions": ["2.5"], "default": "2.5", "replicas": [1, 2, 3] }
+        }
+      }
+    },
+    "secret": {
+      "kubeconfig": "__DBAAS_CLUSTER_KUBECONFIG__"
+    }
   }
 ]

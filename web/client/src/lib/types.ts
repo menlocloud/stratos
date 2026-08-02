@@ -79,7 +79,29 @@ export type ProjectService = {
   kubernetesPlatformVersion?: string
   // The default StorageClass clusters ship with (name + optional Cinder volume type).
   kubernetesStorage?: { className?: string; volumeType?: string }
+  // Managed-database (dbaas) services only: the curated per-engine catalog the create
+  // wizard offers, the provider's pinned platform (chart) version, the size limits the
+  // create form validates against (0/absent = unbounded), and the optional StorageClass
+  // allowlist (present only when configured; absent = the cluster default only).
+  databaseEngines?: Record<string, DatabaseEngineOffer>
+  databasePlatformVersion?: string
+  databaseLimits?: DatabaseLimits
+  databaseStorageClasses?: string[]
   [k: string]: unknown
+}
+
+export type DatabaseLimits = {
+  maxCpu?: number
+  maxMemoryGiB?: number
+  maxStorageGiB?: number
+}
+
+export type DatabaseEngineOffer = {
+  versions?: string[]
+  default?: string
+  // Allowed replica counts (e.g. [1, 3]); absent = 1 or 3.
+  replicas?: number[]
+  beta?: boolean
 }
 
 // Live OpenStack quota values. `reserved` is capacity promised to in-flight

@@ -10,6 +10,8 @@ import { locations, publicNetworks } from "../fixtures/platform"
 
 const ok = (result: unknown = null) => ({ data: { result } })
 
+const dbPorts: Record<string, number> = { postgresql: 5432, mysql: 3306, mariadb: 3306, valkey: 6379, ferretdb: 27017 }
+
 // --- Listing ----------------------------------------------------------------
 
 on("GET /project/:pid/resource-types", () => ({ data: locations }))
@@ -83,6 +85,20 @@ on("POST /project/:pid/cloud", ({ params, opts }) => {
       ...(key ? { [key]: { id: `os-${id}`, status: "BUILD", ...(body.data ?? {}) } } : {}),
     },
   }
+  // Database clusters cache the snake_case sync shape under data.database (the request body is
+  // camelCase); the endpoint stays "" so the list demos the "Endpoint pending" polling state.
+  if (body.type === "DATABASE_CLUSTER") {
+    const d = body.data ?? {}
+    resource.data = {
+      database: {
+        id: `std-${id}`, name, engine: d.engine, version: d.version, replicas: d.replicas ?? 1,
+        cpu: d.cpu, memory_gib: d.memoryGiB, storage_gib: d.storageGiB,
+        network_id: d.networkId, subnet_id: d.subnetId, allowed_cidrs: d.allowedCidrs ?? [],
+        status: "PROGRESSING", sync_status: "Progressing", chart_version: "0.1.0",
+        created_at: new Date().toISOString(), endpoint: "", port: dbPorts[d.engine] ?? 5432,
+      },
+    }
+  }
   db.cloud.push(resource)
   return { data: resource }
 })
@@ -138,6 +154,29 @@ on("POST /project/:pid/cloud/:resourceId/action", ({ params, opts }) => {
     if (!r) return
     r.status = status
     if (r.data?.server) r.data.server.status = status
+  }
+
+  // Managed databases first — their verbs (RESIZE) collide with the server ones, and the page
+  // reads data.database, not the row status.
+  if (r?.type === "DATABASE_CLUSTER") {
+    const d = ((r.data ??= {}).database ??= {}) as Record<string, any>
+    switch (action) {
+      case "GET_CONNECTION_INFO": {
+        const host = d.endpoint || "10.0.0.50"
+        const port = d.port ?? 5432
+        return ok({
+          host, port, dbname: "app", username: "app", password: "mock-db-password-1",
+          uri: `${d.engine ?? "postgresql"}://app:mock-db-password-1@${host}:${port}/app`,
+          engine: d.engine,
+        })
+      }
+      case "RESET_PASSWORD": return ok({ password: "mock-new-password-2" })
+      case "RESIZE": d.cpu = data?.cpu; d.memory_gib = data?.memoryGiB; return ok()
+      case "RESIZE_STORAGE": d.storage_gib = data?.storageGiB; return ok()
+      case "SCALE_REPLICAS": d.replicas = data?.replicas; return ok()
+      case "SET_ALLOWED_CIDRS": d.allowed_cidrs = data?.allowedCidrs ?? []; return ok()
+      case "RESTART": return ok()
+    }
   }
 
   switch (action) {

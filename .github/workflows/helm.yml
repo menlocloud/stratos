@@ -10,6 +10,8 @@ name: helm
 #                                          oci://ghcr.io/<owner>/stratos-charts.
 #   - tag cluster-addons-menlo-v*:         the addons subchart standalone, at its own
 #                                          Chart.yaml version, to the same stratos-charts repo.
+#   - tag database-cluster-v*:             the managed-database (DBaaS) chart, at its own
+#                                          Chart.yaml version, to the same stratos-charts repo.
 #
 # The k8s charts are deliberately NOT released off the app tag: a customer cluster pins a
 # chart version and keeps it until something explicitly moves it, so those charts' lifecycles
@@ -27,6 +29,7 @@ on:
       - "v*"
       - "openstack-kamaji-cluster-v*"
       - "cluster-addons-menlo-v*"
+      - "database-cluster-v*"
   pull_request:
     branches:
       - main
@@ -43,6 +46,8 @@ env:
   K8S_CHART_NAME: openstack-kamaji-cluster
   ADDONS_CHART_DIR: deploy/charts/cluster-addons-menlo
   ADDONS_CHART_NAME: cluster-addons-menlo
+  DB_CHART_DIR: deploy/charts/database-cluster
+  DB_CHART_NAME: database-cluster
   K8S_OCI_REPO: oci://ghcr.io/${{ github.repository_owner }}/stratos-charts
 
 jobs:
@@ -84,6 +89,18 @@ jobs:
           set -euo pipefail
           helm lint "$ADDONS_CHART_DIR"
           helm template test "$ADDONS_CHART_DIR" >/dev/null
+
+      - name: Lint + template the database-cluster chart
+        run: |
+          set -euo pipefail
+          # Bare defaults DO NOT render by design — `engine` (and the rest of the values
+          # contract) is required and the chart fails fast on an empty document. The
+          # examples ARE the render check instead: one per engine, all five must pass.
+          for f in "$DB_CHART_DIR"/examples/values-*.yaml; do
+            echo "==> $f"
+            helm lint "$DB_CHART_DIR" -f "$f"
+            helm template test "$DB_CHART_DIR" -f "$f" >/dev/null
+          done
 
   # ---- tag v*: the stratos app chart at the tag version ----------------------
   publish:
@@ -185,3 +202,40 @@ jobs:
           helm template test "$ADDONS_CHART_DIR" >/dev/null
           helm package "$ADDONS_CHART_DIR" -d /tmp/pkg
           helm push "/tmp/pkg/$ADDONS_CHART_NAME-$version.tgz" "$K8S_OCI_REPO"
+
+  # ---- tag database-cluster-v*: the DBaaS chart at its own version ------------
+  publish-db-chart:
+    if: github.event_name == 'push' && startsWith(github.ref_name, 'database-cluster-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: ghcr login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish at the Chart.yaml version (tag must match)
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#"$DB_CHART_NAME"-v}"
+          version="$(helm show chart "$DB_CHART_DIR" | awk '/^version:/ {print $2}')"
+          if [ "$tag_version" != "$version" ]; then
+            echo "tag says $tag_version but $DB_CHART_DIR/Chart.yaml says $version — bump Chart.yaml (or fix the tag) and re-tag." >&2
+            exit 1
+          fi
+          if helm show chart "$K8S_OCI_REPO/$DB_CHART_NAME" --version "$version" >/dev/null 2>&1; then
+            echo "chart $DB_CHART_NAME $version already published — nothing to do."
+            exit 0
+          fi
+          # Bare defaults fail by design (engine required) — render every engine example.
+          for f in "$DB_CHART_DIR"/examples/values-*.yaml; do
+            echo "==> $f"
+            helm lint "$DB_CHART_DIR" -f "$f"
+            helm template test "$DB_CHART_DIR" -f "$f" >/dev/null
+          done
+          helm package "$DB_CHART_DIR" -d /tmp/pkg
+          helm push "/tmp/pkg/$DB_CHART_NAME-$version.tgz" "$K8S_OCI_REPO"

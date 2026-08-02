@@ -9,6 +9,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
+	"github.com/menlocloud/stratos/internal/cloud/dbaas"
 	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/pgdoc"
 	"github.com/menlocloud/stratos/internal/platform/audit"
@@ -64,11 +65,19 @@ type Handler struct {
 	// kamajiFor builds the Managed-Kubernetes service for a kamaji provider (nil in tests →
 	// the cluster chart-pin endpoints answer 501).
 	kamajiFor func(es *externalservice.ExternalService) (*kamaji.Service, error)
+	// dbaasFor builds the Managed-Database service for a dbaas provider (nil in tests → the
+	// database chart-pin endpoints answer 501).
+	dbaasFor func(es *externalservice.ExternalService) (*dbaas.Service, error)
 }
 
 // SetKamaji wires the kamaji Managed-Kubernetes service factory (the admin chart-pin surface).
 func (h *Handler) SetKamaji(f func(es *externalservice.ExternalService) (*kamaji.Service, error)) {
 	h.kamajiFor = f
+}
+
+// SetDbaas wires the dbaas Managed-Database service factory (the admin chart-pin surface).
+func (h *Handler) SetDbaas(f func(es *externalservice.ExternalService) (*dbaas.Service, error)) {
+	h.dbaasFor = f
 }
 
 // SetActivation wires the billing ActivationService (built in cmd/api with the cloud

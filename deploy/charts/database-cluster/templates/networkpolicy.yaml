@@ -1,0 +1,70 @@
+{{/*
+Per-database NetworkPolicy. The st-<projectId> namespace gets an ingress
+default-deny ("stratos-default-deny") stamped by stratos when it ensures the
+namespace (dbaas.Service.EnsureProjectNamespace — NOT by this chart, whose
+releases share the namespace and would collide on the policy name); this
+policy is the additive allow for one database's pods.
+
+WHY allowedCidrs ARE NOT MIRRORED HERE: client filtering is enforced at the
+Octavia LB (spec.loadBalancerSourceRanges on the <id>-lb Service = the Octavia
+ACL). By the time traffic reaches a pod it has been proxied by the amphora —
+the source address is an amphora port on the member subnet (or a node address
+after kube-proxy), never the client CIDR. Mirroring allowedCidrs here would
+therefore block ALL legitimate traffic. Do not "fix" that.
+
+ponytail: the DB-port rule below is source-open (in-cluster pods from other
+namespaces could reach the port too, gated only by DB auth) because the
+amphora/member-subnet and node CIDRs are not knowable to the chart. Ceiling:
+add a network.clusterCidrs value and pin ipBlocks here if in-cluster reach
+ever matters.
+*/}}
+{{- $name := include "database-cluster.name" . }}
+{{- $port := include "database-cluster.port" . }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "database-cluster.labels" . | nindent 4 }}
+  annotations:
+    {{- include "database-cluster.annotations" . | nindent 4 }}
+spec:
+  # app.kubernetes.io/instance is stamped on every pod of this database: by
+  # CNPG inheritedMetadata (postgresql / the ferretdb backend), by the
+  # operators' CR-name-as-instance convention (mysql / mariadb / valkey —
+  # TODO-verify(beta) for valkey), and by the chart's own Deployments
+  # (mariadb haproxy / ferretdb frontend).
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # 1. Client traffic on the engine port, arriving via the Octavia LB
+    #    (amphora member-subnet source) or node SNAT. Source-open by design —
+    #    see header.
+    - ports:
+        - port: {{ $port }}
+          protocol: TCP
+    # 2. Intra-instance traffic on ALL ports: replication (PG streaming,
+    #    MySQL GR 33061/33060, MariaDB replication, valkey gossip) plus the
+    #    engines' own status probes.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $name }}
+    # 3. Operator + monitoring namespaces: reconciliation probes (e.g. CNPG
+    #    instance manager on 8000) and metrics scrapes. Names must match the
+    #    operator install in deploy/dbaas-cluster/README.md — adjust there and
+    #    here together if ops picks different namespaces.
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  - cnpg-system
+                  - ps-operator
+                  - mariadb-operator
+                  - valkey-operator-system
+                  - monitoring

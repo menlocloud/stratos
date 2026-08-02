@@ -16,6 +16,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
+	"github.com/menlocloud/stratos/internal/cloud/dbaas"
 	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/cloud/providers"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
@@ -36,6 +37,10 @@ type CephClientFactory func(ctx context.Context, es *externalservice.ExternalSer
 // client from the provider kubeconfig). Injectable so the kamaji sync walk is testable.
 type KamajiFactory func(es *externalservice.ExternalService) (*kamaji.Service, error)
 
+// DbaasFactory builds the Managed-Database service for a dbaas provider (DB-cluster client from
+// the provider kubeconfig). Injectable so the dbaas sync walk is testable.
+type DbaasFactory func(es *externalservice.ExternalService) (*dbaas.Service, error)
+
 type Job struct {
 	projects      *project.Repo
 	services      *externalservice.Service
@@ -43,6 +48,7 @@ type Job struct {
 	clientFor     ClientFactory
 	cephClientFor CephClientFactory
 	kamajiFor     KamajiFactory
+	dbaasFor      DbaasFactory
 	now           func() time.Time
 	log           *slog.Logger
 }
@@ -62,6 +68,9 @@ func New(projects *project.Repo, services *externalservice.Service, cloudRepo *c
 		kamajiFor: func(es *externalservice.ExternalService) (*kamaji.Service, error) {
 			return kamaji.New(es.KamajiConfig(), es.ID)
 		},
+		dbaasFor: func(es *externalservice.ExternalService) (*dbaas.Service, error) {
+			return dbaas.New(es.DbaasConfig(), es.ID)
+		},
 		now: func() time.Time { return time.Now().UTC() },
 		log: log,
 	}
@@ -70,6 +79,7 @@ func New(projects *project.Repo, services *externalservice.Service, cloudRepo *c
 func (j *Job) WithClientFactory(f ClientFactory) *Job         { j.clientFor = f; return j }
 func (j *Job) WithCephClientFactory(f CephClientFactory) *Job { j.cephClientFor = f; return j }
 func (j *Job) WithKamajiFactory(f KamajiFactory) *Job         { j.kamajiFor = f; return j }
+func (j *Job) WithDbaasFactory(f DbaasFactory) *Job           { j.dbaasFor = f; return j }
 func (j *Job) WithNow(now func() time.Time) *Job              { j.now = now; return j }
 
 // SyncOne runs the sync for a single project — the admin POST /project/{id}/sync leg.
@@ -120,6 +130,7 @@ func (j *Job) Run(ctx context.Context) (int, error) {
 		total += j.syncProject(ctx, &projects[i], esCache)
 	}
 	j.sweepKamajiOrphans(ctx)
+	j.sweepDbaasOrphans(ctx)
 	return total, nil
 }
 
@@ -207,6 +218,10 @@ func (j *Job) syncService(ctx context.Context, p *project.Project, es *externals
 	// kamaji: no Keystone tenant — sync only the managed k8s clusters off the management cluster.
 	if es.IsKamaji() {
 		return j.syncKamajiService(ctx, p, es)
+	}
+	// dbaas: no Keystone tenant — sync only the managed databases off the DB cluster.
+	if es.IsDbaas() {
+		return j.syncDbaasService(ctx, p, es)
 	}
 	count := 0
 	extProjID := p.ExternalProjectID(es.ID)
@@ -303,6 +318,99 @@ func (j *Job) sweepKamajiOrphans(ctx context.Context) {
 		if err != nil {
 			j.log.Warn("syncjob: kamaji orphan sweep", "serviceId", es.ID, "pending", pending, "err", err)
 		}
+	}
+}
+
+// syncDbaasService reconciles the project's DATABASE_CLUSTER resources off the DB cluster
+// (Applications labelled with the project id, enriched with the LB Service's Octavia VIP). The
+// project-label filter is the leak-guard, same as kamaji.
+func (j *Job) syncDbaasService(ctx context.Context, p *project.Project, es *externalservice.ExternalService) int {
+	region := es.DbaasRegion()
+	if !es.ServiceEnabledInRegion("database", region) {
+		return 0
+	}
+	ds, err := j.dbaasFor(es)
+	if err != nil {
+		j.log.Error("syncjob: build dbaas client", "project", p.ID, "serviceId", es.ID, "region", region, "err", err)
+		return 0
+	}
+	st, err := providers.Reconcile(ctx, ds.SyncProvider(region, p.ID), j.cloud, es.ID, j.now())
+	if err != nil {
+		j.log.Error("syncjob: reconcile dbaas databases", "project", p.ID, "serviceId", es.ID, "region", region, "err", err)
+	}
+	return st.Created + st.Updated
+}
+
+// sweepDbaasOrphans runs each dbaas provider's service-level orphan sweep once per sync cycle:
+// deleted databases whose ArgoCD cascade has finished (LB Service gone → Octavia port off the
+// tenant subnet) get their neutron network share revoked, marker + auth secrets reaped and
+// (when the project namespace empties out) the namespace GC'd.
+func (j *Job) sweepDbaasOrphans(ctx context.Context) {
+	services, err := j.services.ListByType(ctx, externalservice.TypeCloud)
+	if err != nil {
+		j.log.Error("syncjob: list services for dbaas sweep", "err", err)
+		return
+	}
+	for i := range services {
+		es := &services[i]
+		if es.IsDisabled() || !es.IsDbaas() {
+			continue
+		}
+		ds, err := j.dbaasFor(es)
+		if err != nil {
+			j.log.Error("syncjob: build dbaas service for sweep", "serviceId", es.ID, "err", err)
+			continue
+		}
+		pending, err := ds.FinalizeAllOrphans(ctx, j.dbaasRevokeResolver())
+		if err != nil {
+			j.log.Warn("syncjob: dbaas orphan sweep", "serviceId", es.ID, "pending", pending, "err", err)
+		}
+	}
+}
+
+// dbaasRevokeResolver revokes a neutron network share on the OpenStack service AND region
+// recorded at create time (AnnotationOSService/AnnotationOSRegion), with an ADMIN-scoped
+// client — the project doc (and its tenant binding) may already be gone by sweep time, and
+// admin can list/delete any RBAC policy. The recorded region is load-bearing: neutron is
+// per-region, and the wrong region's empty policy list would read as "already gone" while the
+// share leaks. FAIL-CLOSED: any resolution failure returns an error so the sweep keeps the
+// marker secret — the only revocation record — for a later pass.
+func (j *Job) dbaasRevokeResolver() dbaas.RevokeNetShareResolver {
+	return func(ctx context.Context, osServiceID, osProjectID, osRegion, networkID string) error {
+		if osServiceID == "" {
+			return fmt.Errorf("network share on %s: no recording service — revoke manually (docs/managed-dbaas.md)", networkID)
+		}
+		es, err := j.services.Get(ctx, osServiceID)
+		if err != nil {
+			return err
+		}
+		if es == nil {
+			return fmt.Errorf("network share on %s: recording service %s no longer exists — revoke manually", networkID, osServiceID)
+		}
+		region := osRegion
+		if region == "" {
+			if rs := es.RegionNames(); len(rs) > 0 {
+				region = rs[0]
+			}
+		}
+		cc, err := client.New(ctx, es.ClientConfig(region))
+		if err != nil {
+			return err
+		}
+		policies, err := cc.ListNetworkRBACs(ctx, networkID)
+		if err != nil {
+			return err
+		}
+		for _, pol := range policies {
+			target, _ := pol["target_tenant"].(string)
+			if target != osProjectID {
+				continue
+			}
+			if id, _ := pol["id"].(string); id != "" {
+				return cc.DeleteNetworkRBAC(ctx, id)
+			}
+		}
+		return nil // already gone
 	}
 }
 

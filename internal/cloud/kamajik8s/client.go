@@ -22,6 +22,8 @@ const (
 	pathTenantControlPlanes = "/apis/kamaji.clastix.io/v1alpha1/namespaces/%s/tenantcontrolplanes"
 	pathMachineDeployments  = "/apis/cluster.x-k8s.io/v1beta1/namespaces/%s/machinedeployments"
 	pathSecrets             = "/api/v1/namespaces/%s/secrets"
+	pathServices            = "/api/v1/namespaces/%s/services"
+	pathNetworkPolicies     = "/apis/networking.k8s.io/v1/namespaces/%s/networkpolicies"
 	pathNamespaces          = "/api/v1/namespaces"
 	fieldManager            = "stratos"
 )
@@ -240,6 +242,31 @@ func (c *Client) AnnotateSecret(ctx context.Context, ns, name string, annotation
 	return err
 }
 
+// PatchSecretData overwrites individual data keys on an EXISTING secret, leaving type, metadata
+// and every other key alone — the AnnotateSecret discipline for payload: an SSA apply onto an
+// operator-created secret would both fight its immutable `type` (CNPG mints basic-auth, ApplySecret
+// hardcodes Opaque → 422) and retract labels this field manager applied earlier. A merge-patch
+// touches only the named keys and never changes owner. 404 (secret not minted yet) surfaces as
+// the *APIError so callers can say "not ready".
+func (c *Client) PatchSecretData(ctx context.Context, ns, name string, stringData map[string]string) error {
+	patch := map[string]any{"stringData": toAny(stringData)}
+	_, err := c.do(ctx, http.MethodPatch, fmt.Sprintf(pathSecrets, ns)+"/"+name, nil, patch, "application/merge-patch+json")
+	return err
+}
+
+// ApplyNetworkPolicy applies a networking.k8s.io/v1 NetworkPolicy (create-or-update; name and
+// namespace from its metadata) — the dbaas namespace default-deny leg.
+func (c *Client) ApplyNetworkPolicy(ctx context.Context, np map[string]any) error {
+	meta, _ := np["metadata"].(map[string]any)
+	name, _ := meta["name"].(string)
+	ns, _ := meta["namespace"].(string)
+	if name == "" || ns == "" {
+		return fmt.Errorf("networkpolicy: metadata.name/namespace required")
+	}
+	_, err := c.apply(ctx, fmt.Sprintf(pathNetworkPolicies, ns), name, np)
+	return err
+}
+
 // DeleteSecret removes a secret (absent = success).
 func (c *Client) DeleteSecret(ctx context.Context, ns, name string) error {
 	return c.delete(ctx, fmt.Sprintf(pathSecrets, ns), name)
@@ -271,6 +298,12 @@ func (c *Client) ListApplications(ctx context.Context, ns, labelSelector string)
 // (set at create), so ArgoCD cascades the delete to everything the chart rendered.
 func (c *Client) DeleteApplication(ctx context.Context, ns, name string) error {
 	return c.delete(ctx, fmt.Sprintf(pathApplications, ns), name)
+}
+
+// GetService returns a core/v1 Service, or nil when absent. Read-only: the dbaas provider reads
+// the Octavia VIP back off .status.loadBalancer.ingress of chart-rendered LoadBalancer Services.
+func (c *Client) GetService(ctx context.Context, ns, name string) (map[string]any, error) {
+	return c.get(ctx, fmt.Sprintf(pathServices, ns), name)
 }
 
 // GetTenantControlPlane returns the Kamaji TCP, or nil when absent.

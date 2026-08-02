@@ -1,0 +1,145 @@
+package dbaas
+
+import (
+	"fmt"
+	"net/url"
+)
+
+// engines.go — the ONE place per-engine knowledge lives: catalog offers, action capabilities,
+// connection-secret conventions, ports and URI shapes. The chart's engine templates are the
+// other half of each contract; TestConnectionSecretContract pins the tuples so drift between
+// the two is a test failure, not a silent broken GET_CONNECTION_INFO.
+
+// Engine names — the values.engine discriminator the chart switches templates on.
+const (
+	EnginePostgreSQL = "postgresql" // CloudNativePG
+	EngineMySQL      = "mysql"      // Percona Server for MySQL operator (group replication)
+	EngineMariaDB    = "mariadb"    // mariadb-operator (+ chart-owned HAProxy)
+	EngineValkey     = "valkey"     // valkey-operator — pre-GA, beta-gated
+	EngineFerretDB   = "ferretdb"   // FerretDB v2 over a CNPG backend (Mongo-compatible)
+)
+
+// EngineOffer is one engine's catalog entry on a provider (config.database.engines.<name>).
+type EngineOffer struct {
+	Versions []string
+	Default  string
+	Replicas []int // allowed instance counts; empty = {1}
+	Beta     bool  // pre-GA operator: create requires an explicit beta acknowledgment
+}
+
+// ReplicaChoices is the allowed instance-count set ({1} when unconfigured).
+func (o EngineOffer) ReplicaChoices() []int {
+	if len(o.Replicas) == 0 {
+		return []int{1}
+	}
+	return o.Replicas
+}
+
+// Capabilities gates day-2 actions per engine. An action lands here only after its mechanism is
+// verified against the live operator (RESET_PASSWORD semantics differ per operator; RESTART maps
+// to different knobs). GET_CONNECTION_INFO and SET_ALLOWED_CIDRS are engine-agnostic (secret +
+// Service reads / LB annotation) and not gated.
+// ponytail: SWITCHOVER/PROMOTE deliberately absent — CNPG promotion is a CR-subresource
+// operation, not values-shaped; add a pinned CNPG path + status patch when a customer asks.
+// RESTART is OFF for mysql and valkey because no chart template consumes restartedAt for them
+// (their template headers say exactly that) — returning "RESTARTING" for a no-op would be a
+// lie; enable only together with a live-verified chart mechanism.
+var Capabilities = map[string]map[string]bool{
+	EnginePostgreSQL: {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true},
+	EngineMySQL:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true},
+	EngineMariaDB:    {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true},
+	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false},
+	EngineFerretDB:   {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true},
+}
+
+// ConnectionSecret returns the (secretName, userKey, passKey, dbKey) tuple GET_CONNECTION_INFO
+// reads for an engine. Empty userKey/dbKey = the value is fixed, not in the secret — see
+// DefaultUser/DefaultDB. Conventions (the chart's engine templates are the other half):
+//   - postgresql: CNPG-generated app-user secret `<id>-app` (superuser stays internal)
+//   - ferretdb:   the CNPG BACKEND is named `<id>-pg`, so its app secret is `<id>-pg-app`;
+//     FerretDB reuses the backend's app credential over the Mongo wire protocol
+//   - mysql:      the Percona operator auto-generates `<id>-secrets` (chart pins
+//     spec.secretsName); the exposed account is root under key "root" — PS has no
+//     declarative app users, and inventing one imperatively would fight the operator
+//   - mariadb:    STRATOS-provisioned `<id>-auth` (key "password"), wired via the CR's
+//     passwordSecretKeyRef for the declarative app user. Stratos owns it — a
+//     chart-generated password would re-roll on every ArgoCD render (selfHeal)
+//   - valkey:     STRATOS-provisioned `<id>-auth` (key "password"; AUTH only — no user/db)
+func ConnectionSecret(engine, dbID string) (name, userKey, passKey, dbKey string) {
+	switch engine {
+	case EnginePostgreSQL:
+		return dbID + "-app", "username", "password", "dbname"
+	case EngineFerretDB:
+		return dbID + "-pg-app", "username", "password", "dbname"
+	case EngineMySQL:
+		return dbID + "-secrets", "", "root", ""
+	case EngineMariaDB:
+		return AuthSecretName(dbID), "", "password", ""
+	case EngineValkey:
+		return AuthSecretName(dbID), "", "password", ""
+	}
+	return "", "", "", ""
+}
+
+// AuthSecretName is the stratos-provisioned app-credential secret for engines whose operator
+// does not mint one itself (mariadb, valkey). Applied at create, patched by RESET_PASSWORD;
+// deliberately OUTSIDE the Application so an ArgoCD sync never re-rolls the password.
+func AuthSecretName(dbID string) string { return dbID + "-auth" }
+
+// NeedsAuthSecret reports whether CreateDatabase must provision the engine's auth secret.
+func NeedsAuthSecret(engine string) bool {
+	return engine == EngineMariaDB || engine == EngineValkey
+}
+
+// DefaultUser is the exposed account name when ConnectionSecret carries no userKey.
+func DefaultUser(engine string) string {
+	switch engine {
+	case EngineMySQL:
+		return "root"
+	case EngineMariaDB:
+		return "app"
+	}
+	return ""
+}
+
+// DefaultDB is the exposed database name when ConnectionSecret carries no dbKey. The mariadb
+// chart template creates database "app" for the declarative app user; mysql root has no
+// default schema; valkey has none by design.
+func DefaultDB(engine string) string {
+	if engine == EngineMariaDB {
+		return "app"
+	}
+	return ""
+}
+
+// Port is the engine's client port — the LB Service port the chart renders.
+func Port(engine string) int {
+	switch engine {
+	case EnginePostgreSQL:
+		return 5432
+	case EngineMySQL, EngineMariaDB:
+		return 3306
+	case EngineValkey:
+		return 6379
+	case EngineFerretDB:
+		return 27017
+	}
+	return 0
+}
+
+// URI assembles the engine's connection URI. Credentials are URL-escaped (generated passwords
+// may carry reserved characters).
+func URI(engine, user, pass, host string, port int, db string) string {
+	u := url.UserPassword(user, pass).String()
+	switch engine {
+	case EnginePostgreSQL:
+		return fmt.Sprintf("postgresql://%s@%s:%d/%s", u, host, port, db)
+	case EngineMySQL, EngineMariaDB:
+		return fmt.Sprintf("mysql://%s@%s:%d/%s", u, host, port, db)
+	case EngineValkey:
+		return fmt.Sprintf("redis://:%s@%s:%d/0", url.QueryEscape(pass), host, port)
+	case EngineFerretDB:
+		return fmt.Sprintf("mongodb://%s@%s:%d/%s", u, host, port, db)
+	}
+	return ""
+}

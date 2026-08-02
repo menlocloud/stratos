@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router-dom"
 import {
-  BarChart3, BookOpen, Boxes, Camera, Check, ChevronsUpDown, CreditCard, Database, FileClock, FolderKanban, Globe, HardDrive,
+  BarChart3, BookOpen, Boxes, Camera, Check, ChevronsUpDown, CreditCard, Database, DatabaseZap, FileClock, FolderKanban, Globe, HardDrive,
   Image, KeyRound, Layers, LayoutDashboard, Lock, LogOut, Monitor, Moon, Network, Receipt,
   ExternalLink, Gift, PiggyBank, Route as RouteIcon, Search as SearchIcon, Server, Settings, Share2, Shield, Sun, UserCircle, Users, Wallet, Waypoints, Zap,
 } from "lucide-react"
@@ -75,6 +75,8 @@ function navGroups(pid: string): Group[] {
       label: "Platform",
       items: [
         { to: `${p}/kubernetes`, label: "Kubernetes", icon: Boxes, service: "kubernetes" },
+        // DatabaseZap: plain Database is taken by object storage above.
+        { to: `${p}/databases`, label: "Databases", icon: DatabaseZap, service: "database" },
         { to: `${p}/stacks`, label: "Stacks", icon: Layers, service: "orchestration" },
         { to: `${p}/secrets`, label: "Secrets", icon: Lock, service: "key-manager" },
       ],

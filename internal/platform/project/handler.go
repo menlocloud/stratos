@@ -13,6 +13,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/cephcred"
 	"github.com/menlocloud/stratos/internal/cloud/client"
+	"github.com/menlocloud/stratos/internal/cloud/dbaas"
 	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/internal/platform/billing"
@@ -63,6 +64,10 @@ type Handler struct {
 	// client from the provider's kubeconfig). Set via SetKamaji (nil = kamaji provisioning +
 	// cluster writes are unavailable).
 	kamajiFor func(es *externalservice.ExternalService) (*kamaji.Service, error)
+	// dbaasFor builds the Managed-Database service for a dbaas provider (DB-cluster client from
+	// the provider's kubeconfig). Set via SetDbaas (nil = dbaas provisioning + database writes
+	// are unavailable).
+	dbaasFor func(es *externalservice.ExternalService) (*dbaas.Service, error)
 }
 
 // SetCustomMenu wires the customMenuItem reader into the /init menu build.
@@ -78,6 +83,12 @@ func (h *Handler) SetCephCreds(r *cephcred.Repo, keys *cephcred.KeyRepo) {
 // the KUBERNETES_CLUSTER write surface for kamaji providers).
 func (h *Handler) SetKamaji(f func(es *externalservice.ExternalService) (*kamaji.Service, error)) {
 	h.kamajiFor = f
+}
+
+// SetDbaas wires the dbaas Managed-Database service factory (enables dbaas provisioning and the
+// DATABASE_CLUSTER write surface for dbaas providers).
+func (h *Handler) SetDbaas(f func(es *externalservice.ExternalService) (*dbaas.Service, error)) {
+	h.dbaasFor = f
 }
 
 // SetDownloads wires the cloud-download token repo + the api base URL for the object DOWNLOAD action.

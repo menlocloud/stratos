@@ -30,6 +30,13 @@ import {
   kamajiFormValid,
   type KamajiFormState,
 } from "./kamajiProvider"
+import {
+  DbaasProviderForm,
+  emptyDbaasForm,
+  dbaasFormToBody,
+  dbaasFormValid,
+  type DbaasFormState,
+} from "./dbaasProvider"
 
 const LIST_PATH = "/admin/service"
 
@@ -297,10 +304,11 @@ export default function CloudProvidersPage() {
   const items = data?.data ?? []
 
   const [createOpen, setCreateOpen] = useState(false)
-  const [kind, setKind] = useState<"openstack" | "ceph-s3" | "kamaji">("openstack")
+  const [kind, setKind] = useState<"openstack" | "ceph-s3" | "kamaji" | "dbaas">("openstack")
   const [form, setForm] = useState<FormState>(emptyForm)
   const [cephForm, setCephForm] = useState<CephFormState>(emptyCephForm)
   const [kamajiForm, setKamajiForm] = useState<KamajiFormState>(emptyKamajiForm)
+  const [dbaasForm, setDbaasForm] = useState<DbaasFormState>(emptyDbaasForm)
 
   const create = useMutation({
     // POST /admin/service (externalServiceCreate). The operator finishes the Services/Features tabs on
@@ -308,7 +316,14 @@ export default function CloudProvidersPage() {
     mutationFn: () =>
       apiFetch<CloudProvider>(LIST_PATH, {
         method: "POST",
-        body: kind === "ceph-s3" ? cephFormToBody(cephForm) : kind === "kamaji" ? kamajiFormToBody(kamajiForm) : formToBody(form),
+        body:
+          kind === "ceph-s3"
+            ? cephFormToBody(cephForm)
+            : kind === "kamaji"
+              ? kamajiFormToBody(kamajiForm)
+              : kind === "dbaas"
+                ? dbaasFormToBody(dbaasForm)
+                : formToBody(form),
       }),
     onSuccess: (created) => {
       toast.success("Cloud provider created")
@@ -316,6 +331,7 @@ export default function CloudProvidersPage() {
       setForm(emptyForm)
       setCephForm(emptyCephForm)
       setKamajiForm(emptyKamajiForm)
+      setDbaasForm(emptyDbaasForm)
       void qc.invalidateQueries({ queryKey: ["admin-list", LIST_PATH] })
       if (created?.id) navigate(`/system/cloud-providers/${created.id}`)
     },
@@ -412,11 +428,12 @@ export default function CloudProvidersPage() {
         onOpenChange={(o) => {
           setCreateOpen(o)
           // Clear ALL forms on every close (Cancel, Esc, overlay) — the ceph form holds admin keys
-          // and the kamaji form a kubeconfig; neither must sit in state and re-appear on next open.
+          // and the kamaji/dbaas forms a kubeconfig; none must sit in state and re-appear on next open.
           if (!o) {
             setForm(emptyForm)
             setCephForm(emptyCephForm)
             setKamajiForm(emptyKamajiForm)
+            setDbaasForm(emptyDbaasForm)
             setKind("openstack")
           }
         }}
@@ -429,10 +446,12 @@ export default function CloudProvidersPage() {
                 ? "Connect a Ceph RGW object store over its S3 and Admin Ops endpoints. No Keystone involved — projects get a dedicated RGW user."
                 : kind === "kamaji"
                   ? "Connect a Kamaji management cluster for Managed Kubernetes. Clusters are delivered as ArgoCD Applications of the pinned chart; worker nodes run in each customer's OpenStack tenant."
-                  : 'Connect an OpenStack cloud with its Keystone admin credentials. You will enable per-region services and run "Test connection" on the provider page after it is created.'}
+                  : kind === "dbaas"
+                    ? "Connect a pre-built database Kubernetes cluster for Managed Databases. Databases are delivered as ArgoCD Applications of the pinned chart, reachable over an internal LB in each customer's tenant network."
+                    : 'Connect an OpenStack cloud with its Keystone admin credentials. You will enable per-region services and run "Test connection" on the provider page after it is created.'}
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             <Button variant={kind === "openstack" ? "default" : "outline"} onClick={() => setKind("openstack")}>
               OpenStack
             </Button>
@@ -442,11 +461,16 @@ export default function CloudProvidersPage() {
             <Button variant={kind === "kamaji" ? "default" : "outline"} onClick={() => setKind("kamaji")}>
               Kubernetes
             </Button>
+            <Button variant={kind === "dbaas" ? "default" : "outline"} onClick={() => setKind("dbaas")}>
+              Database (DBaaS)
+            </Button>
           </div>
           {kind === "ceph-s3" ? (
             <CephProviderForm form={cephForm} setForm={setCephForm} />
           ) : kind === "kamaji" ? (
             <KamajiProviderForm form={kamajiForm} setForm={setKamajiForm} />
+          ) : kind === "dbaas" ? (
+            <DbaasProviderForm form={dbaasForm} setForm={setDbaasForm} />
           ) : (
             <ProviderForm form={form} setForm={setForm} />
           )}
@@ -457,7 +481,13 @@ export default function CloudProvidersPage() {
             <Button
               onClick={() => create.mutate()}
               disabled={
-                (kind === "ceph-s3" ? !cephFormValid(cephForm) : kind === "kamaji" ? !kamajiFormValid(kamajiForm) : !formValid(form)) ||
+                (kind === "ceph-s3"
+                  ? !cephFormValid(cephForm)
+                  : kind === "kamaji"
+                    ? !kamajiFormValid(kamajiForm)
+                    : kind === "dbaas"
+                      ? !dbaasFormValid(dbaasForm)
+                      : !formValid(form)) ||
                 create.isPending
               }
             >

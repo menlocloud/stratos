@@ -43,6 +43,15 @@ ON CONFLICT (id) DO NOTHING;
 -- ('6a4e63e8aa5e5eed10000014', '{"name":"Kubernetes control plane (per CP replica)","timeUnit":"hour","resourceType":"kubernetes_cluster","pricePlanId":"6a4e63e8aa5e5eed10000001","applyMethod":"ADD_TO_TOTAL","prices":[{"attributeName":"cp_replicas","tiers":[{"value":"0.015"}]}],"filters":[],"modifiers":[]}')
 -- ON CONFLICT (id) DO NOTHING;
 
+-- Managed Database FULL price (database_cluster: pre-multiplied totals — vcpus_total /
+-- ram_gb_total / storage_gb_total = per-instance x replicas; the DB pods/volumes run on
+-- ops-owned nodes so nothing else bills them; accrual starts once the Octavia VIP endpoint
+-- exists). Keep in sync with the database_cluster entry in price-plan-seed.json. Per-engine
+-- premiums (filter on `engine`) stay in the json _pendingRules until product signs rates.
+INSERT INTO "pricePlanRule" (id, doc) VALUES
+('6a4e63e8aa5e5eed10000015', '{"name":"Managed Database: compute + storage","timeUnit":"hour","resourceType":"database_cluster","pricePlanId":"6a4e63e8aa5e5eed10000001","applyMethod":"ADD_TO_TOTAL","prices":[{"attributeName":"vcpus_total","tiers":[{"value":"0.012"}]},{"attributeName":"ram_gb_total","tiers":[{"value":"0.006"}]},{"attributeName":"storage_gb_total","tiers":[{"value":"0.0001"}]}],"filters":[],"modifiers":[]}')
+ON CONFLICT (id) DO NOTHING;
+
 -- Sanity read-back
 SELECT id, doc->>'name' AS name FROM "pricePlan" WHERE id = '6a4e63e8aa5e5eed10000001';
 SELECT count(*) AS rules FROM "pricePlanRule" WHERE doc->>'pricePlanId' = '6a4e63e8aa5e5eed10000001';

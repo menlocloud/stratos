@@ -1,12 +1,22 @@
 # deploy/charts — every Helm chart this repo ships
 
-Three charts live here:
+Four charts live here:
 
 - **`stratos`** — the application chart: the stratos API plus its bundled PostgreSQL,
   RabbitMQ and Keycloak. This is what `make deploy` installs and what CI publishes to
   `oci://ghcr.io/<owner>/charts` at the release tag (see its own README).
 - **`openstack-kamaji-cluster`** (+ its vendored subchart **`cluster-addons-menlo`**) — the
   Managed Kubernetes cluster chart, described below.
+- **`database-cluster`** — the Managed Database (DBaaS) chart: ONE chart, five engines
+  (`values.engine` discriminator — postgresql / mysql / mariadb / valkey / ferretdb) rendering
+  the engine's operator CR plus an Octavia internal LB Service into the tenant network and a
+  NetworkPolicy, once per customer database, on the ops-built DBaaS cluster. Same delivery
+  model as the kamaji chart: stratos writes an ArgoCD `Application` whose values come from
+  `internal/cloud/dbaas/values.go` (`BuildValues` — the values contract's other half; see the
+  chart's `Chart.yaml` header for the change discipline). Cluster-side setup lives in
+  `deploy/dbaas-cluster/`. NOTE: bare defaults deliberately do not render (`engine` is
+  required) — template it with one of `examples/values-<engine>.yaml`, which is exactly what
+  CI does.
 
 `openstack-kamaji-cluster` is the chart stratos installs, once per customer cluster, on a Kamaji
 management cluster: a CAPI `Cluster` + `OpenStackCluster`, a `KamajiControlPlane` (the control plane
@@ -59,6 +69,7 @@ own cadence):
 | `stratos` (app) | `vX.Y.Z` (shared with the image tags) | the tag |
 | `openstack-kamaji-cluster` | `openstack-kamaji-cluster-vX.Y.Z` | `Chart.yaml` — the tag must match or the job fails |
 | `cluster-addons-menlo` | `cluster-addons-menlo-vX.Y.Z` | `Chart.yaml` — same match rule |
+| `database-cluster` | `database-cluster-vX.Y.Z` | `Chart.yaml` — same match rule |
 
 Flow for the k8s charts: bump `version:` in `Chart.yaml` in the PR that changes the chart,
 merge, then cut the matching tag (`git tag openstack-kamaji-cluster-v0.7.0 && git push origin
