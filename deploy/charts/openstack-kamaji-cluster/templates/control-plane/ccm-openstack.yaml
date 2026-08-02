@@ -124,6 +124,11 @@ spec:
             - --kubeconfig=/etc/kubernetes/admin.svc
             - --authentication-kubeconfig=/etc/kubernetes/admin.svc
             - --authorization-kubeconfig=/etc/kubernetes/admin.svc
+            # The delegated-authn lookup (extension-apiserver-authentication in the tenant's
+            # kube-system) races the api server's bootstrap-roles post-start hook behind the LB:
+            # /readyz passes on one replica while another still answers "forbidden", and the
+            # lookup failure was FATAL — one guaranteed crash-restart per fresh cluster.
+            - --authentication-tolerate-lookup-failure=true
             - --leader-elect=true
             - --use-service-account-credentials=false
             - --v=2

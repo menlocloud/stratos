@@ -1134,10 +1134,12 @@ function NodeGroupsEditor({
               </p>
             </div>
           )}
-          <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-5">
+          {/* First column sizes to the switch+label so "Autoscale" never collides with the
+              number inputs; the count/disk fields share the rest. */}
+          <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-[auto_1fr_1fr_1fr_auto]">
             <div className="flex items-center gap-2 pb-2">
-              <Switch id={`ng-as-${i}`} checked={g.autoscale} onCheckedChange={(on) => set(i, { autoscale: on })} />
-              <Label htmlFor={`ng-as-${i}`} className="text-sm">Autoscale</Label>
+              <Switch id={`ng-as-${i}`} className="shrink-0" checked={g.autoscale} onCheckedChange={(on) => set(i, { autoscale: on })} />
+              <Label htmlFor={`ng-as-${i}`} className="text-sm whitespace-nowrap">Autoscale</Label>
             </div>
             {g.autoscale ? (
               <>

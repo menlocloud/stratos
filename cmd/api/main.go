@@ -508,6 +508,7 @@ func run() error {
 			cloud.TypeFloatingIP:        billingresource.NewFloatingIPProvider(),
 			cloud.TypeLoadBalancer:      billingresource.NewLoadBalancerProvider(),
 			cloud.TypeKubernetesCluster: billingresource.NewKubernetesClusterProvider(),
+			cloud.TypeBucket:            billingresource.NewBucketProvider(),
 		},
 	})
 	// Client for the standalone billing service. nil when STRATOS_BILLING_URL is unset, which is
