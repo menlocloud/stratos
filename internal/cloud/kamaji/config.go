@@ -235,7 +235,11 @@ type NodeGroup struct {
 	// AvailabilityZone pins the pool's machines to one Nova AZ (the chart's failureDomain).
 	// Empty = the cloud scheduler places them (single-AZ clouds today).
 	AvailabilityZone string `json:"availabilityZone,omitempty"`
-	Count            int    `json:"count"`
+	// PublicIP gives every machine in the pool a floating IP from the cluster's external
+	// network (an OpenStackFloatingIPPool per group; released with the machine). The FIPs land
+	// in the customer's tenant, so they sync and bill like any other floating IP.
+	PublicIP bool `json:"publicIp,omitempty"`
+	Count    int  `json:"count"`
 	Autoscale     bool              `json:"autoscale"`
 	Min           int               `json:"min,omitempty"`
 	Max           int               `json:"max,omitempty"`

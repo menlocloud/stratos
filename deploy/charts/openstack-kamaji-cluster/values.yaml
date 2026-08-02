@@ -468,6 +468,10 @@ additionalPackages: []
 nodeGroupDefaults:
   autoscale: false
   failureDomain:
+  # -- Give every machine in the group a floating IP from the cluster's external network
+  # (clusterNetworking.externalNetworkId) via an OpenStackFloatingIPPool. Off = private-only
+  # nodes (the default; LoadBalancer Services remain the public entry point).
+  machineFloatingIP: false
   machineFlavor:
   # -- Nova flavor ID (UUID). Takes precedence over machineFlavor (a name lookup) when set.
   machineFlavorId:

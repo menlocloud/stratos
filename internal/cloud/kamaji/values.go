@@ -205,6 +205,10 @@ func NodeGroupValues(d ClusterDefaults, version string, groups []NodeGroup) []an
 		if ng.AvailabilityZone != "" {
 			g["failureDomain"] = ng.AvailabilityZone
 		}
+		// Per-node floating IPs (chart: an OpenStackFloatingIPPool per group + floatingIPPoolRef).
+		if ng.PublicIP {
+			g["machineFloatingIP"] = true
+		}
 		if ng.Autoscale {
 			g["autoscale"] = true
 			// machineCount is the MachineDeployment's starting size — the floor, so the pool never
@@ -268,6 +272,9 @@ func NodeGroupsFromValues(values map[string]any) []map[string]any {
 		}
 		if v, _ := ng["failureDomain"].(string); v != "" {
 			g["availability_zone"] = v
+		}
+		if v, _ := ng["machineFloatingIP"].(bool); v {
+			g["public_ip"] = true
 		}
 		if v, ok := ng["autoscale"].(bool); ok {
 			g["autoscale"] = v

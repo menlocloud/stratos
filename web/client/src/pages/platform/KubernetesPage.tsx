@@ -46,6 +46,7 @@ type NodeGroupRow = {
   flavorId: string
   variant: string // curated image-variant name ("" = the version's default image)
   az: string // Nova availability zone pin ("" = cloud default placement)
+  publicIp: boolean // floating IP per node from the cluster's external range
   count: string
   autoscale: boolean
   min: string
@@ -113,7 +114,7 @@ function oidcToBody(o: OidcDraft): Record<string, string> {
 const DEFAULT_ROOT_DISK_GIB = "120"
 
 const emptyGroup: NodeGroupRow = {
-  name: "workers", flavorId: "", variant: "", az: "", count: "3", autoscale: false, min: "1", max: "5",
+  name: "workers", flavorId: "", variant: "", az: "", publicIp: false, count: "3", autoscale: false, min: "1", max: "5",
   rootDisk: DEFAULT_ROOT_DISK_GIB, labels: "", taints: "",
 }
 
@@ -208,6 +209,7 @@ function groupsToData(groups: NodeGroupRow[]) {
     flavorId: g.flavorId,
     ...(g.variant ? { imageVariant: g.variant } : {}),
     ...(g.az ? { availabilityZone: g.az } : {}),
+    ...(g.publicIp ? { publicIp: true } : {}),
     ...(g.autoscale
       ? { autoscale: true, min: Number(g.min), max: Number(g.max) }
       : { count: Number(g.count) }),
@@ -226,6 +228,7 @@ function rowsToSyncGroups(rows: NodeGroupRow[]): Cluster[] {
     flavor_id: g.flavorId,
     ...(g.variant ? { image_variant: g.variant } : {}),
     ...(g.az ? { availability_zone: g.az } : {}),
+    ...(g.publicIp ? { public_ip: true } : {}),
     // dataGroupsToRows falls back to 120 when this is absent — the patch must carry it, or
     // re-opening the editor before the next sync silently resizes every pool's root disk.
     ...(Number(g.rootDisk) > 0 ? { root_volume_gib: Number(g.rootDisk) } : {}),
@@ -270,6 +273,7 @@ function dataGroupsToRows(c: Cluster): NodeGroupRow[] {
     flavorId: String(g.flavor_id ?? ""),
     variant: String(g.image_variant ?? ""),
     az: String(g.availability_zone ?? ""),
+    publicIp: g.public_ip === true,
     count: String(g.count ?? 1),
     autoscale: g.autoscale === true,
     min: String(g.min ?? 1),
@@ -1159,10 +1163,14 @@ function NodeGroupsEditor({
           )}
           {/* First column sizes to the switch+label so "Autoscale" never collides with the
               number inputs; the count/disk fields share the rest. */}
-          <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-[auto_1fr_1fr_1fr_auto]">
+          <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-[auto_auto_1fr_1fr_1fr_auto]">
             <div className="flex items-center gap-2 pb-2">
               <Switch id={`ng-as-${i}`} className="shrink-0" checked={g.autoscale} onCheckedChange={(on) => set(i, { autoscale: on })} />
               <Label htmlFor={`ng-as-${i}`} className="text-sm whitespace-nowrap">Autoscale</Label>
+            </div>
+            <div className="flex items-center gap-2 pb-2">
+              <Switch id={`ng-pip-${i}`} className="shrink-0" checked={g.publicIp} onCheckedChange={(on) => set(i, { publicIp: on })} />
+              <Label htmlFor={`ng-pip-${i}`} className="text-sm whitespace-nowrap">Public IP / node</Label>
             </div>
             {g.autoscale ? (
               <>

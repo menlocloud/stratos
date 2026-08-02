@@ -1,0 +1,28 @@
+{{/*
+  Per-node public IPs (opt-in per node group): an OpenStackFloatingIPPool per group hands every
+  machine a floating IP from the cluster's external network — the same range the router and the
+  public LoadBalancers draw from (clusterNetworking.externalNetworkId, derived at create from
+  the chosen subnet's router). CAPO assigns the IP via floatingIPPoolRef on the machine template
+  and releases it with the machine (reclaimPolicy Release). The FIPs land in the customer's
+  tenant, so they sync and bill like any other floating IP.
+*/}}
+{{- range $nodeGroupOverrides := .Values.nodeGroups }}
+{{- $nodeGroup := deepCopy $.Values.nodeGroupDefaults | mustMerge $nodeGroupOverrides }}
+{{- if $nodeGroup.machineFloatingIP }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: OpenStackFloatingIPPool
+metadata:
+  name: {{ include "openstack-kamaji-cluster.componentName" (list $ $nodeGroup.name) }}-fip
+  labels:
+    {{- include "openstack-kamaji-cluster.componentLabels" (list $ "worker") | nindent 4 }}
+    {{ $.Values.projectPrefix }}/node-group: {{ $nodeGroup.name }}
+spec:
+  identityRef:
+    name: {{ include "openstack-kamaji-cluster.cloudCredentialsSecretName" $ }}
+    cloudName: openstack
+  floatingIPNetwork:
+    id: {{ $.Values.clusterNetworking.externalNetworkId | required (printf "node group '%s': machineFloatingIP needs clusterNetworking.externalNetworkId" $nodeGroup.name) }}
+  reclaimPolicy: Release
+{{- end }}
+{{- end }}

@@ -84,6 +84,12 @@ template:
     serverGroup:
       id: {{ . }}
     {{- end }}
+    {{- if $nodeGroup.machineFloatingIP }}
+    floatingIPPoolRef:
+      apiGroup: infrastructure.cluster.x-k8s.io
+      kind: OpenStackFloatingIPPool
+      name: {{ include "openstack-kamaji-cluster.componentName" (list $ctx $nodeGroup.name) }}-fip
+    {{- end }}
     {{- with mergeOverwrite $ctx.Values.machineMetadata $nodeGroup.machineMetadata }}
     serverMetadata:
       {{- range $k, $v := . }}
