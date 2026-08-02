@@ -48,8 +48,7 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 	if len(cidrs) > 0 {
 		ann["loadbalancer.openstack.org/allowed-cidrs"] = strings.Join(cidrs, ",")
 	}
-	if d.DNSZone != "" {
-		fqdn := spec.ID + "." + d.DNSZone
+	if fqdn := d.ClusterFQDN(spec.ID); fqdn != "" {
 		ann["external-dns.alpha.kubernetes.io/hostname"] = fqdn
 		network["certSANs"] = []any{fqdn}
 	}
@@ -154,9 +153,13 @@ func NodeGroupValues(d ClusterDefaults, version string, groups []NodeGroup) []an
 			disk = d.RootVolumeGiB
 		}
 		g := map[string]any{
-			"name":           ng.Name,
-			"machineFlavor":  ng.FlavorID,
-			"machineImageId": img,
+			"name": ng.Name,
+			// The flavor is a Nova ID, so it must reach CAPO through flavorID — the chart's
+			// machineFlavorId key. machineFlavor (a NAME lookup: "no flavors were found:
+			// name=<uuid>") is still stamped for the sync round-trip and older chart pins.
+			"machineFlavor":   ng.FlavorID,
+			"machineFlavorId": ng.FlavorID,
+			"machineImageId":  img,
 			// Boot from a Cinder volume, always: the node images are bigger than most flavors'
 			// ephemeral disk, and nova fails the build with FlavorDiskSmallerThanImage otherwise.
 			"machineRootVolume": map[string]any{"diskSize": disk},

@@ -173,10 +173,11 @@ func TestBuildValues(t *testing.T) {
 	// this output with `helm template`; if the chart moves a key, it moves here and nowhere else.
 	g0 := groups[0].(map[string]any)
 	for key, want := range map[string]any{
-		"name":           "workers",
-		"machineFlavor":  "m5.large",
-		"machineImageId": "img-1354", // resolved from the version matrix
-		"serverGroupId":  "sg-1",
+		"name":            "workers",
+		"machineFlavor":   "m5.large",
+		"machineFlavorId": "m5.large", // the id lands in the chart's flavorID (a name lookup fails on a uuid)
+		"machineImageId":  "img-1354", // resolved from the version matrix
+		"serverGroupId":   "sg-1",
 		// Fixed group: count == min == max, autoscale false.
 		"autoscale":       false,
 		"machineCount":    3,
@@ -801,6 +802,57 @@ func TestAdminKubeconfig(t *testing.T) {
 	kc, err = svc.AdminKubeconfig(ctx, "p1", "stc-y")
 	if err != nil || string(kc) != "LEGACY" {
 		t.Errorf("label fallback: %q %v", kc, err)
+	}
+}
+
+// TestPublicKubeconfig: the DOWNLOADED kubeconfig's server is rewritten onto the cluster's
+// public FQDN (port + CA preserved); no DNS zone or unparseable input → returned verbatim.
+func TestPublicKubeconfig(t *testing.T) {
+	kc := []byte(`apiVersion: v1
+kind: Config
+clusters:
+- name: stc-x
+  cluster:
+    server: https://10.200.40.75:6443
+    certificate-authority-data: Q0FEQVRB
+contexts:
+- name: admin
+  context: {cluster: stc-x, user: admin}
+users:
+- name: admin
+  user: {token: tok}
+current-context: admin
+`)
+	out := publicKubeconfig(kc, "stc-x.k8s.example.com")
+	s := string(out)
+	if !strings.Contains(s, "server: https://stc-x.k8s.example.com:6443") {
+		t.Errorf("server not rewritten:\n%s", s)
+	}
+	if strings.Contains(s, "10.200.40.75") {
+		t.Errorf("internal address leaked:\n%s", s)
+	}
+	if !strings.Contains(s, "Q0FEQVRB") || !strings.Contains(s, "token: tok") {
+		t.Errorf("CA/user data lost:\n%s", s)
+	}
+
+	// No DNS zone → untouched. Unparseable → untouched.
+	if got := publicKubeconfig(kc, ""); string(got) != string(kc) {
+		t.Error("no-zone rewrite must be identity")
+	}
+	if got := publicKubeconfig([]byte(":\tnot yaml"), "f.q.dn"); string(got) != ":\tnot yaml" {
+		t.Error("unparseable input must round-trip verbatim")
+	}
+
+	// End-to-end through AdminKubeconfig with the provider's DNS zone (testCfg: k8s.example.com).
+	api := newFakeAPI()
+	svc := NewWithAPI(api, testCfg(), "svc-1")
+	api.tcps["st-p9/"+ControlPlaneName("stc-z")] = map[string]any{
+		"metadata": map[string]any{"name": ControlPlaneName("stc-z")},
+	}
+	api.secrets["st-p9/"+AdminKubeconfigSecretName("stc-z")] = map[string]string{"admin.conf": string(kc)}
+	got, err := svc.AdminKubeconfig(context.Background(), "p9", "stc-z")
+	if err != nil || !strings.Contains(string(got), "server: https://stc-z.k8s.example.com:6443") {
+		t.Errorf("AdminKubeconfig rewrite: err=%v\n%s", err, got)
 	}
 }
 

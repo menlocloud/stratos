@@ -10,7 +10,17 @@ template:
     identityRef:
       name: {{ include "openstack-kamaji-cluster.cloudCredentialsSecretName" $ctx }}
       cloudName: openstack
+    {{- if $nodeGroup.machineFlavorId }}
+    {{- /* By ID — flavorID takes precedence over flavor in CAPO. A Nova flavor ID in the `flavor`
+           (name) field fails the lookup with "no flavors were found: name=<uuid>". */}}
+    flavorID: {{ $nodeGroup.machineFlavorId }}
+    {{- else if regexMatch "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" ($nodeGroup.machineFlavor | toString) }}
+    {{- /* A UUID in machineFlavor is an ID that predates the machineFlavorId key — route it to
+           flavorID too, so older rendered values heal on a chart bump alone. */}}
+    flavorID: {{ $nodeGroup.machineFlavor }}
+    {{- else }}
     flavor: {{ $nodeGroup.machineFlavor | required (printf "no flavor specified for node group '%s'" $nodeGroup.name) }}
+    {{- end }}
     {{- with $ctx.Values.machineSSHKeyName }}
     sshKeyName: {{ . }}
     {{- end }}

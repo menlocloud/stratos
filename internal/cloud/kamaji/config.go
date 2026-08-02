@@ -119,6 +119,16 @@ type ClusterDefaults struct {
 	AllowedCIDRs []string
 }
 
+// ClusterFQDN is the cluster's public API hostname (<clusterID>.<dnsZone>) — the name
+// external-dns publishes for the API-server LoadBalancer and the apiserver cert carries as a
+// SAN (BuildValues). "" when the provider has no DNS zone.
+func (d ClusterDefaults) ClusterFQDN(clusterID string) string {
+	if d.DNSZone == "" {
+		return ""
+	}
+	return clusterID + "." + d.DNSZone
+}
+
 // ImageFor resolves the node image for (version, variant): the variant's own matrix entry, or
 // the default version matrix when no variant is asked for. "" = no image offered for that
 // combination — the caller decides whether that is an error (create) or a keep-current (edit).

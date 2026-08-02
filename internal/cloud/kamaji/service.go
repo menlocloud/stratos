@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/kamajik8s"
@@ -318,13 +322,62 @@ func (s *Service) AdminKubeconfig(ctx context.Context, projectID, clusterID stri
 	}
 	// The secret holds the kubeconfig under "admin.conf" (kamaji convention); fall back to the
 	// single value if the key differs across kamaji versions.
+	fqdn := s.cfg.Defaults.ClusterFQDN(clusterID)
 	if b, ok := data["admin.conf"]; ok {
-		return b, nil
+		return publicKubeconfig(b, fqdn), nil
 	}
 	for _, b := range data {
-		return b, nil
+		return publicKubeconfig(b, fqdn), nil
 	}
 	return nil, fmt.Errorf("kamaji: cluster %s: admin kubeconfig secret is empty", clusterID)
+}
+
+// publicKubeconfig rewrites every cluster server in the DOWNLOADED kubeconfig onto the
+// cluster's public FQDN (the external-dns name of the API-server LoadBalancer). The Kamaji
+// secret's own kubeconfig points at the LB address on the management network — nodes and
+// in-cluster components keep using that; the customer operates from outside, over the DNS name
+// the apiserver cert already carries as a SAN (BuildValues certSANs). The port is preserved.
+// No DNS zone configured, or anything unparseable → the original bytes, unchanged.
+func publicKubeconfig(kc []byte, fqdn string) []byte {
+	if fqdn == "" {
+		return kc
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(kc, &doc); err != nil {
+		return kc
+	}
+	clusters, _ := doc["clusters"].([]any)
+	changed := false
+	for _, raw := range clusters {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		cl, ok := entry["cluster"].(map[string]any)
+		if !ok {
+			continue
+		}
+		server, _ := cl["server"].(string)
+		u, err := url.Parse(server)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		port := u.Port()
+		if port == "" {
+			port = "6443"
+		}
+		u.Host = net.JoinHostPort(fqdn, port)
+		cl["server"] = u.String()
+		changed = true
+	}
+	if !changed {
+		return kc
+	}
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return kc
+	}
+	return out
 }
 
 // RotateKubeconfig triggers a Kamaji certificate rotation for the cluster's admin kubeconfig:

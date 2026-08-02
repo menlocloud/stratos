@@ -436,6 +436,8 @@ nodeGroupDefaults:
   autoscale: false
   failureDomain:
   machineFlavor:
+  # -- Nova flavor ID (UUID). Takes precedence over machineFlavor (a name lookup) when set.
+  machineFlavorId:
   machineImage:
   machineImageId:
   kubernetesVersion:
