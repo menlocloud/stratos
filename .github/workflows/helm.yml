@@ -1,18 +1,32 @@
 name: helm
 
-# Chart release for deploy/charts/stratos — tag-driven, unified with the image tags:
-#   - PR (chart paths): lint + template only.
-#   - push tag v*:      package the chart at that version (v0.1.2 -> 0.1.2) and
-#                       push to oci://ghcr.io/<owner>/charts. Idempotent: skips
-#                       if that chart version is already in the registry.
+# Chart releases — three charts, three independent tag flows:
+#   - PR touching deploy/charts/**:        lint + template all charts, publish nothing.
+#   - tag v*:                              the stratos APP chart, versioned by the tag
+#                                          (v0.1.2 -> 0.1.2, shared with the image tags),
+#                                          pushed to oci://ghcr.io/<owner>/charts.
+#   - tag openstack-kamaji-cluster-v*:     the managed-k8s cluster chart, at its own
+#                                          Chart.yaml version, to
+#                                          oci://ghcr.io/<owner>/stratos-charts.
+#   - tag cluster-addons-menlo-v*:         the addons subchart standalone, at its own
+#                                          Chart.yaml version, to the same stratos-charts repo.
 #
-# The git tag is the single source of truth for the released version — the app
-# images and the chart share the same vX.Y.Z tag. Chart.yaml `version:` is only a
-# local/dev default; the tag overrides it at package time.
+# The k8s charts are deliberately NOT released off the app tag: a customer cluster pins a
+# chart version and keeps it until something explicitly moves it, so those charts' lifecycles
+# are their own. For them the tag must MATCH Chart.yaml `version:` (the job fails on drift) —
+# bump Chart.yaml in the PR, then cut the matching tag to release. All publishes are
+# idempotent: an already-published version is skipped.
+#
+# NOTE: cluster-addons-menlo is vendored into openstack-kamaji-cluster via a file://
+# dependency, so a subchart change still needs a parent Chart.yaml dependency bump + a parent
+# release to reach clusters; the standalone publish exists for direct consumers and parity
+# with menlocloud/charts.
 on:
   push:
     tags:
       - "v*"
+      - "openstack-kamaji-cluster-v*"
+      - "cluster-addons-menlo-v*"
   pull_request:
     branches:
       - main
@@ -23,11 +37,12 @@ env:
   CHART_DIR: deploy/charts/stratos
   CHART_NAME: stratos
   OCI_REPO: oci://ghcr.io/${{ github.repository_owner }}/charts
-  # The Managed Kubernetes cluster chart (deploy/charts) is versioned by its own Chart.yaml, not by
-  # the release tag, and goes to its own OCI path so it never collides with the copy of the same
-  # chart published from menlocloud/charts for the infra-ops wrappers. See deploy/charts/README.md.
+  # The managed-k8s charts go to their own OCI path so they never collide with the copy of the
+  # same charts published from menlocloud/charts for the infra-ops wrappers. See deploy/charts/README.md.
   K8S_CHART_DIR: deploy/charts/openstack-kamaji-cluster
   K8S_CHART_NAME: openstack-kamaji-cluster
+  ADDONS_CHART_DIR: deploy/charts/cluster-addons-menlo
+  ADDONS_CHART_NAME: cluster-addons-menlo
   K8S_OCI_REPO: oci://ghcr.io/${{ github.repository_owner }}/stratos-charts
 
 jobs:
@@ -64,9 +79,15 @@ jobs:
           # Bare defaults must render: it is the only cheap guard on the chart's own consistency.
           helm template test "$K8S_CHART_DIR" >/dev/null
 
-  # ---- tag v*: package + publish the chart at the tag version (idempotent) ---
+      - name: Lint + template the addons subchart standalone
+        run: |
+          set -euo pipefail
+          helm lint "$ADDONS_CHART_DIR"
+          helm template test "$ADDONS_CHART_DIR" >/dev/null
+
+  # ---- tag v*: the stratos app chart at the tag version ----------------------
   publish:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,13 +119,30 @@ jobs:
           helm package "$CHART_DIR" -d /tmp/pkg --version "$version" --app-version "$GITHUB_REF_NAME"
           helm push "/tmp/pkg/$CHART_NAME-$version.tgz" "$OCI_REPO"
 
-      - name: Package + publish the managed-k8s cluster chart at ITS OWN version
+  # ---- tag openstack-kamaji-cluster-v*: the cluster chart at its own version --
+  publish-cluster-chart:
+    if: github.event_name == 'push' && startsWith(github.ref_name, 'openstack-kamaji-cluster-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: ghcr login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish at the Chart.yaml version (tag must match)
         run: |
           set -euo pipefail
-          # Deliberately NOT the release tag: a customer cluster pins a chart version and keeps it
-          # until something moves it, so the chart's lifecycle is its own. Bump Chart.yaml in the
-          # PR that changes the chart; this step is a no-op until you do.
+          tag_version="${GITHUB_REF_NAME#"$K8S_CHART_NAME"-v}"
           version="$(helm show chart "$K8S_CHART_DIR" | awk '/^version:/ {print $2}')"
+          if [ "$tag_version" != "$version" ]; then
+            echo "tag says $tag_version but $K8S_CHART_DIR/Chart.yaml says $version — bump Chart.yaml (or fix the tag) and re-tag." >&2
+            exit 1
+          fi
           if helm show chart "$K8S_OCI_REPO/$K8S_CHART_NAME" --version "$version" >/dev/null 2>&1; then
             echo "chart $K8S_CHART_NAME $version already published — nothing to do."
             exit 0
@@ -114,3 +152,36 @@ jobs:
           helm template test "$K8S_CHART_DIR" >/dev/null
           helm package "$K8S_CHART_DIR" -d /tmp/pkg
           helm push "/tmp/pkg/$K8S_CHART_NAME-$version.tgz" "$K8S_OCI_REPO"
+
+  # ---- tag cluster-addons-menlo-v*: the addons subchart standalone ------------
+  publish-addons-chart:
+    if: github.event_name == 'push' && startsWith(github.ref_name, 'cluster-addons-menlo-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: ghcr login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish at the Chart.yaml version (tag must match)
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#"$ADDONS_CHART_NAME"-v}"
+          version="$(helm show chart "$ADDONS_CHART_DIR" | awk '/^version:/ {print $2}')"
+          if [ "$tag_version" != "$version" ]; then
+            echo "tag says $tag_version but $ADDONS_CHART_DIR/Chart.yaml says $version — bump Chart.yaml (or fix the tag) and re-tag." >&2
+            exit 1
+          fi
+          if helm show chart "$K8S_OCI_REPO/$ADDONS_CHART_NAME" --version "$version" >/dev/null 2>&1; then
+            echo "chart $ADDONS_CHART_NAME $version already published — nothing to do."
+            exit 0
+          fi
+          helm lint "$ADDONS_CHART_DIR"
+          helm template test "$ADDONS_CHART_DIR" >/dev/null
+          helm package "$ADDONS_CHART_DIR" -d /tmp/pkg
+          helm push "/tmp/pkg/$ADDONS_CHART_NAME-$version.tgz" "$K8S_OCI_REPO"
