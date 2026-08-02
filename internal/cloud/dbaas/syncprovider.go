@@ -47,7 +47,8 @@ func (p *DatabaseSyncProvider) List(ctx context.Context) ([]cloud.CloudResource,
 			continue
 		}
 		// Best-effort enrichment: a half-provisioned database still syncs (endpoint stays "").
-		host, err := s.lbHost(ctx, ns, id)
+		engine := digStr(app, "spec", "source", "helm", "valuesObject", "engine")
+		host, err := s.lbHost(ctx, ns, LBServiceNameFor(engine, id))
 		if err != nil {
 			return nil, err
 		}

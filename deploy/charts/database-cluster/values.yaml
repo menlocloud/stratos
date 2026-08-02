@@ -12,11 +12,11 @@
 # Bare defaults DO NOT render by design: `engine` (and the rest of the
 # required keys) fail the render fast rather than producing a half-formed
 # database. CI renders examples/values-<engine>.yaml instead — one per
-# engine, all five must template cleanly.
+# engine, all seven must template cleanly.
 # =============================================================================
 
 # -- Engine discriminator. REQUIRED. One of:
-#      postgresql | mysql | mariadb | valkey | ferretdb
+#      postgresql | mysql | mariadb | valkey | ferretdb | opensearch | kafka
 # Selects which operator CR (and LB selector / port) is rendered. Unknown or
 # empty values fail the render (templates/_helpers.tpl).
 engine: ""
@@ -24,19 +24,26 @@ engine: ""
 # -- Engine version, as offered by the provider catalog
 # (config.database.engines in the stratos provider doc). REQUIRED.
 # Resolved to a concrete image via the per-engine maps in _helpers.tpl;
-# a version with no mapping fails the render.
+# a version with no mapping fails the render. EXCEPTION: opensearch/kafka
+# have NO image map — both operators resolve images from the version field
+# natively (spec.general.version / spec.kafka.version).
 #   postgresql: "16" | "17" | "18"
 #   mysql:      "8.0" | "8.4"
 #   mariadb:    "10.11" | "11.4"
 #   valkey:     "8.0" | "8.1"
 #   ferretdb:   "2.5" (frontend; the CNPG backend image is ferretdb.postgresImage)
+#   opensearch: "3.3.0"
+#   kafka:      "4.2.0" | "4.2.1" | "4.3.0" (Strimzi 1.1.0 support matrix)
 engineVersion: ""
 
 # -- Number of database instances. REQUIRED.
 # postgresql/mariadb: 1 or 3. mysql: group replication formally wants 3 (a
 # single-node cluster renders the operator's unsafe-size override). ferretdb:
 # this is the CNPG BACKEND instance count; the stateless frontend scales via
-# ferretdb.replicas.
+# ferretdb.replicas. opensearch: node-pool replicas (combined
+# cluster_manager+data+ingest roles). kafka: KafkaNodePool replicas
+# (dual-role controller+broker) — ALSO the per-broker Octavia LB count, see
+# templates/kafka/kafka.yaml.
 instances: 1
 
 # -- Per-instance compute. REQUIRED. requests == limits (Guaranteed QoS) — the
@@ -160,3 +167,32 @@ ferretdb:
   # TODO-verify(drill): tag must match the frontend version — FerretDB
   # publishes matched pairs (ghcr.io/ferretdb/postgres-documentdb).
   postgresImage: ghcr.io/ferretdb/postgres-documentdb:17-0.106.0-ferretdb-2.5.0
+
+opensearch:
+  # -- opensearch.yml settings (string map), passed to the OpenSearchCluster's
+  # spec.general.additionalConfig verbatim.
+  parameters: {}
+  # -- OpenSearch Dashboards (1 replica, operator-managed, HTTPS). Off by
+  # default; enabling also renders the chart-owned <id>-dash-lb Service
+  # (templates/opensearch/dashboards-lb.yaml).
+  dashboards:
+    enabled: false
+  # -- Dashboards OIDC SSO, written by the SET_SSO action
+  # (internal/cloud/dbaas/engines.go). PUBLIC IdP client ONLY — there is
+  # deliberately no clientSecret key here and never will be (no secrets in
+  # values, see header). Read only when dashboards.enabled.
+  sso:
+    enabled: false
+    # -- The IdP's OIDC discovery URL (opensearch_security.openid.connect_url).
+    connectUrl: ""
+    clientId: ""
+    scope: "openid profile email"
+    # -- Dashboards external base URL the IdP redirects back to.
+    baseRedirectUrl: ""
+    logoutUrl: ""
+
+kafka:
+  # -- Kafka broker config overrides (string map), merged ON TOP of the
+  # instance-count-derived replication defaults in templates/kafka/kafka.yaml
+  # (spec.kafka.config).
+  parameters: {}

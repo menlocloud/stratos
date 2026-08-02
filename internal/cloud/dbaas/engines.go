@@ -19,6 +19,8 @@ const (
 	EngineMariaDB    = "mariadb"    // mariadb-operator (+ chart-owned HAProxy)
 	EngineValkey     = "valkey"     // valkey-operator — pre-GA, beta-gated
 	EngineFerretDB   = "ferretdb"   // FerretDB v2 over a CNPG backend (Mongo-compatible)
+	EngineOpenSearch = "opensearch" // opensearch-k8s-operator (+ optional Dashboards, OIDC SSO)
+	EngineKafka      = "kafka"      // Strimzi (KRaft; external loadbalancer listener, SCRAM)
 )
 
 // EngineOffer is one engine's catalog entry on a provider (config.database.engines.<name>).
@@ -52,12 +54,19 @@ func (o EngineOffer) ReplicaChoices() []int {
 // and ferretdb (values.ferretdb.postgresImage is a pinned matched-pair with the frontend —
 // bumping only engineVersion would split the pair; enable once the chart maps BOTH images off
 // the version).
+// SET_SSO (opensearch only) writes the values.opensearch.sso block — Dashboards OIDC against a
+// PUBLIC IdP client (no client secret; values must never carry secrets). RESIZE_STORAGE stays
+// off for opensearch until the operator's diskSize-change semantics are live-verified; RESTART
+// is off for opensearch/kafka (no values-shaped restart knob — Strimzi rolls via a per-podset
+// annotation, not the CR).
 var Capabilities = map[string]map[string]bool{
 	EnginePostgreSQL: {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true},
 	EngineMySQL:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true},
 	EngineMariaDB:    {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true},
 	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false},
 	EngineFerretDB:   {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": false},
+	EngineOpenSearch: {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true},
+	EngineKafka:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true},
 }
 
 // ValidateUpgradePath enforces the version-change policy: the target must be OFFERED for the
@@ -123,6 +132,12 @@ func parseVersion(v string) ([]int, error) {
 //     passwordSecretKeyRef for the declarative app user. Stratos owns it — a
 //     chart-generated password would re-roll on every ArgoCD render (selfHeal)
 //   - valkey:     STRATOS-provisioned `<id>-auth` (key "password"; AUTH only — no user/db)
+//   - opensearch: operator-generated `<id>-admin-password` (keys username/password; the
+//     operator mints it when no custom securityconfig is supplied — TODO-verify(drill)
+//     the exact name on operator 3.x)
+//   - kafka:      STRATOS-provisioned `<id>-auth` (key "password"), wired via the
+//     KafkaUser's password.valueFrom (BYO password — the SCRAM credential follows it);
+//     the SASL username is the KafkaUser name `<id>-app`
 func ConnectionSecret(engine, dbID string) (name, userKey, passKey, dbKey string) {
 	switch engine {
 	case EnginePostgreSQL:
@@ -135,6 +150,10 @@ func ConnectionSecret(engine, dbID string) (name, userKey, passKey, dbKey string
 		return AuthSecretName(dbID), "", "password", ""
 	case EngineValkey:
 		return AuthSecretName(dbID), "", "password", ""
+	case EngineOpenSearch:
+		return dbID + "-admin-password", "username", "password", ""
+	case EngineKafka:
+		return AuthSecretName(dbID), "", "password", ""
 	}
 	return "", "", "", ""
 }
@@ -146,16 +165,19 @@ func AuthSecretName(dbID string) string { return dbID + "-auth" }
 
 // NeedsAuthSecret reports whether CreateDatabase must provision the engine's auth secret.
 func NeedsAuthSecret(engine string) bool {
-	return engine == EngineMariaDB || engine == EngineValkey
+	return engine == EngineMariaDB || engine == EngineValkey || engine == EngineKafka
 }
 
-// DefaultUser is the exposed account name when ConnectionSecret carries no userKey.
-func DefaultUser(engine string) string {
+// DefaultUser is the exposed account name when ConnectionSecret carries no userKey. Kafka's is
+// derived from the database id (the KafkaUser name IS the SASL username).
+func DefaultUser(engine, dbID string) string {
 	switch engine {
 	case EngineMySQL:
 		return "root"
 	case EngineMariaDB:
 		return "app"
+	case EngineKafka:
+		return dbID + "-app"
 	}
 	return ""
 }
@@ -170,7 +192,8 @@ func DefaultDB(engine string) string {
 	return ""
 }
 
-// Port is the engine's client port — the LB Service port the chart renders.
+// Port is the engine's client port — the LB Service port the chart renders (for kafka, the
+// external listener port on the Strimzi-created bootstrap LB).
 func Port(engine string) int {
 	switch engine {
 	case EnginePostgreSQL:
@@ -181,8 +204,24 @@ func Port(engine string) int {
 		return 6379
 	case EngineFerretDB:
 		return 27017
+	case EngineOpenSearch:
+		return 9200
+	case EngineKafka:
+		return 9094
 	}
 	return 0
+}
+
+// LBServiceNameFor is the tenant-facing LoadBalancer Service name per engine. Every chart-owned
+// LB is `<id>-lb`; kafka is the exception — Strimzi creates the external listener's bootstrap
+// Service itself as `<cluster>-kafka-external-bootstrap` (listener name "external";
+// TODO-verify(drill) on Strimzi 1.1.0 — the supported contract is Kafka
+// status.listeners[].bootstrapServers, adopt it if the name ever drifts).
+func LBServiceNameFor(engine, dbID string) string {
+	if engine == EngineKafka {
+		return dbID + "-kafka-external-bootstrap"
+	}
+	return LBServiceName(dbID)
 }
 
 // URI assembles the engine's connection URI. Credentials are URL-escaped (generated passwords
@@ -198,6 +237,11 @@ func URI(engine, user, pass, host string, port int, db string) string {
 		return fmt.Sprintf("redis://:%s@%s:%d/0", url.QueryEscape(pass), host, port)
 	case EngineFerretDB:
 		return fmt.Sprintf("mongodb://%s@%s:%d/%s", u, host, port, db)
+	case EngineOpenSearch:
+		return fmt.Sprintf("https://%s@%s:%d", u, host, port)
+	case EngineKafka:
+		// Informational — Kafka clients take bootstrap host:port + SASL/SCRAM-SHA-512 creds.
+		return fmt.Sprintf("kafka://%s@%s:%d", u, host, port)
 	}
 	return ""
 }

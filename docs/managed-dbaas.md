@@ -39,6 +39,8 @@ Engines (all five ship in the chart; valkey is beta-gated):
 | `mariadb` | mariadb-operator 26.x | replication + chart-owned HAProxy | 3306 |
 | `valkey` | valkey-operator (pre-GA, **beta**) | primary + replicas | 6379 |
 | `ferretdb` | FerretDB v2 over a CNPG backend | CNPG instances + stateless frontends | 27017 |
+| `opensearch` | opensearch-k8s-operator 3.0.2 | N same-size nodes (all roles), 1 or 3 | 9200 (HTTPS) |
+| `kafka` | Strimzi 1.1.0 (KRaft, Kafka 4.2.0–4.3.0) | dual-role KRaft pool, 3 brokers | 9094 (SASL/SCRAM) |
 
 Unlike managed-k8s, the compute/storage under a database is **ops-owned** — nothing lands in
 the customer tenant except the LB VIP. Billing therefore carries the full price on the
@@ -128,8 +130,10 @@ sequenceDiagram
   `UPGRADE {version}` (catalog-gated, upward-only vs live values; the operator rolls the pods
   onto the new engine image, the endpoint never changes — off for valkey [operator unpinned]
   and ferretdb [frontend/DocumentDB images are a pinned matched pair]), `RESTART`, `RESET_PASSWORD`
-  (returned once), `SET_ALLOWED_CIDRS`. Engine-gated via `dbaas.Capabilities` — verify each
-  mechanism live before widening the map.
+  (returned once), `SET_ALLOWED_CIDRS`, `SET_SSO` (opensearch only: Dashboards OIDC against a
+  **public** IdP client — no client secret is ever stored; API-side securityconfig wiring is a
+  live-drill item). Engine-gated via `dbaas.Capabilities` — verify each mechanism live before
+  widening the map.
 - **Delete** — Application delete only; the ArgoCD resources-finalizer cascades the chart, the
   LB Service delete tears the Octavia LB (and its tenant-subnet port) down. The periodic sweep
   (`syncjob.sweepDbaasOrphans`) then revokes the network share (skipped while a live sibling
@@ -139,6 +143,23 @@ sequenceDiagram
 - **Project teardown** — dbaas rows are swept before the tenant sweep, and keystone tenant
   deletion is DEFERRED while any database remnant is still finalizing (the LB port / network
   share would wedge it). Re-run teardown after the sweep reports clean.
+
+## Pricing (DigitalOcean parity)
+
+The seed price plan carries **one `database_cluster` rule per engine** (filter `engine eq …`),
+rated on the pre-multiplied totals and derived from DigitalOcean's managed-databases price
+list (monthly/730h; derivation table in `deploy/seed/price-plan-seed.json` `_readme`):
+
+| Engine | vCPU/h | GB-RAM/h | GB-disk/h | DO anchor |
+|---|---|---|---|---|
+| postgresql, mysql, mariadb, ferretdb | $0.002740 | $0.015068 | $0.000295 | $15.15/mo (1c/1GB/10GB), exact at small tiers |
+| valkey | $0.002945 | $0.014658 | $0.000295 | $15/mo (1c/1GB/10GB) |
+| opensearch | $0.002740 | $0.006164 | $0.000295 | exact on all three DO tiers |
+| kafka | — | $0.028767 | $0.000295 | DO prices the 3-broker cluster; RAM-rated |
+
+Example: a PostgreSQL 2 vCPU / 4 GB / 60 GB single node rates to $60.90/mo (DO: $60.90);
+Kafka with three 2c/2GB brokers at 40 GB each rates to about $149/mo (DO: $148.80).
+Re-derive when DO reprices.
 
 ## HA and write-node failover (why the endpoint never moves)
 
@@ -152,6 +173,8 @@ never changes it; the "flip to the new write node" happens INSIDE the cluster, b
 | mariadb | LB targets the chart-owned HAProxy, whose backend is the operator's `<id>-primary` Service — the operator re-points its endpoints on switchover/failover |
 | ferretdb | LB targets the stateless frontends, which talk to the CNPG `-pg-rw` Service (operator-managed) |
 | valkey | beta — routing unverified until the operator CRD is pinned |
+| opensearch | LB targets all nodes (every node coordinates); cluster re-elects internally |
+| kafka | Strimzi-created LBs: ONE bootstrap VIP + one VIP per broker (advertised addresses) — N+1 Octavia LBs per cluster, mind the amphora quota; partition leadership moves internally |
 
 Clients see a few seconds of connection resets during a failover, reconnect to the SAME
 host:port, and land on the new primary. No floating-IP dance, no DNS TTL.
@@ -172,6 +195,8 @@ current version.
 | mysql | `<id>-secrets` (operator-minted) | `root` under key `root` (PS has no declarative app users) |
 | mariadb | `<id>-auth` (**stratos-provisioned**) | user `app`, database `app` |
 | valkey | `<id>-auth` (**stratos-provisioned**) | AUTH only |
+| opensearch | `<id>-admin-password` (operator-minted, default securityconfig) | `username`/`password` keys |
+| kafka | `<id>-auth` (**stratos-provisioned**, KafkaUser BYO-password) | SASL user `<id>-app`, SCRAM-SHA-512 |
 
 The stratos-provisioned secrets live OUTSIDE the Application on purpose: a chart-generated
 password would re-roll on every ArgoCD render, and values must never carry secrets (the

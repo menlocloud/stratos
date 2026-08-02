@@ -27,6 +27,8 @@ Full operator runbook: [`docs/managed-dbaas.md`](../../docs/managed-dbaas.md).
    | Percona Operator for MySQL (ps-operator) | `ps-operator` | current stable; verify served CRD version (`kubectl api-resources \| grep ps.percona.com`) | mysql |
    | mariadb-operator | `mariadb-operator` | **26.x** | mariadb |
    | valkey-operator | `valkey-operator-system` | **only if the valkey beta gate will open** — CRD unverified, see the chart's `templates/valkey/valkey.yaml` header | valkey |
+   | opensearch-k8s-operator | `opensearch-operator-system` | **3.0.2** — 3.x serves both api groups (`opensearch.opster.io` deprecated → `opensearch.org`); the chart renders `opensearch.opster.io/v1`, re-check at the drill (chart's `templates/opensearch/opensearchcluster.yaml` header) | opensearch (+ Dashboards) |
+   | Strimzi | `strimzi-system` | **1.1.0**, installed in **watch-all mode** (`watchAnyNamespace: true`) — REQUIRED, databases live in per-project `st-*` namespaces the operator cannot enumerate up front. 1.x serves ONLY `kafka.strimzi.io/v1`. ⚠ `helm upgrade` does NOT upgrade Strimzi's CRDs — `kubectl apply` the new CRD bundle separately on every operator upgrade | kafka |
    | prometheus-operator CRDs (+ stack) | `monitoring` | optional — required only when databases run with `monitoring.enabled` | all |
 
    The **namespace column is not a suggestion**: the chart's per-database NetworkPolicy
@@ -75,10 +77,10 @@ external service (admin UI → Cloud providers → Add provider → Database, or
 
 | File | Contents |
 |---|---|
-| `rbac.yaml` | `stratos-system` namespace, `stratos` ServiceAccount, ClusterRole/binding limited to exactly the verbs the dbaas leg of `internal/cloud/kamajik8s/client.go` uses (namespaces CRUD, secrets CRUD, services read, four engine-CRD status reads), a namespaced Role for Application CRUD in `argocd`, the SA token Secret, and the kubeconfig recipe. Read its header for why the secrets grant is cluster-wide (RBAC cannot wildcard `st-*` namespaces). |
+| `rbac.yaml` | `stratos-system` namespace, `stratos` ServiceAccount, ClusterRole/binding limited to exactly the verbs the dbaas leg of `internal/cloud/kamajik8s/client.go` uses (namespaces CRUD, secrets CRUD, services read, engine-CRD status reads), a namespaced Role for Application CRUD in `argocd`, the SA token Secret, and the kubeconfig recipe. Read its header for why the secrets grant is cluster-wide (RBAC cannot wildcard `st-*` namespaces). |
 | `appproject.yaml` | AppProject `stratos-dbaas`: sourceRepos = our OCI registry only, destinations = in-cluster `st-*` only, empty (conservative, record-on-demand) clusterResourceWhitelist. |
 | `repo-credential.yaml` | ArgoCD repository Secret for the (private) chart registry, with `enableOCI: true`. Its `url` must match `config.argocd.chartRepo` and the AppProject sourceRepos exactly — ArgoCD matches credentials by URL prefix. |
-| `argocd-health.yaml` | argocd-cm patch: Lua health for CNPG Cluster / PerconaServerMySQL / MariaDB, plus a commented-out valkey placeholder. **Status fields must be validated during the live drill** — see the file header. |
+| `argocd-health.yaml` | argocd-cm patch: Lua health for CNPG Cluster / PerconaServerMySQL / MariaDB / Strimzi Kafka / OpenSearchCluster, plus a commented-out valkey placeholder. **Status fields must be validated during the live drill** — see the file header. |
 
 ## Verify
 
@@ -97,7 +99,11 @@ kubectl -n argocd get cm argocd-cm -o jsonpath='{.data}' | grep -o 'resource\.cu
 
 ## Amphora quota math
 
-Every customer database is **one Octavia internal LB**, and every Octavia LB is **one
+Every customer database is **one Octavia internal LB** — EXCEPT kafka, which is
+**`instances + 1`**: Strimzi provisions one LB per broker (each broker must be individually
+addressable) plus the external bootstrap LB (see the chart's
+`templates/kafka/kafka.yaml` header). Count kafka databases at N+1 in everything below.
+Every Octavia LB is **one
 amphora VM** in the dbaas keystone project (two with an active-standby amphora flavor —
 check `[controller_worker] loadbalancer_topology` in the Octavia config before doing the
 math). Each LB additionally consumes:

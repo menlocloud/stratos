@@ -221,6 +221,8 @@ func testConfig() Config {
 			EngineMariaDB:    {Versions: []string{"11.8"}, Default: "11.8", Replicas: []int{1, 3}},
 			EngineValkey:     {Versions: []string{"9"}, Default: "9", Replicas: []int{1, 3}, Beta: true},
 			EngineFerretDB:   {Versions: []string{"2"}, Default: "2", Replicas: []int{1, 2, 3}},
+			EngineOpenSearch: {Versions: []string{"3.3.0"}, Default: "3.3.0", Replicas: []int{1, 3}},
+			EngineKafka:      {Versions: []string{"4.2.0", "4.3.0"}, Default: "4.3.0", Replicas: []int{1, 3}},
 		},
 	}
 }
@@ -704,6 +706,8 @@ func TestConnectionSecretContract(t *testing.T) {
 		{EngineMySQL, "std-1-secrets", "", "root", "", 3306, "root", ""},
 		{EngineMariaDB, "std-1-auth", "", "password", "", 3306, "app", "app"},
 		{EngineValkey, "std-1-auth", "", "password", "", 6379, "", ""},
+		{EngineOpenSearch, "std-1-admin-password", "username", "password", "", 9200, "", ""},
+		{EngineKafka, "std-1-auth", "", "password", "", 9094, "std-1-app", ""},
 	}
 	for _, c := range cases {
 		name, uk, pk, dk := ConnectionSecret(c.engine, "std-1")
@@ -713,12 +717,17 @@ func TestConnectionSecretContract(t *testing.T) {
 		if Port(c.engine) != c.port {
 			t.Errorf("%s: port %d", c.engine, Port(c.engine))
 		}
-		if DefaultUser(c.engine) != c.defUser || DefaultDB(c.engine) != c.defDB {
-			t.Errorf("%s: defaults (%s,%s)", c.engine, DefaultUser(c.engine), DefaultDB(c.engine))
+		if DefaultUser(c.engine, "std-1") != c.defUser || DefaultDB(c.engine) != c.defDB {
+			t.Errorf("%s: defaults (%s,%s)", c.engine, DefaultUser(c.engine, "std-1"), DefaultDB(c.engine))
 		}
 	}
-	if !NeedsAuthSecret(EngineMariaDB) || !NeedsAuthSecret(EngineValkey) || NeedsAuthSecret(EnginePostgreSQL) || NeedsAuthSecret(EngineMySQL) {
+	if !NeedsAuthSecret(EngineMariaDB) || !NeedsAuthSecret(EngineValkey) || !NeedsAuthSecret(EngineKafka) ||
+		NeedsAuthSecret(EnginePostgreSQL) || NeedsAuthSecret(EngineMySQL) || NeedsAuthSecret(EngineOpenSearch) {
 		t.Fatal("NeedsAuthSecret set")
+	}
+	if LBServiceNameFor(EngineKafka, "std-1") != "std-1-kafka-external-bootstrap" ||
+		LBServiceNameFor(EnginePostgreSQL, "std-1") != "std-1-lb" {
+		t.Fatal("LBServiceNameFor")
 	}
 }
 

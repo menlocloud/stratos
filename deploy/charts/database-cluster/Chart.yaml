@@ -2,12 +2,14 @@ apiVersion: v2
 appVersion: "0.1.0"
 description: >-
   Helm chart for a single Stratos-managed database cluster on the ops-built
-  DBaaS Kubernetes cluster. One chart, five engines: values.engine selects
+  DBaaS Kubernetes cluster. One chart, seven engines: values.engine selects
   which operator CR is rendered (CloudNativePG Cluster, Percona
   PerconaServerMySQL, mariadb-operator MariaDB + a chart-owned HAProxy,
-  valkey-operator Valkey, or FerretDB = CNPG backend + frontend Deployment).
-  Every engine additionally gets an Octavia internal LoadBalancer Service into
-  the tenant network and a NetworkPolicy.
+  valkey-operator Valkey, FerretDB = CNPG backend + frontend Deployment,
+  opensearch-k8s-operator OpenSearchCluster, or Strimzi Kafka + KafkaNodePool
+  + KafkaUser). Every engine additionally gets an Octavia internal
+  LoadBalancer Service into the tenant network (EXCEPT kafka, where Strimzi
+  creates the bootstrap + per-broker LBs itself) and a NetworkPolicy.
 name: database-cluster
 type: application
 # THE VALUES CONTRACT IS OWNED JOINTLY WITH internal/cloud/dbaas/values.go.
@@ -21,4 +23,4 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
-version: 0.1.0
+version: 0.2.0

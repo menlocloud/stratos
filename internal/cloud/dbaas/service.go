@@ -265,9 +265,19 @@ func (s *Service) finalizeNamespace(ctx context.Context, ns, projectID string, s
 			}
 			continue // database alive (or deleting) — its marker is in use
 		}
-		if svc, err := s.api.GetService(ctx, ns, LBServiceName(dbID)); err != nil {
-			return pending, err
-		} else if svc != nil {
+		// The marker records no engine, so probe BOTH tenant-facing LB names: the chart-owned
+		// `<id>-lb` and Strimzi's `<id>-kafka-external-bootstrap`. Either alive = an Octavia
+		// port may still sit on the tenant subnet.
+		lbGone := true
+		for _, svcName := range []string{LBServiceName(dbID), LBServiceNameFor(EngineKafka, dbID)} {
+			if svc, err := s.api.GetService(ctx, ns, svcName); err != nil {
+				return pending, err
+			} else if svc != nil {
+				lbGone = false
+				break
+			}
+		}
+		if !lbGone {
 			pending++ // Octavia LB (and its tenant-subnet port) still winding down
 			continue
 		}
@@ -444,7 +454,7 @@ func (s *Service) ConnectionInfo(ctx context.Context, projectID, dbID string) (C
 	info := ConnInfo{
 		Engine:   engine,
 		Port:     Port(engine),
-		Username: DefaultUser(engine),
+		Username: DefaultUser(engine, dbID),
 		DBName:   DefaultDB(engine),
 		Password: string(data[passKey]),
 	}
@@ -457,7 +467,7 @@ func (s *Service) ConnectionInfo(ctx context.Context, projectID, dbID string) (C
 	if info.Password == "" {
 		return ConnInfo{}, fmt.Errorf("dbaas: database %s: credentials not ready yet", dbID)
 	}
-	info.Host, err = s.lbHost(ctx, ns, dbID)
+	info.Host, err = s.lbHost(ctx, ns, LBServiceNameFor(engine, dbID))
 	if err != nil {
 		return ConnInfo{}, err
 	}
@@ -495,9 +505,9 @@ func (s *Service) ResetPassword(ctx context.Context, projectID, dbID, engine str
 	return password, nil
 }
 
-// lbHost reads the Octavia VIP off the LB Service ("" while still provisioning).
-func (s *Service) lbHost(ctx context.Context, ns, dbID string) (string, error) {
-	svc, err := s.api.GetService(ctx, ns, LBServiceName(dbID))
+// lbHost reads the Octavia VIP off the named LB Service ("" while still provisioning).
+func (s *Service) lbHost(ctx context.Context, ns, svcName string) (string, error) {
+	svc, err := s.api.GetService(ctx, ns, svcName)
 	if err != nil || svc == nil {
 		return "", err
 	}

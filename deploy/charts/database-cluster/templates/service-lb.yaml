@@ -14,8 +14,20 @@ This Service is also the READY signal: ArgoCD's built-in Service health keeps
 the Application Progressing until the Octavia VIP exists, so READY implies a
 reachable endpoint (and stratos reads status.loadBalancer.ingress[0].ip back
 for connection info).
+
+For opensearch this is TCP PASSTHROUGH of operator-generated TLS: the backend
+speaks HTTPS on 9200 (spec.security.tls.http.generate), the LB does not
+terminate.
+
+KAFKA IS SKIPPED: Strimzi creates the external listener's LB Services itself
+(the <id>-kafka-external-bootstrap Service + one per broker — the guarded
+block below would be a THIRD, selector-less LB). Stratos reads the VIP from
+the Strimzi bootstrap Service instead — see LBServiceNameFor in
+internal/cloud/dbaas/engines.go. The validate include stays OUTSIDE the guard
+so the fail-fast contract still covers kafka values documents.
 */}}
 {{- include "database-cluster.validate" . -}}
+{{- if ne .Values.engine "kafka" }}
 {{- $name := include "database-cluster.name" . }}
 {{- $port := include "database-cluster.port" . }}
 apiVersion: v1
@@ -49,3 +61,4 @@ spec:
       protocol: TCP
   selector:
     {{- include "database-cluster.serviceSelector" . | nindent 4 }}
+{{- end }}

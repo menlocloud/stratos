@@ -66,6 +66,8 @@ on("GET /project/:pid/service", () => ({
         mariadb: { versions: ["11.4"], replicas: [1, 3] },
         valkey: { versions: ["8"], replicas: [1, 3], beta: true },
         ferretdb: { versions: ["2"], replicas: [1, 3] },
+        opensearch: { versions: ["3.3.0"], default: "3.3.0", replicas: [1, 3] },
+        kafka: { versions: ["4.2.0", "4.2.1", "4.3.0"], default: "4.3.0", replicas: [3] },
       },
     },
   ],

@@ -15,7 +15,7 @@
 #   GetService                       services: get/list (LB VIP read-back — the
 #                                    endpoint stratos serves to customers)
 #   Apply/Get/List/DeleteApplication applications.argoproj.io (argocd ns only)
-#   engine CR status reads           the four operator CRDs below: get/list
+#   engine CR status reads           the operator CRDs below: get/list
 #
 # Server-side apply is a PATCH that CREATES the object when absent — every SSA'd resource
 # therefore needs BOTH `create` and `patch`.
@@ -88,6 +88,18 @@ rules:
   # beta gate opens.
   - apiGroups: ["hyperspike.io"]
     resources: ["valkeys"]
+    verbs: ["get", "list"]
+  # Strimzi 1.1.0 (kafka engine). Serves ONLY kafka.strimzi.io/v1 — see the
+  # apiVersion note in deploy/charts/database-cluster/templates/kafka/kafka.yaml.
+  - apiGroups: ["kafka.strimzi.io"]
+    resources: ["kafkas", "kafkanodepools", "kafkausers"]
+    verbs: ["get", "list"]
+  # opensearch-k8s-operator 3.0.2 (opensearch engine). BOTH api groups granted:
+  # 3.x serves opensearch.opster.io (deprecated, what the chart renders) AND
+  # its successor opensearch.org — granting both keeps status reads working
+  # across the operator's group migration without an RBAC re-roll.
+  - apiGroups: ["opensearch.opster.io", "opensearch.org"]
+    resources: ["opensearchclusters"]
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

@@ -192,7 +192,7 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 	}
 
 	switch action {
-	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE":
+	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO":
 		if !known[action] {
 			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support %s", engine, action)))
 			return true
@@ -341,6 +341,41 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 			}
 		}
 		httpx.OK(w, map[string]any{"result": map[string]any{"password": password}})
+		return true
+
+	case "SET_SSO":
+		// OpenSearch Dashboards OIDC against a PUBLIC IdP client — no client secret anywhere
+		// (the Application CR is argocd-readable, values must never carry secrets; register a
+		// public client with PKCE in the IdP). Empty connectUrl disables SSO.
+		sso := map[string]any{}
+		for _, k := range []string{"connectUrl", "clientId", "scope", "baseRedirectUrl", "logoutUrl"} {
+			if v := strAny(data[k]); v != "" {
+				sso[k] = v
+			}
+		}
+		if len(sso) > 0 && (sso["connectUrl"] == nil || sso["clientId"] == nil) {
+			h.fail(w, httpx.BadRequest("sso needs at least connectUrl and clientId (or send nothing to disable)"))
+			return true
+		}
+		err := ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+			block, _ := values["opensearch"].(map[string]any)
+			if block == nil {
+				block = map[string]any{}
+			}
+			if len(sso) == 0 {
+				delete(block, "sso")
+			} else {
+				sso["enabled"] = true
+				block["sso"] = sso
+			}
+			values["opensearch"] = block
+			return nil
+		})
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
 		return true
 
 	case "SET_ALLOWED_CIDRS":

@@ -10,7 +10,7 @@ import { locations, publicNetworks } from "../fixtures/platform"
 
 const ok = (result: unknown = null) => ({ data: { result } })
 
-const dbPorts: Record<string, number> = { postgresql: 5432, mysql: 3306, mariadb: 3306, valkey: 6379, ferretdb: 27017 }
+const dbPorts: Record<string, number> = { postgresql: 5432, mysql: 3306, mariadb: 3306, valkey: 6379, ferretdb: 27017, opensearch: 9200, kafka: 9094 }
 
 // --- Listing ----------------------------------------------------------------
 
@@ -176,6 +176,7 @@ on("POST /project/:pid/cloud/:resourceId/action", ({ params, opts }) => {
       case "RESIZE_STORAGE": d.storage_gib = data?.storageGiB; return ok()
       case "SCALE_REPLICAS": d.replicas = data?.replicas; return ok()
       case "SET_ALLOWED_CIDRS": d.allowed_cidrs = data?.allowedCidrs ?? []; return ok()
+      case "SET_SSO": d.status = "UPDATING"; return ok("UPDATING")
       case "RESTART": return ok()
     }
   }

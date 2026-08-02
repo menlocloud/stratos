@@ -54,12 +54,21 @@ const ENGINES: Record<string, { label: string; hint?: string }> = {
   mariadb: { label: "MariaDB" },
   valkey: { label: "Valkey" },
   ferretdb: { label: "FerretDB", hint: "Mongo-compatible" },
+  opensearch: { label: "OpenSearch", hint: "Search & analytics · HTTPS :9200" },
+  kafka: { label: "Kafka", hint: "Event streaming (Strimzi) · SASL :9094" },
 }
 const engineLabel = (e: string) => ENGINES[e]?.label ?? e
 
-// Engines whose UPGRADE capability is OFF server-side (mirrors dbaas.Capabilities): valkey has
-// no pinned operator path yet, ferretdb's frontend/DocumentDB images are a pinned matched pair.
-const NO_UPGRADE_ENGINES = new Set(["valkey", "ferretdb"])
+// Per-action engine deny-sets — mirrors the FALSE entries of dbaas.Capabilities server-side
+// (internal/cloud/dbaas/engines.go); actions absent here are engine-agnostic. Unknown engines
+// show everything and let the server refuse.
+const HIDDEN_ACTIONS: Record<string, Set<string>> = {
+  UPGRADE: new Set(["valkey", "ferretdb"]),
+  RESTART: new Set(["mysql", "valkey", "opensearch", "kafka"]),
+  RESIZE_STORAGE: new Set(["valkey", "opensearch"]),
+  RESET_PASSWORD: new Set(["valkey", "opensearch"]),
+}
+const supports = (engine: string, action: string) => !HIDDEN_ACTIONS[action]?.has(engine)
 
 // Size presets (cpu / memory GiB) — no flavors here, the DB runs on platform-owned nodes.
 const SIZE_PRESETS = [
@@ -902,6 +911,7 @@ function DatabaseDetail({
   const [restartOpen, setRestartOpen] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const [cidrsOpen, setCidrsOpen] = useState(false)
+  const [ssoOpen, setSsoOpen] = useState(false)
   // RESET_PASSWORD's result is shown exactly once and never stored anywhere else.
   const [newPassword, setNewPassword] = useState<string | null>(null)
 
@@ -1009,13 +1019,22 @@ function DatabaseDetail({
             {conn.isPending ? "Fetching…" : "Show connection info"}
           </Button>
           <Button size="sm" variant="outline" onClick={() => setResizeOpen(true)}>Resize</Button>
-          <Button size="sm" variant="outline" onClick={() => setStorageOpen(true)}>Resize storage</Button>
+          {supports(engine, "RESIZE_STORAGE") && (
+            <Button size="sm" variant="outline" onClick={() => setStorageOpen(true)}>Resize storage</Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => setReplicasOpen(true)}>Scale replicas</Button>
-          {!NO_UPGRADE_ENGINES.has(engine) && (
+          {supports(engine, "UPGRADE") && (
             <Button size="sm" variant="outline" onClick={() => setUpgradeOpen(true)}>Upgrade version</Button>
           )}
-          <Button size="sm" variant="outline" onClick={() => setRestartOpen(true)}>Restart</Button>
-          <Button size="sm" variant="outline" onClick={() => setResetOpen(true)}>Reset password</Button>
+          {supports(engine, "RESTART") && (
+            <Button size="sm" variant="outline" onClick={() => setRestartOpen(true)}>Restart</Button>
+          )}
+          {supports(engine, "RESET_PASSWORD") && (
+            <Button size="sm" variant="outline" onClick={() => setResetOpen(true)}>Reset password</Button>
+          )}
+          {engine === "opensearch" && (
+            <Button size="sm" variant="outline" onClick={() => setSsoOpen(true)}>Configure SSO</Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => setCidrsOpen(true)}>Allowed CIDRs</Button>
           <Button size="sm" variant="destructive" onClick={onDeleted}>
             <Trash2 className="size-4" /> Delete
@@ -1094,6 +1113,18 @@ function DatabaseDetail({
             onPatch({ replicas, status: "PROGRESSING" })
             toast.success("Replica change started")
             setReplicasOpen(false)
+          }}
+        />
+      )}
+
+      {ssoOpen && (
+        <SsoDialog
+          onClose={() => setSsoOpen(false)}
+          onSubmit={async (data) => {
+            await act("SET_SSO", data)
+            onPatch({ status: "UPDATING" })
+            toast.success("SSO configuration update started")
+            setSsoOpen(false)
           }}
         />
       )}
@@ -1467,6 +1498,70 @@ function CidrsDialog({
             onClick={() => {
               setPending(true)
               onSubmit(cidrs.split(",").map((c) => c.trim()).filter(Boolean))
+                .catch((e: Error) => toast.error(e.message))
+                .finally(() => setPending(false))
+            }}
+            disabled={pending}
+          >
+            {pending ? "Applying…" : "Apply"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// OpenSearch only — writes the Dashboards OIDC SSO block (SET_SSO). Submitting all fields
+// empty disables SSO; the server validates the rest.
+function SsoDialog({
+  onClose, onSubmit,
+}: {
+  onClose: () => void
+  onSubmit: (data: {
+    connectUrl: string; clientId: string; scope: string; baseRedirectUrl: string; logoutUrl: string
+  }) => Promise<void>
+}) {
+  const [connectUrl, setConnectUrl] = useState("")
+  const [clientId, setClientId] = useState("")
+  const [scope, setScope] = useState("openid profile email")
+  const [baseRedirectUrl, setBaseRedirectUrl] = useState("")
+  const [logoutUrl, setLogoutUrl] = useState("")
+  const [pending, setPending] = useState(false)
+  const fields = [
+    { id: "sso-connect", label: "OIDC discovery URL", value: connectUrl, set: setConnectUrl, placeholder: "https://idp.example.com/realms/main/.well-known/openid-configuration" },
+    { id: "sso-client", label: "Client ID", value: clientId, set: setClientId, placeholder: "opensearch-dashboards" },
+    { id: "sso-scope", label: "Scope", value: scope, set: setScope, placeholder: "openid profile email" },
+    { id: "sso-redirect", label: "Base redirect URL", value: baseRedirectUrl, set: setBaseRedirectUrl, placeholder: "https://dashboards.example.com" },
+    { id: "sso-logout", label: "Logout URL", value: logoutUrl, set: setLogoutUrl, placeholder: "https://idp.example.com/logout" },
+  ]
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Configure SSO</DialogTitle>
+          <DialogDescription>
+            OpenID Connect single sign-on for OpenSearch Dashboards. Submit with all fields empty
+            to disable SSO.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          {fields.map((f) => (
+            <div key={f.id} className="grid gap-2">
+              <Label htmlFor={f.id}>{f.label}</Label>
+              <Input id={f.id} value={f.value} onChange={(e) => f.set(e.target.value)} placeholder={f.placeholder} />
+            </div>
+          ))}
+          <p className="text-xs text-muted-foreground">
+            Register a PUBLIC OIDC client (PKCE) in your identity provider — no client secret is
+            stored.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => {
+              setPending(true)
+              onSubmit({ connectUrl: connectUrl.trim(), clientId: clientId.trim(), scope: scope.trim(), baseRedirectUrl: baseRedirectUrl.trim(), logoutUrl: logoutUrl.trim() })
                 .catch((e: Error) => toast.error(e.message))
                 .finally(() => setPending(false))
             }}

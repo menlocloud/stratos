@@ -9,18 +9,19 @@ release name must stay an ArgoCD implementation detail.
 {{- end }}
 
 {{/*
-Fail-fast contract validation. Included from service-lb.yaml (which renders for
-every engine), so a values document missing required keys can never produce a
-half-formed database. Mirrors the Validate() checks in internal/cloud/dbaas —
-this side is the last line of defence, not the UX.
+Fail-fast contract validation. Included from service-lb.yaml (which is
+evaluated for every engine — for kafka the Service body is skipped but this
+include still runs), so a values document missing required keys can never
+produce a half-formed database. Mirrors the Validate() checks in
+internal/cloud/dbaas — this side is the last line of defence, not the UX.
 */}}
 {{- define "database-cluster.validate" -}}
-{{- $engines := list "postgresql" "mysql" "mariadb" "valkey" "ferretdb" -}}
+{{- $engines := list "postgresql" "mysql" "mariadb" "valkey" "ferretdb" "opensearch" "kafka" -}}
 {{- if not .Values.engine -}}
-{{- fail "engine is required (postgresql|mysql|mariadb|valkey|ferretdb)" -}}
+{{- fail "engine is required (postgresql|mysql|mariadb|valkey|ferretdb|opensearch|kafka)" -}}
 {{- end -}}
 {{- if not (has .Values.engine $engines) -}}
-{{- fail (printf "unknown engine %q (want postgresql|mysql|mariadb|valkey|ferretdb)" .Values.engine) -}}
+{{- fail (printf "unknown engine %q (want postgresql|mysql|mariadb|valkey|ferretdb|opensearch|kafka)" .Values.engine) -}}
 {{- end -}}
 {{- if not .Values.engineVersion -}}
 {{- fail "engineVersion is required" -}}
@@ -80,10 +81,12 @@ stratos.io/display-name: {{ . | quote }}
 {{- end }}
 
 {{/*
-Engine -> client port. The single port the LB Service exposes.
+Engine -> client port. The single port the LB Service exposes (for kafka —
+whose LB Services are Strimzi-owned, not chart-owned — this is the external
+listener port, used by the NetworkPolicy).
 */}}
 {{- define "database-cluster.port" -}}
-{{- $ports := dict "postgresql" 5432 "mysql" 3306 "mariadb" 3306 "valkey" 6379 "ferretdb" 27017 -}}
+{{- $ports := dict "postgresql" 5432 "mysql" 3306 "mariadb" 3306 "valkey" 6379 "ferretdb" 27017 "opensearch" 9200 "kafka" 9094 -}}
 {{- index $ports .Values.engine -}}
 {{- end }}
 
@@ -94,8 +97,16 @@ mapping fails the render — better a loud sync error than a silently wrong
 major. Tags below are pinned bests-known at chart authoring time;
 TODO-verify(drill): confirm each against the pinned operator versions in
 deploy/dbaas-cluster/README.md before first release.
+
+opensearch/kafka have NO map here BY DESIGN: both operators resolve images
+from the version field natively (OpenSearchCluster spec.general.version,
+Kafka spec.kafka.version), so their templates never call this helper — the
+guard below turns an accidental future call into a loud render failure.
 */}}
 {{- define "database-cluster.image" -}}
+{{- if has .Values.engine (list "opensearch" "kafka") -}}
+{{- fail (printf "database-cluster.image must not be called for %s — its operator resolves the image from engineVersion natively" .Values.engine) -}}
+{{- end -}}
 {{- $v := .Values.engineVersion | toString -}}
 {{- $maps := dict
       "postgresql" (dict
@@ -159,6 +170,14 @@ Per-engine pod selector for the LB Service: the WRITE endpoint of each engine.
   valkey:     best-known valkey-operator labels. TODO-verify(beta): unverified
               until the valkey CRD is pinned — see templates/valkey/valkey.yaml.
   ferretdb:   the chart's own frontend Deployment (labels stamped by us).
+  opensearch: the operator's node-pool pods (any node serves reads/writes on
+              9200 — no primary/replica split to select). Label pair verified
+              on reference manifests; TODO-verify(drill): operator 3.x is
+              migrating the api group opster.io -> opensearch.org, re-check
+              the pod labels on 3.0.2.
+  kafka:      NOT USED — service-lb.yaml skips kafka entirely; Strimzi owns
+              the external bootstrap + per-broker LB Services (see
+              LBServiceNameFor in internal/cloud/dbaas/engines.go).
 */}}
 {{- define "database-cluster.serviceSelector" -}}
 {{- $name := include "database-cluster.name" . -}}
@@ -177,5 +196,8 @@ app.kubernetes.io/instance: {{ $name }}
 {{- else if eq .Values.engine "ferretdb" -}}
 app.kubernetes.io/name: ferretdb
 app.kubernetes.io/instance: {{ $name }}
+{{- else if eq .Values.engine "opensearch" -}}
+opster.io/opensearch-cluster: {{ $name }}
+opensearch.opster.io/component: nodes
 {{- end -}}
 {{- end }}
