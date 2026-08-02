@@ -122,10 +122,12 @@ const emptyGroup: NodeGroupRow = {
 // `on` is the default state, kept in line with the chart's own defaults.
 const ADDONS = [
   { key: "metricsServer", label: "Metrics Server", hint: "kubectl top and autoscaling (HPA) metrics", on: true },
+  { key: "nodeProblemDetector", label: "Node Problem Detector", hint: "Surfaces node faults (kernel hangs, bad disks, NTP drift) as Kubernetes Events", on: true },
   { key: "certManager", label: "cert-manager", hint: "TLS certificates from Let's Encrypt or private CAs", on: false },
   { key: "ingress", label: "NGINX Ingress", hint: "HTTP(S) ingress controller for your Services", on: false },
   { key: "monitoring", label: "Monitoring stack", hint: "Prometheus, Grafana dashboards and Loki logs (~2 GB RAM; metrics/logs kept in memory, 24h retention)", on: false },
   { key: "nvidiaGPUOperator", label: "NVIDIA GPU Operator", hint: "Drivers and container toolkit for GPU node groups", on: false },
+  { key: "reloader", label: "Reloader", hint: "Automatically rolls Deployments when a watched ConfigMap or Secret changes", on: false },
 ] as const
 const defaultAddons = () => Object.fromEntries(ADDONS.map((a) => [a.key, a.on])) as Record<string, boolean>
 

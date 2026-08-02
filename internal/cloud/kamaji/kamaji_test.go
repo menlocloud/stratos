@@ -372,7 +372,8 @@ func TestClusterAddons(t *testing.T) {
 	// what an API user gets by omitting the block. Update all three together, deliberately.
 	want := map[string]bool{
 		"certManager": false, "ingress": false, "metricsServer": true,
-		"monitoring": false, "nvidiaGPUOperator": false,
+		"monitoring": false, "nodeProblemDetector": true, "nvidiaGPUOperator": false,
+		"reloader": false,
 	}
 	if len(ClusterAddons) != len(want) {
 		t.Errorf("ClusterAddons = %v, want %v", ClusterAddons, want)

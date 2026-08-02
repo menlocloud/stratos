@@ -404,7 +404,11 @@ export function KamajiProviderForm({
         </div>
         <div className="grid gap-2">
           <Label htmlFor="km-chartver">Chart version (pinned)</Label>
-          <Input id="km-chartver" className="font-mono" value={form.chartVersion} onChange={(e) => setForm({ ...form, chartVersion: e.target.value })} placeholder="0.5.0" />
+          <Input id="km-chartver" className="font-mono" value={form.chartVersion} onChange={(e) => setForm({ ...form, chartVersion: e.target.value })} placeholder="x.y.z" />
+          <p className="text-xs text-muted-foreground">
+            The openstack-kamaji-cluster chart version NEW clusters pin (existing clusters keep theirs).
+            Published versions: the chart registry above, or the repo&apos;s openstack-kamaji-cluster-vX.Y.Z release tags.
+          </p>
         </div>
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
