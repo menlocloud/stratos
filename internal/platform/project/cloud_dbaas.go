@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/menlocloud/stratos/internal/cloud"
@@ -148,6 +149,8 @@ func (h *Handler) dbaasDelete(ctx context.Context, es *externalservice.ExternalS
 //   - RESIZE {cpu,memoryGiB}   → per-instance resources; the operator rolls the pods
 //   - RESIZE_STORAGE {storageGiB} → grow-only PVC expansion (validated vs LIVE values)
 //   - SCALE_REPLICAS {replicas}   → engine-semantic instance count, catalog-gated
+//   - UPGRADE {version}        → engine version bump (catalog-gated, upward-only vs LIVE
+//     values); the operator rolls the pods, the LB VIP never changes
 //   - RESTART {}               → stamps values.restartedAt; the chart maps it per engine
 //   - RESET_PASSWORD {}        → server-generated, applied to the engine secret, returned once
 //   - SET_ALLOWED_CIDRS {allowedCidrs} → LB source ranges (Octavia ACLs)
@@ -189,7 +192,7 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 	}
 
 	switch action {
-	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD":
+	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE":
 		if !known[action] {
 			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support %s", engine, action)))
 			return true
@@ -273,6 +276,36 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 			return true
 		}
 		httpx.OK(w, map[string]any{"result": "SCALING"})
+		return true
+
+	case "UPGRADE":
+		version, _ := data["version"].(string)
+		if version == "" {
+			h.fail(w, httpx.BadRequest("version is required"))
+			return true
+		}
+		offer, ok := cfg.Engines[engine]
+		if !ok || !slices.Contains(offer.Versions, version) {
+			h.fail(w, httpx.BadRequest(fmt.Sprintf("version %q is not offered for engine %s", version, engine)))
+			return true
+		}
+		err := ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+			// Upward-only, validated against the LIVE values, not the cache — a stale sync must
+			// not let a downgrade through (the kamaji UPGRADE rule). The chart resolves the new
+			// engine image from its version map and the operator performs its own rolling
+			// upgrade; the LB endpoint (Octavia VIP) never changes.
+			current, _ := values["engineVersion"].(string)
+			if err := dbaas.ValidateUpgradePath(current, version); err != nil {
+				return httpx.BadRequest(err.Error())
+			}
+			values["engineVersion"] = version
+			return nil
+		})
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPGRADING"})
 		return true
 
 	case "RESTART":

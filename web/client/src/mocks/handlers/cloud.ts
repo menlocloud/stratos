@@ -172,6 +172,7 @@ on("POST /project/:pid/cloud/:resourceId/action", ({ params, opts }) => {
       }
       case "RESET_PASSWORD": return ok({ password: "mock-new-password-2" })
       case "RESIZE": d.cpu = data?.cpu; d.memory_gib = data?.memoryGiB; return ok()
+      case "UPGRADE": d.version = data?.version; d.status = "PROGRESSING"; return ok("UPGRADING")
       case "RESIZE_STORAGE": d.storage_gib = data?.storageGiB; return ok()
       case "SCALE_REPLICAS": d.replicas = data?.replicas; return ok()
       case "SET_ALLOWED_CIDRS": d.allowed_cidrs = data?.allowedCidrs ?? []; return ok()

@@ -824,6 +824,21 @@ func TestResetPasswordOperatorOwned(t *testing.T) {
 	}
 }
 
+func TestValidateUpgradePath(t *testing.T) {
+	ok := [][2]string{{"16", "17"}, {"10.11", "11.4"}, {"8.4", "9.0"}, {"9.6", "10"}, {"2.5", "2.6"}}
+	for _, c := range ok {
+		if err := ValidateUpgradePath(c[0], c[1]); err != nil {
+			t.Errorf("%s→%s must be allowed: %v", c[0], c[1], err)
+		}
+	}
+	bad := [][2]string{{"17", "16"}, {"11.4", "10.11"}, {"17", "17"}, {"10", "9.6"}, {"x", "17"}, {"17", ""}}
+	for _, c := range bad {
+		if err := ValidateUpgradePath(c[0], c[1]); err == nil {
+			t.Errorf("%s→%s must be refused", c[0], c[1])
+		}
+	}
+}
+
 func TestSetChartVersionAndPins(t *testing.T) {
 	api := newFakeAPI()
 	s := NewWithAPI(api, testConfig(), "svc-dbaas")

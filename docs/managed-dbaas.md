@@ -125,8 +125,11 @@ sequenceDiagram
   (minutes; the charge is deferred until the endpoint exists, then back-billed).
 - **Actions** — `GET_CONNECTION_INFO` (secret + LB read on demand, never stored),
   `RESIZE {cpu,memoryGiB}`, `RESIZE_STORAGE {storageGiB}` (grow-only), `SCALE_REPLICAS`,
-  `RESTART`, `RESET_PASSWORD` (returned once), `SET_ALLOWED_CIDRS`. Engine-gated via
-  `dbaas.Capabilities` — verify each mechanism live before widening the map.
+  `UPGRADE {version}` (catalog-gated, upward-only vs live values; the operator rolls the pods
+  onto the new engine image, the endpoint never changes — off for valkey [operator unpinned]
+  and ferretdb [frontend/DocumentDB images are a pinned matched pair]), `RESTART`, `RESET_PASSWORD`
+  (returned once), `SET_ALLOWED_CIDRS`. Engine-gated via `dbaas.Capabilities` — verify each
+  mechanism live before widening the map.
 - **Delete** — Application delete only; the ArgoCD resources-finalizer cascades the chart, the
   LB Service delete tears the Octavia LB (and its tenant-subnet port) down. The periodic sweep
   (`syncjob.sweepDbaasOrphans`) then revokes the network share (skipped while a live sibling
@@ -136,6 +139,22 @@ sequenceDiagram
 - **Project teardown** — dbaas rows are swept before the tenant sweep, and keystone tenant
   deletion is DEFERRED while any database remnant is still finalizing (the LB port / network
   share would wedge it). Re-run teardown after the sweep reports clean.
+
+## HA and write-node failover (why the endpoint never moves)
+
+The customer-facing address is the Octavia VIP — a fixed IP on the tenant subnet. Failover
+never changes it; the "flip to the new write node" happens INSIDE the cluster, behind the LB:
+
+| Engine | Write-path routing behind the VIP |
+|---|---|
+| postgresql | LB Service selects `cnpg.io/instanceRole: primary`; CNPG re-labels pods on failover/switchover, so the Service endpoints flip to the new primary (verify on 1.29; fallback = CNPG `managed.services.additional` selectorType `rw`) |
+| mysql | LB targets the Percona operator's HAProxy pods; HAProxy follows the group-replication primary election |
+| mariadb | LB targets the chart-owned HAProxy, whose backend is the operator's `<id>-primary` Service — the operator re-points its endpoints on switchover/failover |
+| ferretdb | LB targets the stateless frontends, which talk to the CNPG `-pg-rw` Service (operator-managed) |
+| valkey | beta — routing unverified until the operator CRD is pinned |
+
+Clients see a few seconds of connection resets during a failover, reconnect to the SAME
+host:port, and land on the new primary. No floating-IP dance, no DNS TTL.
 
 ## Chart pin / platform update
 

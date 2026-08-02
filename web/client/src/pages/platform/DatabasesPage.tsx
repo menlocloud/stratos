@@ -3,7 +3,8 @@
 // more than one); the engine/version catalog comes from the dbaas service DTO. The database
 // runs on platform-owned infrastructure — only the tenant network for the private endpoint is
 // the customer's. Actions map to Go cloud_dbaas.go: create/delete + GET_CONNECTION_INFO /
-// RESIZE / RESIZE_STORAGE / SCALE_REPLICAS / RESTART / RESET_PASSWORD / SET_ALLOWED_CIDRS.
+// RESIZE / RESIZE_STORAGE / SCALE_REPLICAS / RESTART / RESET_PASSWORD / SET_ALLOWED_CIDRS /
+// UPGRADE.
 import { useCallback, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -56,6 +57,10 @@ const ENGINES: Record<string, { label: string; hint?: string }> = {
 }
 const engineLabel = (e: string) => ENGINES[e]?.label ?? e
 
+// Engines whose UPGRADE capability is OFF server-side (mirrors dbaas.Capabilities): valkey has
+// no pinned operator path yet, ferretdb's frontend/DocumentDB images are a pinned matched pair.
+const NO_UPGRADE_ENGINES = new Set(["valkey", "ferretdb"])
+
 // Size presets (cpu / memory GiB) — no flavors here, the DB runs on platform-owned nodes.
 const SIZE_PRESETS = [
   { key: "S", label: "Small", cpu: 1, memoryGiB: 2 },
@@ -95,6 +100,19 @@ function sizeOf(d: Db): string {
 
 // Stable key for a location picker — the API array order is not stable, so never key by index.
 const locKeyOf = (l: Location) => `${l.serviceId ?? ""}::${l.region ?? ""}`
+
+// Dotted-numeric version compare, mirrors the server's upgrade-path check — "10.11" < "11.4",
+// "9.6" < "10". Missing segments count as 0.
+function versionGt(a: string, b: string): boolean {
+  const as = a.split(".").map(Number)
+  const bs = b.split(".").map(Number)
+  for (let i = 0; i < Math.max(as.length, bs.length); i++) {
+    const x = as[i] ?? 0
+    const y = bs[i] ?? 0
+    if (x !== y) return x > y
+  }
+  return false
+}
 
 async function copyText(value: string) {
   try {
@@ -879,6 +897,7 @@ function DatabaseDetail({
 
   const [resizeOpen, setResizeOpen] = useState(false)
   const [storageOpen, setStorageOpen] = useState(false)
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [replicasOpen, setReplicasOpen] = useState(false)
   const [restartOpen, setRestartOpen] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
@@ -992,6 +1011,9 @@ function DatabaseDetail({
           <Button size="sm" variant="outline" onClick={() => setResizeOpen(true)}>Resize</Button>
           <Button size="sm" variant="outline" onClick={() => setStorageOpen(true)}>Resize storage</Button>
           <Button size="sm" variant="outline" onClick={() => setReplicasOpen(true)}>Scale replicas</Button>
+          {!NO_UPGRADE_ENGINES.has(engine) && (
+            <Button size="sm" variant="outline" onClick={() => setUpgradeOpen(true)}>Upgrade version</Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => setRestartOpen(true)}>Restart</Button>
           <Button size="sm" variant="outline" onClick={() => setResetOpen(true)}>Reset password</Button>
           <Button size="sm" variant="outline" onClick={() => setCidrsOpen(true)}>Allowed CIDRs</Button>
@@ -1043,6 +1065,21 @@ function DatabaseDetail({
             onPatch({ storage_gib: storageGiB, status: "PROGRESSING" })
             toast.success("Storage resize started")
             setStorageOpen(false)
+          }}
+        />
+      )}
+
+      {upgradeOpen && (
+        <UpgradeVersionDialog
+          engine={engine}
+          current={String(d.version ?? "")}
+          offered={(engines[engine]?.versions ?? []).filter(Boolean)}
+          onClose={() => setUpgradeOpen(false)}
+          onSubmit={async (version) => {
+            await act("UPGRADE", { version })
+            onPatch({ version, status: "PROGRESSING" })
+            toast.success("Upgrade started")
+            setUpgradeOpen(false)
           }}
         />
       )}
@@ -1273,6 +1310,69 @@ function ResizeStorageDialog({
             disabled={!valid || pending}
           >
             {pending ? "Applying…" : "Resize storage"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function UpgradeVersionDialog({
+  engine, current, offered, onClose, onSubmit,
+}: {
+  engine: string
+  current: string
+  offered: string[]
+  onClose: () => void
+  onSubmit: (version: string) => Promise<void>
+}) {
+  // Only strictly newer catalog versions are valid targets — the server rejects anything else.
+  const targets = offered.filter((v) => versionGt(v, current))
+  const [sel, setSel] = useState("")
+  const version = targets.includes(sel) ? sel : targets[0] ?? ""
+  const [pending, setPending] = useState(false)
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Upgrade version</DialogTitle>
+          <DialogDescription>
+            Upgrades {engineLabel(engine)} from version {current} to a newer offered version.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2 py-2">
+          <Label>Target version (current: {current})</Label>
+          {targets.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Already on the newest offered version.</p>
+          ) : (
+            <Select value={version} onValueChange={setSel}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {targets.map((v) => (
+                  <SelectItem key={v} value={v}>{v}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <p className="text-xs text-muted-foreground">
+            The database pods roll onto the new engine image; expect a brief failover. The
+            endpoint does not change. Downgrades are not possible.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => {
+              setPending(true)
+              onSubmit(version)
+                .catch((e: Error) => toast.error(e.message))
+                .finally(() => setPending(false))
+            }}
+            disabled={!version || pending}
+          >
+            {pending ? "Upgrading…" : "Upgrade"}
           </Button>
         </DialogFooter>
       </DialogContent>

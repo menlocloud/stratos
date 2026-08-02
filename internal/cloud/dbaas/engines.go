@@ -3,6 +3,8 @@ package dbaas
 import (
 	"fmt"
 	"net/url"
+	"strconv"
+	"strings"
 )
 
 // engines.go — the ONE place per-engine knowledge lives: catalog offers, action capabilities,
@@ -44,12 +46,68 @@ func (o EngineOffer) ReplicaChoices() []int {
 // RESTART is OFF for mysql and valkey because no chart template consumes restartedAt for them
 // (their template headers say exactly that) — returning "RESTARTING" for a no-op would be a
 // lie; enable only together with a live-verified chart mechanism.
+// UPGRADE mutates values.engineVersion (upward only, catalog-gated); the chart resolves the
+// new image and the operator performs its own rolling upgrade (CNPG rolling minor / declarative
+// in-place major, Percona smart update, mariadb rolling). Off for valkey (operator unpinned)
+// and ferretdb (values.ferretdb.postgresImage is a pinned matched-pair with the frontend —
+// bumping only engineVersion would split the pair; enable once the chart maps BOTH images off
+// the version).
 var Capabilities = map[string]map[string]bool{
-	EnginePostgreSQL: {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true},
-	EngineMySQL:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true},
-	EngineMariaDB:    {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true},
-	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false},
-	EngineFerretDB:   {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true},
+	EnginePostgreSQL: {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true},
+	EngineMySQL:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true},
+	EngineMariaDB:    {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true},
+	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false},
+	EngineFerretDB:   {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": false},
+}
+
+// ValidateUpgradePath enforces the version-change policy: the target must be OFFERED for the
+// engine and strictly NEWER than the current version (dotted-numeric compare — "9.6" < "10");
+// downgrades are refused outright (operators do not support them; a PG datadir is not
+// backward-compatible). Same-major vs cross-major is left to the operator: CNPG handles both
+// (rolling minor, declarative offline in-place major), mysql/mariadb catalogs are curated to
+// sane steps.
+func ValidateUpgradePath(current, target string) error {
+	if current == target {
+		return fmt.Errorf("already on version %s", current)
+	}
+	cur, err := parseVersion(current)
+	if err != nil {
+		return fmt.Errorf("current version %q: %w", current, err)
+	}
+	tgt, err := parseVersion(target)
+	if err != nil {
+		return fmt.Errorf("target version %q: %w", target, err)
+	}
+	for i := 0; i < len(cur) || i < len(tgt); i++ {
+		c, t := 0, 0
+		if i < len(cur) {
+			c = cur[i]
+		}
+		if i < len(tgt) {
+			t = tgt[i]
+		}
+		if t > c {
+			return nil
+		}
+		if t < c {
+			return fmt.Errorf("cannot downgrade from %s to %s", current, target)
+		}
+	}
+	return fmt.Errorf("already on version %s", current)
+}
+
+// parseVersion splits a dotted numeric version ("11.4" → [11 4]).
+func parseVersion(v string) ([]int, error) {
+	parts := strings.Split(v, ".")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, fmt.Errorf("not a dotted numeric version")
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 // ConnectionSecret returns the (secretName, userKey, passKey, dbKey) tuple GET_CONNECTION_INFO
