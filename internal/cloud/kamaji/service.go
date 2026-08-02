@@ -428,22 +428,26 @@ func (s *Service) PatchClusterValues(ctx context.Context, clusterID string, muta
 	if err := mutate(values); err != nil {
 		return err
 	}
-	// Re-apply only the fields stratos owns (SSA merges; metadata.name/namespace route the patch).
+	// Re-apply the WHOLE spec plus the metadata stratos stamped at create — NOT a partial patch.
+	// The Application was created via server-side apply by this same field manager, so a partial
+	// apply is an ownership retraction: every owned field absent from the patch is REMOVED, and
+	// the api server then rejects the result with 422 "spec.destination/spec.project: Required
+	// value" (or silently drops the resources-finalizer and the display-name annotation). The
+	// mutated values are already inside app's spec (mutate edited them in place).
+	meta := map[string]any{
+		"name":      clusterID,
+		"namespace": s.cfg.ArgoNamespace,
+	}
+	for _, k := range []string{"labels", "annotations", "finalizers"} {
+		if v := dig(app, "metadata", k); v != nil {
+			meta[k] = v
+		}
+	}
 	patch := map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1",
 		"kind":       "Application",
-		"metadata": map[string]any{
-			"name":      clusterID,
-			"namespace": s.cfg.ArgoNamespace,
-		},
-		"spec": map[string]any{
-			"source": map[string]any{
-				"repoURL":        dig(app, "spec", "source", "repoURL"),
-				"chart":          dig(app, "spec", "source", "chart"),
-				"targetRevision": dig(app, "spec", "source", "targetRevision"),
-				"helm":           map[string]any{"valuesObject": values},
-			},
-		},
+		"metadata":   meta,
+		"spec":       app["spec"],
 	}
 	return s.api.ApplyApplication(ctx, patch)
 }

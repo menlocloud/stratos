@@ -516,15 +516,10 @@ func (f *fakeAPI) DeleteSecret(_ context.Context, ns, name string) error {
 func (f *fakeAPI) ApplyApplication(_ context.Context, app map[string]any) error {
 	meta := app["metadata"].(map[string]any)
 	key := meta["namespace"].(string) + "/" + meta["name"].(string)
-	if prev, ok := f.apps[key]; ok {
-		// SSA merge approximation: replace only spec.source + keep the rest.
-		prevSpec := prev["spec"].(map[string]any)
-		newSpec := app["spec"].(map[string]any)
-		for k, v := range newSpec {
-			prevSpec[k] = v
-		}
-		return nil
-	}
+	// Same-field-manager SSA: the applied object REPLACES the manager's owned field set — a
+	// field absent from the patch is an ownership retraction and gets REMOVED. The earlier
+	// "merge only spec.source" approximation here hid exactly the prod 422 (a partial
+	// PatchClusterValues apply stripped the required spec.destination/spec.project).
 	f.apps[key] = app
 	return nil
 }
@@ -903,6 +898,21 @@ func TestPatchClusterValuesUpgrade(t *testing.T) {
 	values := src["helm"].(map[string]any)["valuesObject"].(map[string]any)
 	if values["kubernetesVersion"] != "1.34.2" {
 		t.Errorf("version = %v", values["kubernetesVersion"])
+	}
+	// The patch must re-apply EVERYTHING this field manager owns: with SSA, omitting a field
+	// retracts it — the api server 422s on the required spec fields (the prod upgrade failure)
+	// and would silently drop the finalizer + ownership labels + display-name annotation.
+	if dig(app, "spec", "destination") == nil || dig(app, "spec", "project") == nil {
+		t.Errorf("patch dropped spec.destination/spec.project: %v", app["spec"])
+	}
+	if dig(app, "spec", "syncPolicy") == nil {
+		t.Error("patch dropped spec.syncPolicy")
+	}
+	if labels, _ := dig(app, "metadata", "labels").(map[string]any); labels[LabelManagedBy] != ManagedByValue {
+		t.Errorf("patch dropped the ownership labels: %v", dig(app, "metadata", "labels"))
+	}
+	if fins, _ := dig(app, "metadata", "finalizers").([]any); len(fins) == 0 {
+		t.Error("patch dropped the resources-finalizer")
 	}
 
 	if err := svc.PatchClusterValues(ctx, "stc-none", func(map[string]any) error { return nil }); err == nil {
