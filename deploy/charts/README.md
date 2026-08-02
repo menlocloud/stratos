@@ -50,10 +50,22 @@ what keeps them from overwriting each other:
 
 ## Publishing
 
-`.github/workflows/helm.yml` packages and pushes on a `v*` tag, using the **chart's own
-`Chart.yaml` version** (not the git tag — this chart's lifecycle is not the API's), and skips when
-that version is already in the registry. So: bump `version:` in `Chart.yaml` in the same PR as the
-change, and it publishes with the next release tag.
+`.github/workflows/helm.yml` gives each chart its own tag-driven release, because their
+lifecycles are independent (a customer cluster pins a chart version; the app releases on its
+own cadence):
+
+| chart | release tag | version source |
+|---|---|---|
+| `stratos` (app) | `vX.Y.Z` (shared with the image tags) | the tag |
+| `openstack-kamaji-cluster` | `openstack-kamaji-cluster-vX.Y.Z` | `Chart.yaml` — the tag must match or the job fails |
+| `cluster-addons-menlo` | `cluster-addons-menlo-vX.Y.Z` | `Chart.yaml` — same match rule |
+
+Flow for the k8s charts: bump `version:` in `Chart.yaml` in the PR that changes the chart,
+merge, then cut the matching tag (`git tag openstack-kamaji-cluster-v0.7.0 && git push origin
+openstack-kamaji-cluster-v0.7.0`). Publishing is idempotent — an already-published version is
+skipped. A `cluster-addons-menlo` change additionally needs the parent chart's `dependencies`
+pin bumped (it is vendored via `file://`) and a parent release to actually reach clusters; the
+standalone publish exists for direct consumers and parity with `menlocloud/charts`.
 
 Stratos pins the version per cluster in the provider config (`config.argocd.chartVersion`) and
 never resolves `latest` — an existing cluster keeps its pin until something explicitly moves it.
