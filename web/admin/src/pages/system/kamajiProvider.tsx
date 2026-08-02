@@ -34,6 +34,8 @@ export type KamajiFormState = {
   allowedCidrs: string // comma-separated
   versions: string // one "1.35.4=<glance-image-id>" (or "1.35.4@variant=<id>") per line
   flavors: string // optional allowlist, one Nova flavor id per line (empty = all tenant flavors)
+  // Cinder volume type behind every cluster's default StorageClass ("" = cloud default).
+  storageVolumeType: string
   // The OpenStack provider whose live catalog feeds the flavor/image PICKERS below — a browsing
   // aid only (worker placement stays per-project). Stored so the edit page reopens with the
   // pickers wired; blank = type ids by hand.
@@ -58,6 +60,7 @@ export const emptyKamajiForm: KamajiFormState = {
   allowedCidrs: "",
   versions: "",
   flavors: "",
+  storageVolumeType: "",
   openstackServiceId: "",
 }
 
@@ -148,6 +151,7 @@ export function kamajiConfigBlocks(f: KamajiFormState) {
       // Sent complete on every save (the update route replaces whole blocks) — including the
       // empty {} so deleting the last variant line actually removes the stored variants.
       imageVariants: parseVersions(f.versions)?.variants ?? {},
+      ...(f.storageVolumeType.trim() ? { storageVolumeType: f.storageVolumeType.trim() } : {}),
       ...(f.openstackServiceId ? { openstackServiceId: f.openstackServiceId } : {}),
     },
   }
@@ -207,6 +211,7 @@ export function kamajiFormFromService(svc: {
     allowedCidrs: ((cluster.allowedCidrs as string[]) ?? []).join(","),
     versions: versionLines.join("\n"),
     flavors: ((cluster.flavors as string[]) ?? []).join("\n"),
+    storageVolumeType: String(cluster.storageVolumeType ?? ""),
     openstackServiceId: String(cluster.openstackServiceId ?? ""),
   }
 }
@@ -229,6 +234,8 @@ function CatalogPickers({ form, setForm }: { form: KamajiFormState; setForm: (f:
   )
   const flavorsQ = useAdminList<PickerFlavor>(`/admin/service/${svcID}/os-flavors`, !!svcID)
   const imagesQ = useAdminList<PickerImagesByLocation>(`/admin/service/${svcID}/os-images`, !!svcID)
+  const volumeTypesQ = useAdminList<{ region?: string; volumeTypes?: string[] }>(`/admin/service/${svcID}/volume/types`, !!svcID)
+  const volumeTypes = [...new Set((volumeTypesQ.data?.data ?? []).flatMap((r) => r.volumeTypes ?? []))]
   const flavors = flavorsQ.data?.data ?? []
   const images = [...new Map(
     (imagesQ.data?.data ?? []).flatMap((loc) => loc.images ?? []).map((im) => [im.id, im]),
@@ -292,6 +299,31 @@ function CatalogPickers({ form, setForm }: { form: KamajiFormState; setForm: (f:
             <Button type="button" variant="outline" className="self-end" disabled={!pickFlavor} onClick={() => appendLine("flavors", pickFlavor)}>
               Add
             </Button>
+          </div>
+          <div className="grid gap-2">
+            <Label>Default StorageClass volume type</Label>
+            {/* "default" sentinel — Radix SelectItem values can't be empty strings. */}
+            <Select
+              value={form.storageVolumeType || "default"}
+              onValueChange={(v) => setForm({ ...form, storageVolumeType: v === "default" ? "" : v })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder={volumeTypesQ.isLoading ? "Loading volume types…" : "Cloud default"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">Cloud default</SelectItem>
+                {form.storageVolumeType && !volumeTypes.includes(form.storageVolumeType) ? (
+                  <SelectItem value={form.storageVolumeType}>{form.storageVolumeType}</SelectItem>
+                ) : null}
+                {volumeTypes.map((t) => (
+                  <SelectItem key={t} value={t}>{t}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              The Cinder volume type behind every cluster's default <code>csi-cinder</code>{" "}
+              StorageClass (PVC-backed workloads). Shown to customers in the create wizard.
+            </p>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-[7rem_8rem_1fr_auto]">
             <div className="grid gap-2">

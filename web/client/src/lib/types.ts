@@ -77,6 +77,8 @@ export type ProjectService = {
   kubernetesImageVariants?: Record<string, string[]>
   // The provider's pinned platform (chart) version — feeds the opt-in "platform update" offer.
   kubernetesPlatformVersion?: string
+  // The default StorageClass clusters ship with (name + optional Cinder volume type).
+  kubernetesStorage?: { className?: string; volumeType?: string }
   [k: string]: unknown
 }
 

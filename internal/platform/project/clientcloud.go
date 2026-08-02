@@ -603,6 +603,12 @@ func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 		if pin := es.KamajiConfig().ChartVersion; pin != "" {
 			dto["kubernetesPlatformVersion"] = pin
 		}
+		// The default StorageClass every cluster ships with — informational, shown at create.
+		storage := map[string]any{"className": "csi-cinder"}
+		if vt := defaults.StorageVolumeType; vt != "" {
+			storage["volumeType"] = vt
+		}
+		dto["kubernetesStorage"] = storage
 		// Per-version image-variant names (e.g. "nvidia") — the node-group image picker. Names
 		// only; the ids stay operator detail like the version matrix above.
 		variantsByVersion := map[string]any{}

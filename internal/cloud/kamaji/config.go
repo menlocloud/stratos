@@ -117,6 +117,9 @@ type ClusterDefaults struct {
 	// AllowedCIDRs is the provider-wide default API-server ingress allowlist; a cluster's own
 	// AllowedCIDRs overrides it. Empty on both = open.
 	AllowedCIDRs []string
+	// StorageVolumeType is the Cinder volume type behind every cluster's default StorageClass
+	// (csi-cinder). Empty = the cloud's default volume type.
+	StorageVolumeType string
 }
 
 // ClusterAddons is the curated add-on menu a customer can toggle per cluster (name →

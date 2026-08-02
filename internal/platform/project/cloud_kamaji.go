@@ -352,11 +352,12 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 				return true
 			}
 		}
-		// Rebuilt wholesale from the picks. A legacy `openstack` entry (the short-lived
-		// credential-push storage leg) is deliberately DROPPED here: the split CSI ships storage
-		// chart-side, and the pushed credential must not survive an addon edit.
+		// Rebuilt wholesale from the picks + the provider's CURRENT storage volume-type override
+		// (stratos-owned, re-derived — not carried over). A legacy `openstack` entry (the
+		// short-lived credential-push storage leg) is deliberately DROPPED here: the split CSI
+		// ships storage chart-side, and the pushed credential must not survive an addon edit.
 		err = ks.PatchClusterValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
-			block := kamaji.AddonValues(addons)
+			block := kamaji.AddonValues(addons, ks.Config().Defaults.StorageVolumeType)
 			if len(block) == 0 {
 				delete(values, "addons") // back to the chart's defaults
 				return nil

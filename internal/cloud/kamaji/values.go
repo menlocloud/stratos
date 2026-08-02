@@ -107,22 +107,30 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 		}
 	}
 
-	// The addons block carries ONLY the customer's curated toggles (ClusterAddons, one
-	// `addons.<name>.enabled` per pick). Storage needs nothing here: the chart enables the
-	// split Cinder CSI by default (controller management-side with the credential, node plugin
-	// credential-free in the cluster), so no cloud credential ever enters the workload cluster
-	// and `addons.openstack` stays untouched at its hard-off default (plan D7).
-	if addons := AddonValues(spec.Addons); len(addons) > 0 {
+	// The addons block: the customer's curated toggles (ClusterAddons, one
+	// `addons.<name>.enabled` per pick) plus the STRATOS-OWNED csiCinderNode storage-class
+	// override (provider-configured Cinder volume type). Storage itself needs nothing here: the
+	// chart enables the split Cinder CSI by default (controller management-side with the
+	// credential, node plugin credential-free in the cluster), so no cloud credential ever
+	// enters the workload cluster and `addons.openstack` stays at its hard-off default (D7).
+	if addons := AddonValues(spec.Addons, d.StorageVolumeType); len(addons) > 0 {
 		values["addons"] = addons
 	}
 	return values
 }
 
-// AddonValues renders the customer's addon picks as the chart's `addons.<name>.enabled` map.
-func AddonValues(picks map[string]bool) map[string]any {
+// AddonValues renders the addons block: the customer's picks as `addons.<name>.enabled`, plus
+// the default-StorageClass volume-type override when the provider pins one. The override lives
+// under `csiCinderNode` — off the curated menu, so a client request can never reach it.
+func AddonValues(picks map[string]bool, storageVolumeType string) map[string]any {
 	addons := map[string]any{}
 	for name, enabled := range picks {
 		addons[name] = map[string]any{"enabled": enabled}
+	}
+	if storageVolumeType != "" {
+		addons["csiCinderNode"] = map[string]any{
+			"defaultStorageClass": map[string]any{"volumeType": storageVolumeType},
+		}
 	}
 	return addons
 }

@@ -348,8 +348,20 @@ func TestClusterAddons(t *testing.T) {
 	if _, has := BuildValues(testCfg(), withCred)["addons"]; has {
 		t.Error("an appcred must not render an addons block either")
 	}
-	if av := AddonValues(nil); len(av) != 0 {
+	if av := AddonValues(nil, ""); len(av) != 0 {
 		t.Errorf("no picks: %v", av)
+	}
+
+	// The provider's storage volume type rides under the stratos-owned csiCinderNode key —
+	// off the curated menu, so the client can neither set nor clear it.
+	cfg := testCfg()
+	cfg.Defaults.StorageVolumeType = "multiattach"
+	sc := BuildValues(cfg, testSpec())["addons"].(map[string]any)["csiCinderNode"].(map[string]any)
+	if sc["defaultStorageClass"].(map[string]any)["volumeType"] != "multiattach" {
+		t.Errorf("storage volume type = %v", sc)
+	}
+	if _, ok := ClusterAddons["csiCinderNode"]; ok {
+		t.Error("csiCinderNode must stay off the curated menu")
 	}
 
 	// The menu's defaults are a CONTRACT: they must mirror the chart's effective defaults (and

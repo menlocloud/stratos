@@ -111,6 +111,7 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			SupportKeypairName:      str(cl["supportKeypairName"]),
 			SupportKeypairPublicKey: str(cl["supportKeypairPublicKey"]),
 			AllowedCIDRs:            strList(cl["allowedCidrs"]),
+			StorageVolumeType:       str(cl["storageVolumeType"]),
 		},
 	}
 	if cfg.ArgoNamespace == "" {

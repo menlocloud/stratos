@@ -318,6 +318,12 @@ function useKubernetesData(pid: string) {
     [services.data],
   )
 
+  // The default StorageClass clusters ship with — informational, surfaced in the create wizard.
+  const storageFor = useCallback(
+    (serviceId?: string) => services.data?.find((s) => s.id === serviceId)?.kubernetesStorage,
+    [services.data],
+  )
+
   // A cached cluster row records the kamaji service it lives on (serviceId/region on the
   // resource DTO). With several kamaji locations attached, the ROW's own service — not
   // whichever location happens to be first — must resolve the curated versions, the flavor
@@ -415,7 +421,7 @@ function useKubernetesData(pid: string) {
 
   return {
     kLocs, kScope, osScope, clusters,
-    versionsFor, variantsFor, platformVersionFor, rowServiceId, rowScope, flavorOptionsFor,
+    versionsFor, variantsFor, platformVersionFor, storageFor, rowServiceId, rowScope, flavorOptionsFor,
     invalidate, patchCluster,
   }
 }
@@ -424,7 +430,7 @@ export default function KubernetesPage() {
   const pid = useProjectId()
   const navigate = useNavigate()
   const {
-    kLocs, kScope, clusters, versionsFor, variantsFor, rowServiceId, rowScope, flavorOptionsFor, invalidate,
+    kLocs, kScope, clusters, versionsFor, variantsFor, storageFor, rowServiceId, rowScope, flavorOptionsFor, invalidate,
   } = useKubernetesData(pid)
   const { data, isLoading, isError, error, refetch, isFetching } = clusters
 
@@ -613,6 +619,7 @@ export default function KubernetesPage() {
           submitLabel="Create cluster"
           versions={createVersions}
           variantsForVersion={(v) => variantsFor(createLoc?.serviceId, v)}
+          storage={storageFor(createLoc?.serviceId)}
           flavors={createFlavorOptions}
           networks={networkOptions}
           locations={kLocs}
@@ -757,12 +764,13 @@ export function KubernetesClusterDetailPage() {
 
 // ── create/edit form ─────────────────────────────────────────────────────────
 function ClusterFormDialog({
-  title, submitLabel, versions, variantsForVersion, flavors, networks, locations, locKey, onLocKey, onClose, onSubmit,
+  title, submitLabel, versions, variantsForVersion, storage, flavors, networks, locations, locKey, onLocKey, onClose, onSubmit,
 }: {
   title: string
   submitLabel: string
   versions: string[]
   variantsForVersion: (version: string) => string[]
+  storage?: { className?: string; volumeType?: string }
   flavors: FlavorOption[]
   networks: NetworkOption[]
   locations: Location[]
@@ -895,6 +903,15 @@ function ClusterFormDialog({
           </div>
 
           <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
+
+          {storage?.className && (
+            <p className="text-xs text-muted-foreground">
+              Persistent storage: default StorageClass{" "}
+              <span className="font-mono">{storage.className}</span>
+              {storage.volumeType ? <> (volume type <span className="font-mono">{storage.volumeType}</span>)</> : null}{" "}
+              — PVCs work out of the box.
+            </p>
+          )}
 
           <div className="grid gap-3 rounded-lg border p-3">
             <div>
