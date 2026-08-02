@@ -220,15 +220,12 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 			}
 			values["kubernetesVersion"] = version
 			// Node images follow the curated version→image matrix: rotate every group to the new
-			// version's image (a MachineDeployment template rotation = CAPI rolling replace).
-			if img := d.Versions[version]; img != "" {
-				if groups, ok := values["nodeGroups"].([]any); ok {
-					for _, raw := range groups {
-						if g, ok := raw.(map[string]any); ok {
-							g["machineImageId"] = img
-						}
-					}
-				}
+			// version's image (a MachineDeployment template rotation = CAPI rolling replace). A
+			// group with an image VARIANT stays on that variant — resolved against the target
+			// version, and the upgrade is refused when the variant has no image there, because
+			// silently rolling a GPU pool onto the plain image is a broken pool with extra steps.
+			if err := rotateNodeGroupImages(values, d, version); err != nil {
+				return err
 			}
 			// Keep the autoscaler on the new minor (chart constraint: tag minor == cluster minor).
 			if maj, min, _, verr := kamaji.ParseVersion(version); verr == nil {
@@ -272,7 +269,7 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 		}
 		err = ks.PatchClusterValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
 			version, _ := values["kubernetesVersion"].(string)
-			prevFlavor, prevImage := prevGroupIndex(values)
+			prevFlavor, prevImage, prevVariant := prevGroupIndex(values)
 			// Flavor allowlist applies to NEW or flavor-CHANGED groups only — an admin narrowing
 			// the allowlist must not brick resizes of groups that already run a since-removed
 			// flavor.
@@ -287,22 +284,8 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 				}
 			}
 			rendered := kamaji.NodeGroupValues(d, version, groups)
-			// The version→image matrix may no longer carry this cluster's (older) version — keep
-			// each untouched group's existing image rather than rendering imageId:"" (which would
-			// roll every MachineDeployment onto a broken template).
-			for _, raw := range rendered {
-				g, ok := raw.(map[string]any)
-				if !ok {
-					continue
-				}
-				if img, _ := g["machineImageId"].(string); img == "" {
-					name, _ := g["name"].(string)
-					if prev := prevImage[name]; prev != "" {
-						g["machineImageId"] = prev
-					} else {
-						return httpx.BadRequest(fmt.Sprintf("node group %q: no image for version %s — set an imageId or update the provider's version matrix", name, version))
-					}
-				}
+			if err := applyNodeGroupImages(rendered, prevImage, prevVariant, version); err != nil {
+				return err
 			}
 			values["nodeGroups"] = rendered
 			return nil
@@ -366,9 +349,9 @@ func validateNodeGroupShapes(groups []kamaji.NodeGroup) error {
 	return spec.Validate(kamaji.ClusterDefaults{})
 }
 
-// prevGroupIndex indexes the live values' nodeGroups by name → flavor / imageId.
-func prevGroupIndex(values map[string]any) (flavor, image map[string]string) {
-	flavor, image = map[string]string{}, map[string]string{}
+// prevGroupIndex indexes the live values' nodeGroups by name → flavor / imageId / imageVariant.
+func prevGroupIndex(values map[string]any) (flavor, image, variant map[string]string) {
+	flavor, image, variant = map[string]string{}, map[string]string{}, map[string]string{}
 	raw, _ := values["nodeGroups"].([]any)
 	for _, r := range raw {
 		g, ok := r.(map[string]any)
@@ -381,8 +364,62 @@ func prevGroupIndex(values map[string]any) (flavor, image map[string]string) {
 		}
 		flavor[name], _ = g["machineFlavor"].(string)
 		image[name], _ = g["machineImageId"].(string)
+		variant[name], _ = g["imageVariant"].(string)
 	}
-	return flavor, image
+	return flavor, image, variant
+}
+
+// rotateNodeGroupImages re-points every rendered group at the target version's image of its OWN
+// variant — the UPGRADE leg. Refused when a variant carries no image for the target; a missing
+// DEFAULT image keeps the group's current one (the matrix may have dropped an old version, and
+// UPGRADE already validated the target is offered).
+func rotateNodeGroupImages(values map[string]any, d kamaji.ClusterDefaults, version string) error {
+	groups, _ := values["nodeGroups"].([]any)
+	for _, raw := range groups {
+		g, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		variant, _ := g["imageVariant"].(string)
+		img := d.ImageFor(version, variant)
+		if img == "" {
+			if variant != "" {
+				name, _ := g["name"].(string)
+				return httpx.BadRequest(fmt.Sprintf("node group %q: image variant %q is not offered for version %s — update the provider's image variants first", name, variant, version))
+			}
+			continue
+		}
+		g["machineImageId"] = img
+	}
+	return nil
+}
+
+// applyNodeGroupImages fills each rendered group's EMPTY machineImageId — the SET_NODE_GROUPS
+// leg. A group whose variant is UNCHANGED keeps its previous image (an admin narrowing the
+// matrix must not brick resizes of existing pools); a changed-variant or new group must resolve,
+// else the request is refused — falling back would stamp a variant the pool doesn't actually
+// run, and the values must never lie about what a pool boots.
+func applyNodeGroupImages(rendered []any, prevImage, prevVariant map[string]string, version string) error {
+	for _, raw := range rendered {
+		g, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if img, _ := g["machineImageId"].(string); img != "" {
+			continue
+		}
+		name, _ := g["name"].(string)
+		variant, _ := g["imageVariant"].(string)
+		if prev := prevImage[name]; prev != "" && variant == prevVariant[name] {
+			g["machineImageId"] = prev
+			continue
+		}
+		if variant != "" {
+			return httpx.BadRequest(fmt.Sprintf("node group %q: image variant %q is not offered for version %s", name, variant, version))
+		}
+		return httpx.BadRequest(fmt.Sprintf("node group %q: no image for version %s — set an imageId or update the provider's version matrix", name, version))
+	}
+	return nil
 }
 
 // digAnyStr reads a nested string out of a free-form map (nil-safe).

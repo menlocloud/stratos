@@ -7,9 +7,14 @@
 // land in the customer's own OpenStack project — so a project needs BOTH this service and an
 // OpenStack one.
 
+import { useState } from "react"
+
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { useAdminList } from "@/lib/hooks"
 
 export type KamajiFormState = {
   name: string
@@ -27,8 +32,12 @@ export type KamajiFormState = {
   supportKeypairName: string
   supportKeypairPublicKey: string
   allowedCidrs: string // comma-separated
-  versions: string // one "1.35.4=<glance-image-id>" per line
+  versions: string // one "1.35.4=<glance-image-id>" (or "1.35.4@variant=<id>") per line
   flavors: string // optional allowlist, one Nova flavor id per line (empty = all tenant flavors)
+  // The OpenStack provider whose live catalog feeds the flavor/image PICKERS below — a browsing
+  // aid only (worker placement stays per-project). Stored so the edit page reopens with the
+  // pickers wired; blank = type ids by hand.
+  openstackServiceId: string
 }
 
 export const emptyKamajiForm: KamajiFormState = {
@@ -49,36 +58,67 @@ export const emptyKamajiForm: KamajiFormState = {
   allowedCidrs: "",
   versions: "",
   flavors: "",
+  openstackServiceId: "",
 }
 
 // splitLines is the shared reader for the one-per-line textarea fields.
 const splitLines = (s: string) => s.split("\n").map((v) => v.trim()).filter(Boolean)
 
-// parseVersions turns the "version=imageId" lines into the config.cluster.versions map;
-// null = at least one non-empty line is malformed.
-export function parseVersions(raw: string): Record<string, string> | null {
-  const out: Record<string, string> = {}
+// parseVersions turns the versions textarea into the config.cluster {versions, imageVariants}
+// maps. Line grammar: `1.35.4=<image-id>` (the version's default image) or
+// `1.35.4@nvidia=<image-id>` (a named variant of that version — GPU builds etc.).
+// null = malformed: bad line shape, a non-numeric version (the upgrade path parses
+// major.minor[.patch] — a suffix like "1.35.4-nvidia" would brick upgrades, hence the variant
+// syntax), a bad variant name, or a variant whose version has no default line.
+export type ParsedVersions = {
+  versions: Record<string, string>
+  variants: Record<string, Record<string, string>> // variant → version → image id
+}
+const VERSION_RE = /^\d+\.\d+(\.\d+)?$/
+const VARIANT_RE = /^[a-z0-9][a-z0-9-]*$/
+export function parseVersions(raw: string): ParsedVersions | null {
+  const versions: Record<string, string> = {}
+  // Null-prototype: a variant named like an Object.prototype property ("constructor") must land
+  // in the map, not resolve to the inherited value and silently vanish from the config.
+  const variants: Record<string, Record<string, string>> = Object.create(null)
   for (const line of raw.split("\n")) {
     const t = line.trim()
     if (!t) continue
     const eq = t.indexOf("=")
     if (eq <= 0 || eq === t.length - 1) return null
-    out[t.slice(0, eq).trim()] = t.slice(eq + 1).trim()
+    const key = t.slice(0, eq).trim()
+    const img = t.slice(eq + 1).trim()
+    const at = key.indexOf("@")
+    if (at < 0) {
+      if (!VERSION_RE.test(key)) return null
+      versions[key] = img
+    } else {
+      const version = key.slice(0, at).trim()
+      const variant = key.slice(at + 1).trim()
+      if (!VERSION_RE.test(version) || !VARIANT_RE.test(variant)) return null
+      ;(variants[variant] ??= {})[version] = img
+    }
   }
-  return out
+  // A variant of an unlisted version would be unreachable (versions gate the offering).
+  for (const byVersion of Object.values(variants)) {
+    for (const version of Object.keys(byVersion)) {
+      if (!versions[version]) return null
+    }
+  }
+  return { versions, variants }
 }
 
 const splitCsv = (s: string) => s.split(",").map((v) => v.trim()).filter(Boolean)
 
 export const kamajiFormValid = (f: KamajiFormState, requireKubeconfig = true) => {
-  const versions = parseVersions(f.versions)
+  const parsed = parseVersions(f.versions)
   const required = [f.name, f.region, f.chartRepo, f.chartVersion]
   if (requireKubeconfig) required.push(f.kubeconfig)
   return (
     required.every((v) => v.trim() !== "") &&
     Number(f.rootVolumeGiB) >= 1 &&
-    versions !== null &&
-    Object.keys(versions).length > 0
+    parsed !== null &&
+    Object.keys(parsed.versions).length > 0
   )
 }
 
@@ -104,7 +144,11 @@ export function kamajiConfigBlocks(f: KamajiFormState) {
       ...(splitCsv(f.allowedCidrs).length ? { allowedCidrs: splitCsv(f.allowedCidrs) } : {}),
       // Omitted entirely when empty — an absent key means "offer all tenant flavors".
       ...(splitLines(f.flavors).length ? { flavors: splitLines(f.flavors) } : {}),
-      versions: parseVersions(f.versions) ?? {},
+      versions: parseVersions(f.versions)?.versions ?? {},
+      // Sent complete on every save (the update route replaces whole blocks) — including the
+      // empty {} so deleting the last variant line actually removes the stored variants.
+      imageVariants: parseVersions(f.versions)?.variants ?? {},
+      ...(f.openstackServiceId ? { openstackServiceId: f.openstackServiceId } : {}),
     },
   }
 }
@@ -138,6 +182,12 @@ export function kamajiFormFromService(svc: {
   const cluster = (cfg.cluster as Record<string, any>) ?? {}
   const regions = Object.keys((cfg.regions as Record<string, unknown>) ?? {})
   const versions = (cluster.versions as Record<string, string>) ?? {}
+  const imageVariants = (cluster.imageVariants as Record<string, Record<string, string>>) ?? {}
+  const versionLines = [
+    ...Object.entries(versions).map(([v, img]) => `${v}=${img}`),
+    ...Object.entries(imageVariants).flatMap(([variant, byVersion]) =>
+      Object.entries(byVersion).map(([v, img]) => `${v}@${variant}=${img}`)),
+  ]
   return {
     ...emptyKamajiForm,
     name: svc.name ?? "",
@@ -155,9 +205,130 @@ export function kamajiFormFromService(svc: {
     supportKeypairName: String(cluster.supportKeypairName ?? ""),
     supportKeypairPublicKey: String(cluster.supportKeypairPublicKey ?? ""),
     allowedCidrs: ((cluster.allowedCidrs as string[]) ?? []).join(","),
-    versions: Object.entries(versions).map(([v, img]) => `${v}=${img}`).join("\n"),
+    versions: versionLines.join("\n"),
     flavors: ((cluster.flavors as string[]) ?? []).join("\n"),
+    openstackServiceId: String(cluster.openstackServiceId ?? ""),
   }
+}
+
+// The catalog-browsing shapes behind the pickers. The provider list is the same /admin/service
+// the providers page renders; flavors/images are the live per-service reads.
+type PickerProvider = { id: string; name?: string; type?: string; config?: Record<string, any> }
+type PickerFlavor = { id: string; name?: string; vcpus?: number; ram?: number }
+type PickerImagesByLocation = { region?: string; images?: { id: string; name?: string }[] }
+
+// CatalogPickers — optional quality-of-life over the manual textareas: link an OpenStack
+// provider and pick flavor/image ids out of its live catalog instead of hand-copying UUIDs from
+// Horizon. Appends to the same textareas, which stay the source of truth (and the manual path
+// when no provider is linked).
+function CatalogPickers({ form, setForm }: { form: KamajiFormState; setForm: (f: KamajiFormState) => void }) {
+  const svcID = form.openstackServiceId
+  const providers = useAdminList<PickerProvider>("/admin/service")
+  const osProviders = (providers.data?.data ?? []).filter(
+    (p) => p.type === "CLOUD" && p.config?.provider !== "kamaji" && p.config?.provider !== "ceph-s3",
+  )
+  const flavorsQ = useAdminList<PickerFlavor>(`/admin/service/${svcID}/os-flavors`, !!svcID)
+  const imagesQ = useAdminList<PickerImagesByLocation>(`/admin/service/${svcID}/os-images`, !!svcID)
+  const flavors = flavorsQ.data?.data ?? []
+  const images = [...new Map(
+    (imagesQ.data?.data ?? []).flatMap((loc) => loc.images ?? []).map((im) => [im.id, im]),
+  ).values()]
+
+  const [pickFlavor, setPickFlavor] = useState("")
+  const [pickImage, setPickImage] = useState("")
+  const [pickVersion, setPickVersion] = useState("")
+  const [pickVariant, setPickVariant] = useState("")
+
+  const appendLine = (field: "flavors" | "versions", line: string) => {
+    const lines = form[field].split("\n").map((l) => l.trim()).filter(Boolean)
+    if (lines.includes(line)) return
+    setForm({ ...form, [field]: [...lines, line].join("\n") })
+  }
+  const versionKey = pickVariant.trim() ? `${pickVersion.trim()}@${pickVariant.trim()}` : pickVersion.trim()
+
+  return (
+    <div className="grid gap-3 rounded-lg border p-3">
+      <div className="grid gap-2">
+        <Label>Browse an OpenStack provider (optional)</Label>
+        {/* "none" is a sentinel — a Radix SelectItem value can't be the empty string. */}
+        <Select
+          value={svcID || "none"}
+          onValueChange={(v) => setForm({ ...form, openstackServiceId: v === "none" ? "" : v })}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Pick a provider to browse its catalog" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">None — type ids manually</SelectItem>
+            {osProviders.map((p) => (
+              <SelectItem key={p.id} value={p.id}>{p.name || p.id}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Fills the flavor and image pickers below from that cloud's live catalog — the cloud the
+          worker nodes will run in. Leave on “None” to paste ids by hand.
+        </p>
+      </div>
+      {svcID && (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
+            <div className="grid gap-2">
+              <Label>Add flavor to allowlist</Label>
+              <Select value={pickFlavor || undefined} onValueChange={setPickFlavor}>
+                <SelectTrigger>
+                  <SelectValue placeholder={flavorsQ.isLoading ? "Loading flavors…" : flavors.length ? "Pick a flavor" : "No flavors found"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {flavors.map((f) => (
+                    <SelectItem key={f.id} value={f.id}>
+                      {f.name || f.id}
+                      {f.vcpus ? <span className="text-xs text-muted-foreground"> {f.vcpus} vCPU · {Math.round((f.ram ?? 0) / 1024)} GB</span> : null}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button type="button" variant="outline" className="self-end" disabled={!pickFlavor} onClick={() => appendLine("flavors", pickFlavor)}>
+              Add
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[7rem_8rem_1fr_auto]">
+            <div className="grid gap-2">
+              <Label>Version</Label>
+              <Input value={pickVersion} onChange={(e) => setPickVersion(e.target.value)} placeholder="1.35.4" />
+            </div>
+            <div className="grid gap-2">
+              <Label>Variant (optional)</Label>
+              <Input value={pickVariant} onChange={(e) => setPickVariant(e.target.value)} placeholder="nvidia" />
+            </div>
+            <div className="grid gap-2">
+              <Label>Node image</Label>
+              <Select value={pickImage || undefined} onValueChange={setPickImage}>
+                <SelectTrigger>
+                  <SelectValue placeholder={imagesQ.isLoading ? "Loading images…" : images.length ? "Pick an image" : "No public images found"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {images.map((im) => (
+                    <SelectItem key={im.id} value={im.id}>{im.name || im.id}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="self-end"
+              disabled={!pickImage || !VERSION_RE.test(pickVersion.trim()) || !!(pickVariant.trim() && !VARIANT_RE.test(pickVariant.trim()))}
+              onClick={() => appendLine("versions", `${versionKey}=${pickImage}`)}
+            >
+              Add
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 export function KamajiProviderForm({
@@ -264,6 +435,7 @@ export function KamajiProviderForm({
           <Input id="km-keypub" className="font-mono" value={form.supportKeypairPublicKey} onChange={(e) => setForm({ ...form, supportKeypairPublicKey: e.target.value })} placeholder="ssh-ed25519 AAAA…" autoComplete="off" />
         </div>
       </div>
+      <CatalogPickers form={form} setForm={setForm} />
       <div className="grid gap-2">
         <Label htmlFor="km-flavors">Flavor allowlist (optional, one Nova flavor ID per line)</Label>
         {/* IDs, not names: the create wizard sends the flavor's id and the backend matches on it. */}
@@ -287,8 +459,14 @@ export function KamajiProviderForm({
           className="min-h-20 font-mono text-xs"
           value={form.versions}
           onChange={(e) => setForm({ ...form, versions: e.target.value })}
-          placeholder="1.35.4=db37655f-…"
+          placeholder={"1.35.4=db37655f-…\n1.35.4@nvidia=8c1f22ab-…"}
         />
+        <p className="text-xs text-muted-foreground">
+          <code>1.35.4=&lt;image-id&gt;</code> sets the version's default node image. Add image
+          <em> variants</em> of the same version — a GPU build, say — as
+          <code> 1.35.4@nvidia=&lt;image-id&gt;</code>; customers pick a variant per node group and
+          upgrades keep each pool on its variant. A variant needs its version's default line too.
+        </p>
       </div>
       <p className="text-xs text-muted-foreground">
         The kubeconfig belongs to a stratos service account on the Kamaji management cluster (ArgoCD +

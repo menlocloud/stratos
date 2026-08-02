@@ -96,8 +96,13 @@ type ClusterDefaults struct {
 	FloatingNetworkID string            // Octavia floating network for the API LB
 	ExternalNetworkID string            // CAPO external network (clusterNetworking)
 	DNSZone           string            // optional: API FQDN = <clusterID>.<DNSZone> (certSAN + external-dns)
-	Versions          map[string]string // curated k8s version → Glance image id (the ONLY versions offered)
-	Flavors           []string          // optional node-flavor allowlist (empty = every tenant flavor)
+	Versions          map[string]string // curated k8s version → DEFAULT Glance image id (the ONLY versions offered)
+	// ImageVariants are curated alternative node images per version, keyed variant → version →
+	// image id (e.g. "nvidia" → {"1.35.4": "<id>"} for the GPU build of the same release). A node
+	// group picks a variant BY NAME; upgrades re-resolve the group onto the target version's image
+	// of the SAME variant, so a GPU pool never silently rolls back onto the plain image.
+	ImageVariants map[string]map[string]string
+	Flavors       []string // optional node-flavor allowlist (empty = every tenant flavor)
 	// RootVolumeGiB is the default worker root-disk size. Node images are larger than most flavors'
 	// ephemeral disk, so booting from an explicitly sized Cinder volume is the norm, not an option —
 	// without it nova rejects the machine with FlavorDiskSmallerThanImage.
@@ -112,6 +117,29 @@ type ClusterDefaults struct {
 	// AllowedCIDRs is the provider-wide default API-server ingress allowlist; a cluster's own
 	// AllowedCIDRs overrides it. Empty on both = open.
 	AllowedCIDRs []string
+}
+
+// ImageFor resolves the node image for (version, variant): the variant's own matrix entry, or
+// the default version matrix when no variant is asked for. "" = no image offered for that
+// combination — the caller decides whether that is an error (create) or a keep-current (edit).
+func (d ClusterDefaults) ImageFor(version, variant string) string {
+	if variant != "" {
+		return d.ImageVariants[variant][version]
+	}
+	return d.Versions[version]
+}
+
+// VariantsForVersion lists the variant names that carry an image for the version, sorted — the
+// client DTO's per-version picker feed.
+func (d ClusterDefaults) VariantsForVersion(version string) []string {
+	names := make([]string, 0, len(d.ImageVariants))
+	for name, m := range d.ImageVariants {
+		if m[version] != "" {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 // Validate rejects a config that cannot possibly provision (fail at create, not mid-flight).
@@ -169,10 +197,14 @@ type ClusterSpec struct {
 
 // NodeGroup is one CAPI MachineDeployment-backed worker pool.
 type NodeGroup struct {
-	Name          string            `json:"name"`
-	FlavorID      string            `json:"flavorId"`
-	ImageID       string            `json:"imageId,omitempty"` // resolved from Defaults.Versions when empty
-	Count         int               `json:"count"`
+	Name     string `json:"name"`
+	FlavorID string `json:"flavorId"`
+	ImageID  string `json:"imageId,omitempty"` // explicit override; else resolved from the version matrix
+	// ImageVariant picks a curated image variant (Defaults.ImageVariants) for this pool — e.g.
+	// "nvidia" for GPU nodes. Sticky across upgrades: the UPGRADE action re-resolves the group
+	// onto the target version's image of the same variant. Empty = the default image.
+	ImageVariant string `json:"imageVariant,omitempty"`
+	Count        int    `json:"count"`
 	Autoscale     bool              `json:"autoscale"`
 	Min           int               `json:"min,omitempty"`
 	Max           int               `json:"max,omitempty"`
@@ -222,6 +254,11 @@ func (s ClusterSpec) Validate(d ClusterDefaults) error {
 			return fmt.Errorf("cluster: node group %q: duplicate name", ng.Name)
 		}
 		seen[ng.Name] = true
+		// Variant must resolve for the cluster's version (skipped when d is empty — the
+		// SET_NODE_GROUPS shape check — where the values patch resolves images with fallback).
+		if ng.ImageVariant != "" && len(d.Versions) > 0 && d.ImageFor(s.Version, ng.ImageVariant) == "" {
+			return fmt.Errorf("cluster: node group %q: image variant %q is not offered for version %s", ng.Name, ng.ImageVariant, s.Version)
+		}
 		if ng.Autoscale && (ng.Min < 1 || ng.Max < ng.Min) {
 			return fmt.Errorf("cluster: node group %q: autoscale needs 1 <= min <= max", ng.Name)
 		}

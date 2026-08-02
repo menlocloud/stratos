@@ -70,6 +70,10 @@ on("POST /admin/service/:id/discover", ({ params }) => ({
 
 on("GET /admin/service/:id/gpu-info", ({ params }) => ({ data: db.gpuInfoByService[params.id] ?? [] }))
 
+// Per-service live catalog (the kamaji-provider form's flavor/image pickers).
+on("GET /admin/service/:id/os-images", () => ({ data: db.osImages }))
+on("GET /admin/service/:id/os-flavors", () => ({ data: db.liveFlavors }))
+
 on("GET /admin/service/:id/unpriced-flavors", ({ params }) => ({
   data: db.unpricedFlavorsByService[params.id] ?? [],
 }))

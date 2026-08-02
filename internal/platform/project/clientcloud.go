@@ -598,6 +598,17 @@ func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 			versions = append(versions, v)
 		}
 		dto["kubernetesVersions"] = versions
+		// Per-version image-variant names (e.g. "nvidia") — the node-group image picker. Names
+		// only; the ids stay operator detail like the version matrix above.
+		variantsByVersion := map[string]any{}
+		for v := range defaults.Versions {
+			if names := defaults.VariantsForVersion(v); len(names) > 0 {
+				variantsByVersion[v] = names
+			}
+		}
+		if len(variantsByVersion) > 0 {
+			dto["kubernetesImageVariants"] = variantsByVersion
+		}
 		// Optional node-flavor allowlist: when set, the client node-group picker offers only these.
 		if len(defaults.Flavors) > 0 {
 			dto["kubernetesFlavorIds"] = defaults.Flavors

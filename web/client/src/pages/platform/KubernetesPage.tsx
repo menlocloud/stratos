@@ -45,6 +45,7 @@ type Cluster = Record<string, any>
 type NodeGroupRow = {
   name: string
   flavorId: string
+  variant: string // curated image-variant name ("" = the version's default image)
   count: string
   autoscale: boolean
   min: string
@@ -112,7 +113,7 @@ function oidcToBody(o: OidcDraft): Record<string, string> {
 const DEFAULT_ROOT_DISK_GIB = "120"
 
 const emptyGroup: NodeGroupRow = {
-  name: "workers", flavorId: "", count: "3", autoscale: false, min: "1", max: "5",
+  name: "workers", flavorId: "", variant: "", count: "3", autoscale: false, min: "1", max: "5",
   rootDisk: DEFAULT_ROOT_DISK_GIB, labels: "", taints: "",
 }
 
@@ -185,6 +186,7 @@ function groupsToData(groups: NodeGroupRow[]) {
   return groups.map((g) => ({
     name: g.name.trim(),
     flavorId: g.flavorId,
+    ...(g.variant ? { imageVariant: g.variant } : {}),
     ...(g.autoscale
       ? { autoscale: true, min: Number(g.min), max: Number(g.max) }
       : { count: Number(g.count) }),
@@ -201,6 +203,10 @@ function rowsToSyncGroups(rows: NodeGroupRow[]): Cluster[] {
   return rows.map((g) => ({
     name: g.name.trim(),
     flavor_id: g.flavorId,
+    ...(g.variant ? { image_variant: g.variant } : {}),
+    // dataGroupsToRows falls back to 120 when this is absent — the patch must carry it, or
+    // re-opening the editor before the next sync silently resizes every pool's root disk.
+    ...(Number(g.rootDisk) > 0 ? { root_volume_gib: Number(g.rootDisk) } : {}),
     ...(g.autoscale
       ? { autoscale: true, min: Number(g.min), max: Number(g.max) }
       : { count: Number(g.count) }),
@@ -240,6 +246,7 @@ function dataGroupsToRows(c: Cluster): NodeGroupRow[] {
   return groups.map((g) => ({
     name: String(g.name ?? ""),
     flavorId: String(g.flavor_id ?? ""),
+    variant: String(g.image_variant ?? ""),
     count: String(g.count ?? 1),
     autoscale: g.autoscale === true,
     min: String(g.min ?? 1),
@@ -282,6 +289,13 @@ export default function KubernetesPage() {
     [services.data],
   )
   const createVersions = useMemo(() => versionsFor(createLoc?.serviceId), [versionsFor, createLoc?.serviceId])
+
+  // Curated image-variant names for (service, version) — the node-group image picker feed.
+  const variantsFor = useCallback(
+    (serviceId: string | undefined, version: string) =>
+      (services.data?.find((s) => s.id === serviceId)?.kubernetesImageVariants?.[version] ?? []).filter(Boolean),
+    [services.data],
+  )
 
   // A cached cluster row records the kamaji service it lives on (serviceId/region on the
   // resource DTO). With several kamaji locations attached, the ROW's own service — not
@@ -550,6 +564,7 @@ export default function KubernetesPage() {
           title="Create Kubernetes cluster"
           submitLabel="Create cluster"
           versions={createVersions}
+          variantsForVersion={(v) => variantsFor(createLoc?.serviceId, v)}
           flavors={createFlavorOptions}
           networks={networkOptions}
           locations={kLocs}
@@ -596,6 +611,7 @@ export default function KubernetesPage() {
           scope={rowScope(manageFor)}
           resource={manageFor}
           versions={versionsFor(rowServiceId(manageFor))}
+          variantsForVersion={(v) => variantsFor(rowServiceId(manageFor), v)}
           flavors={flavorOptionsFor(rowServiceId(manageFor))}
           onClose={() => setManageFor(null)}
           onDeleted={() => setToDelete(manageFor)}
@@ -608,11 +624,12 @@ export default function KubernetesPage() {
 
 // ── create/edit form ─────────────────────────────────────────────────────────
 function ClusterFormDialog({
-  title, submitLabel, versions, flavors, networks, locations, locKey, onLocKey, onClose, onSubmit,
+  title, submitLabel, versions, variantsForVersion, flavors, networks, locations, locKey, onLocKey, onClose, onSubmit,
 }: {
   title: string
   submitLabel: string
   versions: string[]
+  variantsForVersion: (version: string) => string[]
   flavors: FlavorOption[]
   networks: NetworkOption[]
   locations: Location[]
@@ -626,6 +643,7 @@ function ClusterFormDialog({
   // that is no longer offered falls back to the newest offered version.
   const [versionSel, setVersionSel] = useState("")
   const version = versions.includes(versionSel) ? versionSel : versions[0] ?? ""
+  const variants = variantsForVersion(version)
   const [ha, setHa] = useState(true)
   const [groups, setGroups] = useState<NodeGroupRow[]>([{ ...emptyGroup }])
   const [oidcOpen, setOidcOpen] = useState(false)
@@ -683,9 +701,9 @@ function ClusterFormDialog({
                 onValueChange={(k) => {
                   if (k === locKey) return
                   onLocKey(k)
-                  // Offered flavors can differ per location's allowlist — clear picks so a
-                  // flavor from the previous location can't be submitted here.
-                  setGroups(groups.map((g) => ({ ...g, flavorId: "" })))
+                  // Offered flavors and image variants can differ per location — clear picks so
+                  // a stale one from the previous location can't be submitted here.
+                  setGroups(groups.map((g) => ({ ...g, flavorId: "", variant: "" })))
                 }}
               >
                 <SelectTrigger>
@@ -713,7 +731,15 @@ function ClusterFormDialog({
             </div>
             <div className="grid gap-2">
               <Label>Version</Label>
-              <Select value={version} onValueChange={setVersionSel}>
+              <Select
+                value={version}
+                onValueChange={(v) => {
+                  setVersionSel(v)
+                  // A variant the target version doesn't offer falls back to the default image.
+                  const offered = variantsForVersion(v)
+                  setGroups(groups.map((g) => (offered.includes(g.variant) ? g : { ...g, variant: "" })))
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder={versions.length ? "Pick a version" : "No versions offered"} />
                 </SelectTrigger>
@@ -733,7 +759,7 @@ function ClusterFormDialog({
             <Switch checked={ha} onCheckedChange={setHa} />
           </div>
 
-          <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} />
+          <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
 
           {networks.length > 0 && (
             <div className="grid gap-3 rounded-lg border p-3">
@@ -857,11 +883,13 @@ function OidcFields({
 }
 
 function NodeGroupsEditor({
-  groups, setGroups, flavors,
+  groups, setGroups, flavors, variants,
 }: {
   groups: NodeGroupRow[]
   setGroups: (g: NodeGroupRow[]) => void
   flavors: FlavorOption[]
+  // Image-variant names offered for the cluster's version ("" = default is always offered).
+  variants: string[]
 }) {
   const set = (i: number, patch: Partial<NodeGroupRow>) =>
     setGroups(groups.map((g, j) => (j === i ? { ...g, ...patch } : g)))
@@ -906,6 +934,32 @@ function NodeGroupsEditor({
               </Select>
             </div>
           </div>
+          {(variants.length > 0 || g.variant) && (
+            <div className="grid gap-2">
+              <Label>Node image</Label>
+              {/* "default" is a sentinel — a Radix SelectItem value can't be the empty string. */}
+              <Select value={g.variant || "default"} onValueChange={(v) => set(i, { variant: v === "default" ? "" : v })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Default</SelectItem>
+                  {/* An existing group's variant that is no longer offered for this version stays
+                      visible and submittable — full-replace edits must not silently drop it. */}
+                  {g.variant && !variants.includes(g.variant) ? (
+                    <SelectItem value={g.variant}>{g.variant}</SelectItem>
+                  ) : null}
+                  {variants.map((v) => (
+                    <SelectItem key={v} value={v}>{v}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Alternative node image builds for this version (GPU drivers etc.). Upgrades keep the
+                pool on its selected image line.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-5">
             <div className="flex items-center gap-2 pb-2">
               <Switch id={`ng-as-${i}`} checked={g.autoscale} onCheckedChange={(on) => set(i, { autoscale: on })} />
@@ -958,12 +1012,13 @@ function NodeGroupsEditor({
 
 // ── manage sheet ─────────────────────────────────────────────────────────────
 function ClusterManageSheet({
-  pid, scope, resource, versions, flavors, onClose, onDeleted, onPatch,
+  pid, scope, resource, versions, variantsForVersion, flavors, onClose, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
   resource: CloudResource
   versions: string[]
+  variantsForVersion: (version: string) => string[]
   flavors: FlavorOption[]
   onClose: () => void
   onDeleted: () => void
@@ -981,8 +1036,12 @@ function ClusterManageSheet({
   const [oidcEditOpen, setOidcEditOpen] = useState(false)
   const current = (c.version as string) ?? ""
   // Only versions the server would accept (same major; same minor higher patch, or minor+1) —
-  // never offer downgrades or multi-minor jumps that would just 400.
-  const upgradeTargets = versions.filter((v) => isUpgradeTarget(current, v))
+  // never offer downgrades or multi-minor jumps that would just 400. A target must also carry
+  // every image variant the cluster's pools use, or the upgrade would 400 on the variant check.
+  const usedVariants = [...new Set(groups.map((g) => String(g.image_variant ?? "")).filter(Boolean))]
+  const upgradeTargets = versions.filter(
+    (v) => isUpgradeTarget(current, v) && usedVariants.every((va) => variantsForVersion(v).includes(va)),
+  )
   const [target, setTarget] = useState("")
 
   // Prefill the SET_OIDC form from the sync payload's oidc object (fields present only when
@@ -1217,6 +1276,7 @@ function ClusterManageSheet({
           <EditNodeGroupsDialog
             initial={dataGroupsToRows(c)}
             flavors={flavors}
+            variants={variantsForVersion(current)}
             onClose={() => setEditOpen(false)}
             onSubmit={async (rows) => {
               await act("SET_NODE_GROUPS", { nodeGroups: groupsToData(rows) })
@@ -1289,10 +1349,11 @@ function OidcEditDialog({
 }
 
 function EditNodeGroupsDialog({
-  initial, flavors, onClose, onSubmit,
+  initial, flavors, variants, onClose, onSubmit,
 }: {
   initial: NodeGroupRow[]
   flavors: FlavorOption[]
+  variants: string[]
   onClose: () => void
   onSubmit: (rows: NodeGroupRow[]) => Promise<void>
 }) {
@@ -1309,7 +1370,7 @@ function EditNodeGroupsDialog({
             remaining groups.
           </DialogDescription>
         </DialogHeader>
-        <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} />
+        <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button

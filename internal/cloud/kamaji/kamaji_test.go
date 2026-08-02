@@ -250,6 +250,73 @@ func TestBuildValues(t *testing.T) {
 	}
 }
 
+// TestImageVariants covers the curated variant matrix: resolution, values stamping, the sync
+// round-trip, and spec validation — a GPU pool picks "nvidia" by name and upgrades stay on it.
+func TestImageVariants(t *testing.T) {
+	d := ClusterDefaults{
+		RootVolumeGiB: 120,
+		Versions:      map[string]string{"1.35.4": "img-plain-1354", "1.34.2": "img-plain-1342"},
+		ImageVariants: map[string]map[string]string{"nvidia": {"1.35.4": "img-nv-1354"}},
+	}
+	if got := d.ImageFor("1.35.4", ""); got != "img-plain-1354" {
+		t.Errorf("default image = %q", got)
+	}
+	if got := d.ImageFor("1.35.4", "nvidia"); got != "img-nv-1354" {
+		t.Errorf("variant image = %q", got)
+	}
+	if got := d.ImageFor("1.34.2", "nvidia"); got != "" {
+		t.Errorf("missing variant image = %q, want empty", got)
+	}
+	if got := d.VariantsForVersion("1.35.4"); len(got) != 1 || got[0] != "nvidia" {
+		t.Errorf("VariantsForVersion(1.35.4) = %v", got)
+	}
+	if got := d.VariantsForVersion("1.34.2"); len(got) != 0 {
+		t.Errorf("VariantsForVersion(1.34.2) = %v", got)
+	}
+
+	groups := NodeGroupValues(d, "1.35.4", []NodeGroup{
+		{Name: "gpu", FlavorID: "g1", ImageVariant: "nvidia", Count: 1},
+		{Name: "cpu", FlavorID: "m1", Count: 1},
+	})
+	g0 := groups[0].(map[string]any)
+	if g0["machineImageId"] != "img-nv-1354" || g0["imageVariant"] != "nvidia" {
+		t.Errorf("gpu group = %v", g0)
+	}
+	g1 := groups[1].(map[string]any)
+	if g1["machineImageId"] != "img-plain-1354" {
+		t.Errorf("cpu group image = %v", g1["machineImageId"])
+	}
+	if _, has := g1["imageVariant"]; has {
+		t.Error("default group must not carry an imageVariant key")
+	}
+	// The variant survives the values→sync round-trip, so the UI can show and re-submit it.
+	back := NodeGroupsFromValues(map[string]any{"nodeGroups": groups})
+	if back[0]["image_variant"] != "nvidia" {
+		t.Errorf("round-trip variant = %v", back[0]["image_variant"])
+	}
+	if _, has := back[1]["image_variant"]; has {
+		t.Error("default group round-trip must not carry image_variant")
+	}
+
+	// Validation: a variant must resolve for the cluster's version…
+	spec := testSpec()
+	spec.NodeGroups[0].ImageVariant = "nvidia"
+	if err := spec.Validate(d); err != nil {
+		t.Errorf("offered variant: %v", err)
+	}
+	spec.Version = "1.34.2"
+	if err := spec.Validate(d); err == nil || !strings.Contains(err.Error(), "variant") {
+		t.Errorf("unoffered variant: err = %v", err)
+	}
+	// …but the SET_NODE_GROUPS shape check (empty defaults) leaves image resolution to the
+	// values patch, which has the fallback-to-current-image logic.
+	spec.NodeGroups[0].RootVolumeGiB = 100
+	spec.NodeGroups[1].RootVolumeGiB = 100
+	if err := spec.Validate(ClusterDefaults{}); err != nil {
+		t.Errorf("shape check must skip the variant rule: %v", err)
+	}
+}
+
 func TestBuildValuesBYONetwork(t *testing.T) {
 	cfg := testCfg()
 	spec := testSpec()

@@ -72,6 +72,9 @@ export type ProjectService = {
   // admin allowlist of node-group flavor ids (present and non-empty only when configured).
   kubernetesVersions?: string[]
   kubernetesFlavorIds?: string[]
+  // Curated node-image variant names per version (e.g. {"1.35.4": ["nvidia"]}) — a node group
+  // may pick one instead of the version's default image. Present only when configured.
+  kubernetesImageVariants?: Record<string, string[]>
   [k: string]: unknown
 }
 

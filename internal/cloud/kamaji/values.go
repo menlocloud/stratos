@@ -147,7 +147,7 @@ func NodeGroupValues(d ClusterDefaults, version string, groups []NodeGroup) []an
 	for _, ng := range groups {
 		img := ng.ImageID
 		if img == "" {
-			img = d.Versions[version]
+			img = d.ImageFor(version, ng.ImageVariant)
 		}
 		disk := ng.RootVolumeGiB
 		if disk == 0 {
@@ -163,6 +163,12 @@ func NodeGroupValues(d ClusterDefaults, version string, groups []NodeGroup) []an
 		}
 		if ng.ServerGroupID != "" {
 			g["serverGroupId"] = ng.ServerGroupID
+		}
+		// The variant rides in the values so it survives round-trips: the sync reads it back for
+		// the UI, and UPGRADE re-resolves each group onto the target version's image of the same
+		// variant. The chart reads only the keys it knows — an extra key is inert there.
+		if ng.ImageVariant != "" {
+			g["imageVariant"] = ng.ImageVariant
 		}
 		if ng.Autoscale {
 			g["autoscale"] = true
@@ -221,6 +227,9 @@ func NodeGroupsFromValues(values map[string]any) []map[string]any {
 		}
 		if v, ok := ng["serverGroupId"]; ok {
 			g["server_group_id"] = v
+		}
+		if v, _ := ng["imageVariant"].(string); v != "" {
+			g["image_variant"] = v
 		}
 		if v, ok := ng["autoscale"].(bool); ok {
 			g["autoscale"] = v

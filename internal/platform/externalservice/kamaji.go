@@ -21,7 +21,8 @@ package externalservice
 //	      "floatingNetworkId": "…",       // Octavia floating net for the API LB
 //	      "externalNetworkId": "…",       // CAPO external network
 //	      "dnsZone":           "k8s.example.com",
-//	      "versions":          {"1.35.4": "<glance-image-id>"}  // curated version→image matrix
+//	      "versions":          {"1.35.4": "<glance-image-id>"},  // curated version→DEFAULT-image matrix
+//	      "imageVariants":     {"nvidia": {"1.35.4": "<glance-image-id>"}}  // optional per-version variants
 //	    }
 //	  },
 //	  "secret": {"kubeconfig": "<management-cluster kubeconfig>"}  // encrypted at rest
@@ -61,6 +62,27 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			}
 		}
 	}
+	var variants map[string]map[string]string
+	if vs, ok := cl["imageVariants"].(map[string]any); ok {
+		for name, raw := range vs {
+			m, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			byVersion := map[string]string{}
+			for version, img := range m {
+				if s := str(img); s != "" {
+					byVersion[version] = s
+				}
+			}
+			if len(byVersion) > 0 {
+				if variants == nil {
+					variants = map[string]map[string]string{}
+				}
+				variants[name] = byVersion
+			}
+		}
+	}
 	var flavors []string
 	if fs, ok := cl["flavors"].([]any); ok {
 		for _, f := range fs {
@@ -83,6 +105,7 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			ExternalNetworkID:       str(cl["externalNetworkId"]),
 			DNSZone:                 str(cl["dnsZone"]),
 			Versions:                versions,
+			ImageVariants:           variants,
 			Flavors:                 flavors,
 			RootVolumeGiB:           intOf(cl["rootVolumeGiB"]),
 			SupportKeypairName:      str(cl["supportKeypairName"]),

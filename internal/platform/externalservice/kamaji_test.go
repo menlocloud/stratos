@@ -20,6 +20,11 @@ func TestKamajiConfig(t *testing.T) {
 				"externalNetworkId": "ext",
 				"dnsZone":           "k8s.example.com",
 				"versions":          map[string]any{"1.35.4": "img-1"},
+				"imageVariants": map[string]any{
+					"nvidia": map[string]any{"1.35.4": "img-nv"},
+					"empty":  map[string]any{"1.35.4": ""}, // blank ids are dropped → variant dropped
+					"junk":   "not-a-map",                  // malformed entries are skipped
+				},
 			},
 		},
 		Secret: map[string]any{"kubeconfig": "KC"},
@@ -40,6 +45,9 @@ func TestKamajiConfig(t *testing.T) {
 	}
 	if cfg.Defaults.Versions["1.35.4"] != "img-1" || cfg.Defaults.DNSZone != "k8s.example.com" {
 		t.Errorf("cluster defaults = %+v", cfg.Defaults)
+	}
+	if cfg.Defaults.ImageVariants["nvidia"]["1.35.4"] != "img-nv" || len(cfg.Defaults.ImageVariants) != 1 {
+		t.Errorf("imageVariants = %+v", cfg.Defaults.ImageVariants)
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
