@@ -61,3 +61,21 @@ helm template stc-test . -n st-demo -f /tmp/values.yaml
 For a values document shaped exactly like the one stratos generates, dump one from
 `kamaji.BuildValues` — `TestBuildValues` in `internal/cloud/kamaji/kamaji_test.go` pins every key
 this chart reads, and is the guard against the two drifting apart.
+
+## Attribution & licenses
+
+Both charts are **modified derivatives** of the Azimuth project's
+[capi-helm-charts](https://github.com/azimuth-cloud/capi-helm-charts) (`openstack-cluster` and
+`cluster-addons`), © StackHPC Ltd and the Azimuth contributors, used and redistributed under the
+Apache License 2.0. Each chart directory carries its own `LICENSE` (Apache-2.0) and `NOTICE`
+(what was changed, and by whom) — both files ship inside the packaged chart.
+
+The stack they orchestrate is Apache-2.0 upstream software by its respective authors:
+[Kamaji](https://github.com/clastix/kamaji) and its
+[CAPI control-plane provider](https://github.com/clastix/cluster-api-control-plane-provider-kamaji)
+(Clastix Labs), [Cluster API](https://github.com/kubernetes-sigs/cluster-api) and
+[CAPO](https://github.com/kubernetes-sigs/cluster-api-provider-openstack) (The Kubernetes
+Authors), and the
+[OpenStack cloud-provider](https://github.com/kubernetes/cloud-provider-openstack). When touching
+templates that came from upstream, keep their in-file comments and references intact — that
+attribution is part of honouring the license.

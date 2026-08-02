@@ -31,6 +31,11 @@ func (h *Handler) routeCloudAdmin(r chi.Router) {
 	r.Get("/service/regions", h.serviceRegionsList)
 	r.Get("/service/{id}/os-images", h.osImagesByService)
 	r.Get("/service/{id}/os-flavors", h.osFlavorsByService)
+	// Kamaji chart-pin surface: list every managed cluster's pin; re-pin one or all onto the
+	// provider's current chartVersion (the operator-side "platform update").
+	r.Get("/service/{id}/k8s-clusters", h.kamajiClusterPins)
+	r.Post("/service/{id}/k8s-clusters/bump-chart", h.kamajiClusterBumpAll)
+	r.Post("/service/{id}/k8s-clusters/{clusterId}/bump-chart", h.kamajiClusterBump)
 	r.Get("/service/{id}/gpu-info", h.gpuInfo)
 	r.Get("/service/{id}/unpriced-flavors", h.unpricedFlavors)
 	r.Get("/service/{id}/volume/types", h.volumeTypes)

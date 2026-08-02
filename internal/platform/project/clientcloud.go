@@ -598,6 +598,11 @@ func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 			versions = append(versions, v)
 		}
 		dto["kubernetesVersions"] = versions
+		// The provider's pinned platform (chart) version — the client compares it against a
+		// cluster's own pin to offer the opt-in "platform update".
+		if pin := es.KamajiConfig().ChartVersion; pin != "" {
+			dto["kubernetesPlatformVersion"] = pin
+		}
 		// Per-version image-variant names (e.g. "nvidia") — the node-group image picker. Names
 		// only; the ids stay operator detail like the version matrix above.
 		variantsByVersion := map[string]any{}

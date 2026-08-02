@@ -1,0 +1,28 @@
+openstack-kamaji-cluster Helm chart
+Copyright 2026 Menlo Cloud
+
+This chart is a modified derivative of the "openstack-cluster" Helm chart from
+the Azimuth project's capi-helm-charts, © StackHPC Ltd and the Azimuth
+contributors, licensed under the Apache License, Version 2.0:
+  https://github.com/azimuth-cloud/capi-helm-charts
+
+Modifications by Menlo Cloud include (non-exhaustive): the Kamaji hosted
+control plane (KamajiControlPlane replacing KubeadmControlPlane), the
+management-side OpenStack cloud-controller-manager, external-dns/OIDC/certSAN
+wiring, flavor-by-ID machine templates, surge-first rollout defaults, and the
+vendored cluster-addons-menlo subchart.
+
+This chart deploys and orchestrates the following independent projects, each
+licensed under the Apache License, Version 2.0 by their respective authors:
+  - Kamaji, © Clastix Labs — https://github.com/clastix/kamaji
+  - Kamaji Cluster API Control Plane Provider, © Clastix Labs —
+    https://github.com/clastix/cluster-api-control-plane-provider-kamaji
+  - Cluster API, © The Kubernetes Authors —
+    https://github.com/kubernetes-sigs/cluster-api
+  - Cluster API Provider OpenStack (CAPO), © The Kubernetes Authors —
+    https://github.com/kubernetes-sigs/cluster-api-provider-openstack
+  - OpenStack Cloud Controller Manager, © The Kubernetes Authors —
+    https://github.com/kubernetes/cloud-provider-openstack
+
+Licensed under the Apache License, Version 2.0 (the "License"); see the
+LICENSE file distributed with this chart.

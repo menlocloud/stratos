@@ -215,6 +215,7 @@ function KamajiConnectionTab({ id, provider }: TabProps) {
     })
   }
   return (
+    <>
     <Card>
       <CardHeader>
         <CardTitle className="text-eyebrow">Managed Kubernetes (Kamaji) connection</CardTitle>
@@ -231,6 +232,108 @@ function KamajiConnectionTab({ id, provider }: TabProps) {
             {save.isPending ? "Saving…" : "Save"}
           </Button>
         </div>
+      </CardContent>
+    </Card>
+    <KamajiClustersCard id={id} />
+    </>
+  )
+}
+
+// KamajiClustersCard — every stratos-managed cluster's pinned chart version, with explicit
+// re-pin controls. Clusters keep their pin when the provider's version moves (by design); this
+// card is the operator override, one cluster or all at once.
+function KamajiClustersCard({ id }: { id: string }) {
+  const qc = useQueryClient()
+  const q = useAdminGet<{
+    providerChartVersion?: string
+    clusters?: { id: string; name?: string; projectId?: string; chartVersion?: string }[]
+  }>(`/admin/service/${id}/k8s-clusters`)
+  const pin = q.data?.providerChartVersion ?? ""
+  const clusters = q.data?.clusters ?? []
+  const behind = clusters.filter((c) => pin && c.chartVersion !== pin)
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ["admin-get", `/admin/service/${id}/k8s-clusters`] })
+
+  const bumpOne = useMutation({
+    mutationFn: (clusterId: string) =>
+      apiFetch(`/admin/service/${id}/k8s-clusters/${clusterId}/bump-chart`, { method: "POST" }),
+    onSuccess: () => {
+      toast.success(`Cluster re-pinned to ${pin}`)
+      invalidate()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+  const bumpAll = useMutation({
+    mutationFn: () =>
+      apiFetch<{ bumped?: number; errors?: Record<string, string> }>(
+        `/admin/service/${id}/k8s-clusters/bump-chart`, { method: "POST" },
+      ),
+    onSuccess: (d) => {
+      const failed = Object.keys(d?.errors ?? {}).length
+      if (failed) toast.warning(`${d?.bumped ?? 0} re-pinned, ${failed} failed`)
+      else toast.success(`${d?.bumped ?? 0} cluster(s) re-pinned to ${pin}`)
+      invalidate()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-eyebrow">Managed clusters — platform (chart) versions</CardTitle>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => bumpAll.mutate()}
+          disabled={!pin || behind.length === 0 || bumpAll.isPending}
+        >
+          {bumpAll.isPending ? "Bumping…" : `Bump all to ${pin || "—"}`}
+        </Button>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-sm text-muted-foreground">
+          Provider pin: <span className="font-mono">{pin || "—"}</span>. Re-pinning re-renders the
+          chart for that cluster — platform components restart with a rolling update, and when the
+          node template changed between chart versions the nodes rotate too (surge-first).
+          Customers can also apply this themselves from the cluster page.
+        </p>
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Cluster</TableHead>
+              <TableHead>Project</TableHead>
+              <TableHead>Chart version</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {q.isLoading ? (
+              <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground">Loading…</TableCell></TableRow>
+            ) : clusters.length === 0 ? (
+              <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground">No managed clusters.</TableCell></TableRow>
+            ) : (
+              clusters.map((c) => (
+                <TableRow key={c.id}>
+                  <TableCell>
+                    <span className="font-medium">{c.name || c.id}</span>{" "}
+                    <span className="font-mono text-xs text-muted-foreground">{c.id}</span>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{c.projectId || "—"}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    {c.chartVersion || "—"}
+                    {pin && c.chartVersion === pin ? <span className="ml-2 text-xs text-muted-foreground">current</span> : null}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {pin && c.chartVersion !== pin ? (
+                      <Button size="sm" variant="outline" onClick={() => bumpOne.mutate(c.id)} disabled={bumpOne.isPending}>
+                        Bump to {pin}
+                      </Button>
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
       </CardContent>
     </Card>
   )

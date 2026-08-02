@@ -484,6 +484,9 @@ func run() error {
 	// gated live rating run turns it on.
 	// Admin handler (needs esSvc + region + the cloud-client factory for cloud-admin live reads).
 	adminH := admin.NewHandler(admin.NewRepo(pg), catalog.NewRepo(pg), users, addFundsSvc, pricingRepo, billingRepo, cloudRepo, platformconfig.NewRepo(pg), auditSvc, esSvc, cfg.OpenStack.Region, client.New, cfg.Auth.Admin.IssuerURI, cfg.Auth.Admin.ClientID)
+	adminH.SetKamaji(func(es *externalservice.ExternalService) (*kamaji.Service, error) {
+		return kamaji.New(es.KamajiConfig(), es.ID)
+	})
 	// Public Admin API (/admin-api/v1 — SigV4 hmac_keys or the admin-api OIDC realm).
 	adminAPIH := adminapi.NewHandler(pg, orgRepo, users, esSvc, auditSvc, cfg.Auth.AdminAPI.IssuerURI, cfg.Auth.AdminAPI.ClientID)
 	// MCP endpoint (/mcp): client toolset for clients-realm JWTs, admin toolset for

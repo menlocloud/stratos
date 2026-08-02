@@ -9,6 +9,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
+	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/pgdoc"
 	"github.com/menlocloud/stratos/internal/platform/audit"
 	"github.com/menlocloud/stratos/internal/platform/billing"
@@ -60,6 +61,14 @@ type Handler struct {
 	projectCloud  *ProjectCloudOps           // live per-project cloud legs (nil → those endpoints stay 501)
 	// inviteToProject invites a user to a project (admin user-create projectIds loop).
 	inviteToProject func(ctx context.Context, u *user.User, email, projectID string) error
+	// kamajiFor builds the Managed-Kubernetes service for a kamaji provider (nil in tests →
+	// the cluster chart-pin endpoints answer 501).
+	kamajiFor func(es *externalservice.ExternalService) (*kamaji.Service, error)
+}
+
+// SetKamaji wires the kamaji Managed-Kubernetes service factory (the admin chart-pin surface).
+func (h *Handler) SetKamaji(f func(es *externalservice.ExternalService) (*kamaji.Service, error)) {
+	h.kamajiFor = f
 }
 
 // SetActivation wires the billing ActivationService (built in cmd/api with the cloud

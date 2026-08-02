@@ -944,6 +944,38 @@ func TestPatchClusterValuesUpgrade(t *testing.T) {
 	}
 }
 
+// TestSetChartVersionAndPins: the platform-update leg — re-pin keeps everything else the
+// manager owns (the SSA lesson), and the pin listing reflects it.
+func TestSetChartVersionAndPins(t *testing.T) {
+	api := newFakeAPI()
+	svc := NewWithAPI(api, testCfg(), "svc-1")
+	ctx := context.Background()
+	spec := testSpec()
+	if _, err := svc.CreateCluster(ctx, spec, client.Config{AuthURL: "https://k/v3", Username: "u", Password: "p", Region: "az1"}); err != nil {
+		t.Fatal(err)
+	}
+	pins, err := svc.ListClusterPins(ctx)
+	if err != nil || len(pins) != 1 || pins[0].ChartVersion != "0.2.3" || pins[0].ProjectID != "p1" {
+		t.Fatalf("pins = %+v err=%v", pins, err)
+	}
+	if err := svc.SetChartVersion(ctx, spec.ID, "0.9.9"); err != nil {
+		t.Fatalf("SetChartVersion: %v", err)
+	}
+	app := api.apps["argocd/"+spec.ID]
+	if rev := dig(app, "spec", "source", "targetRevision"); rev != "0.9.9" {
+		t.Errorf("targetRevision = %v", rev)
+	}
+	if dig(app, "spec", "destination") == nil || dig(app, "spec", "project") == nil {
+		t.Error("re-pin dropped required spec fields")
+	}
+	if values := dig(app, "spec", "source", "helm", "valuesObject"); values == nil {
+		t.Error("re-pin dropped the helm values")
+	}
+	if err := svc.SetChartVersion(ctx, spec.ID, ""); err == nil {
+		t.Error("blank version must error")
+	}
+}
+
 func TestSyncProviderList(t *testing.T) {
 	api := newFakeAPI()
 	cfg := testCfg()

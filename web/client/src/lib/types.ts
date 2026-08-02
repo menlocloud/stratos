@@ -75,6 +75,8 @@ export type ProjectService = {
   // Curated node-image variant names per version (e.g. {"1.35.4": ["nvidia"]}) — a node group
   // may pick one instead of the version's default image. Present only when configured.
   kubernetesImageVariants?: Record<string, string[]>
+  // The provider's pinned platform (chart) version — feeds the opt-in "platform update" offer.
+  kubernetesPlatformVersion?: string
   [k: string]: unknown
 }
 

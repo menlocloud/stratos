@@ -337,6 +337,22 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 		}
 		httpx.OK(w, map[string]any{"result": "ROTATING"})
 		return true
+
+	case "APPLY_PLATFORM_UPDATE":
+		// Re-pins the cluster onto the provider's CURRENT chart version — the customer's opt-in
+		// "platform update". The target is server-side authority (never client-supplied): the
+		// only version on offer is the one the operator pinned on the provider.
+		pin := ks.Config().ChartVersion
+		if pin == "" {
+			h.fail(w, httpx.BadRequest("no platform version is pinned on this provider"))
+			return true
+		}
+		if err := ks.SetChartVersion(r.Context(), cr.ExternalID, pin); err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
+		return true
 	}
 	return false
 }

@@ -408,9 +408,9 @@ func adminKubeconfigSecret(tcp map[string]any, clusterID string) string {
 	return AdminKubeconfigSecretName(clusterID)
 }
 
-// PatchClusterValues mutates the Application's helm values in place (UPGRADE, SET_NODE_GROUPS…):
-// read → mutate → re-apply with the SAME chart pin. One reconcile path for every change (plan §9).
-func (s *Service) PatchClusterValues(ctx context.Context, clusterID string, mutate func(values map[string]any) error) error {
+// PatchClusterApp mutates the cluster's Application (read → guard ownership → mutate → full
+// re-apply). The one reconcile path every post-create change goes through (plan §9).
+func (s *Service) PatchClusterApp(ctx context.Context, clusterID string, mutate func(app map[string]any) error) error {
 	app, err := s.api.GetApplication(ctx, s.cfg.ArgoNamespace, clusterID)
 	if err != nil {
 		return err
@@ -421,11 +421,7 @@ func (s *Service) PatchClusterValues(ctx context.Context, clusterID string, muta
 	if !managedBy(app) {
 		return fmt.Errorf("kamaji: cluster %s is not managed by stratos — refusing to modify", clusterID)
 	}
-	values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
-	if values == nil {
-		return fmt.Errorf("kamaji: cluster %s: application carries no values", clusterID)
-	}
-	if err := mutate(values); err != nil {
+	if err := mutate(app); err != nil {
 		return err
 	}
 	// Re-apply the WHOLE spec plus the metadata stratos stamped at create — NOT a partial patch.
@@ -450,6 +446,70 @@ func (s *Service) PatchClusterValues(ctx context.Context, clusterID string, muta
 		"spec":       app["spec"],
 	}
 	return s.api.ApplyApplication(ctx, patch)
+}
+
+// PatchClusterValues mutates the Application's helm values in place (UPGRADE, SET_NODE_GROUPS…):
+// same chart pin, same full re-apply.
+func (s *Service) PatchClusterValues(ctx context.Context, clusterID string, mutate func(values map[string]any) error) error {
+	return s.PatchClusterApp(ctx, clusterID, func(app map[string]any) error {
+		values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+		if values == nil {
+			return fmt.Errorf("kamaji: cluster %s: application carries no values", clusterID)
+		}
+		return mutate(values)
+	})
+}
+
+// SetChartVersion re-pins the cluster's Application onto a chart version (the "platform
+// update"). Values are untouched: ArgoCD re-renders the SAME desired state with the new chart —
+// which may roll the CCM or, when the machine-template output changes between chart versions,
+// the nodes (surge-first per the chart's rollout strategy).
+func (s *Service) SetChartVersion(ctx context.Context, clusterID, version string) error {
+	if version == "" {
+		return fmt.Errorf("kamaji: chart version is required")
+	}
+	return s.PatchClusterApp(ctx, clusterID, func(app map[string]any) error {
+		src, _ := dig(app, "spec", "source").(map[string]any)
+		if src == nil {
+			return fmt.Errorf("kamaji: cluster %s: application carries no source", clusterID)
+		}
+		src["targetRevision"] = version
+		return nil
+	})
+}
+
+// ClusterPin is one managed cluster's chart pin — the admin bump surface's row.
+type ClusterPin struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	ProjectID    string `json:"projectId"`
+	ChartVersion string `json:"chartVersion"`
+}
+
+// ListClusterPins lists every stratos-managed cluster on this provider with its chart pin
+// (ownership-labelled Applications only — pre-stratos clusters stay invisible).
+func (s *Service) ListClusterPins(ctx context.Context) ([]ClusterPin, error) {
+	apps, err := s.api.ListApplications(ctx, s.cfg.ArgoNamespace, LabelManagedBy+"="+ManagedByValue)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ClusterPin, 0, len(apps))
+	for _, app := range apps {
+		if dig(app, "metadata", "deletionTimestamp") != nil {
+			continue
+		}
+		id := digStr(app, "metadata", "name")
+		if id == "" {
+			continue
+		}
+		out = append(out, ClusterPin{
+			ID:           id,
+			Name:         digStr(app, "metadata", "annotations", AnnotationDisplayName),
+			ProjectID:    digStr(app, "metadata", "labels", LabelProject),
+			ChartVersion: digStr(app, "spec", "source", "targetRevision"),
+		})
+	}
+	return out, nil
 }
 
 // findTCP resolves the cluster's TenantControlPlane. The chart names the KamajiControlPlane

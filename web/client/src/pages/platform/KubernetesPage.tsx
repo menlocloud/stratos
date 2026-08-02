@@ -302,6 +302,13 @@ function useKubernetesData(pid: string) {
     [services.data],
   )
 
+  // The provider's pinned platform (chart) version — a cluster behind it gets the opt-in
+  // "Apply platform update" offer on its detail page.
+  const platformVersionFor = useCallback(
+    (serviceId?: string) => String(services.data?.find((s) => s.id === serviceId)?.kubernetesPlatformVersion ?? ""),
+    [services.data],
+  )
+
   // A cached cluster row records the kamaji service it lives on (serviceId/region on the
   // resource DTO). With several kamaji locations attached, the ROW's own service — not
   // whichever location happens to be first — must resolve the curated versions, the flavor
@@ -404,7 +411,7 @@ function useKubernetesData(pid: string) {
 
   return {
     kLocs, kScope, osScope, clusters,
-    versionsFor, variantsFor, rowServiceId, rowScope, flavorOptionsFor,
+    versionsFor, variantsFor, platformVersionFor, rowServiceId, rowScope, flavorOptionsFor,
     invalidate, patchCluster,
   }
 }
@@ -652,7 +659,7 @@ export function KubernetesClusterDetailPage() {
   const navigate = useNavigate()
   const { resourceId = "" } = useParams()
   const {
-    clusters, versionsFor, variantsFor, rowServiceId, rowScope, flavorOptionsFor, invalidate, patchCluster,
+    clusters, versionsFor, variantsFor, platformVersionFor, rowServiceId, rowScope, flavorOptionsFor, invalidate, patchCluster,
   } = useKubernetesData(pid)
   const resource = (clusters.data ?? []).find((r) => r.id === resourceId)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -716,6 +723,7 @@ export function KubernetesClusterDetailPage() {
           resource={resource}
           versions={versionsFor(rowServiceId(resource))}
           variantsForVersion={(v) => variantsFor(rowServiceId(resource), v)}
+          platformVersion={platformVersionFor(rowServiceId(resource))}
           flavors={flavorOptionsFor(rowServiceId(resource))}
           onDeleted={() => setDeleteOpen(true)}
           onPatch={(patch) => patchCluster(resource.id, patch)}
@@ -1157,13 +1165,15 @@ function NodeGroupsEditor({
 
 // ── cluster detail body (the manage surface, rendered by the detail page) ────
 function ClusterDetail({
-  pid, scope, resource, versions, variantsForVersion, flavors, onDeleted, onPatch,
+  pid, scope, resource, versions, variantsForVersion, platformVersion, flavors, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
   resource: CloudResource
   versions: string[]
   variantsForVersion: (version: string) => string[]
+  // The provider's pinned platform (chart) version; "" = unknown, no offer shown.
+  platformVersion: string
   flavors: FlavorOption[]
   onDeleted: () => void
   // Optimistically applies a partial data.cluster patch to the cached row (and this sheet's
@@ -1233,6 +1243,12 @@ function ClusterDetail({
 
   // Add-on picks stamped at create (absent = the platform defaults).
   const addonStates = (c.addons as Record<string, boolean>) ?? null
+
+  // Opt-in platform update: offered only when the provider's pinned platform version is known
+  // and this cluster sits on an older one. Applying is the customer's call, never automatic.
+  const chartVersion = (c.chart_version as string) || ""
+  const updateAvailable = !!platformVersion && !!chartVersion && chartVersion !== platformVersion
+  const [platformOpen, setPlatformOpen] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [rotateOpen, setRotateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -1365,6 +1381,22 @@ function ClusterDetail({
             </p>
           )}
 
+          {updateAvailable && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
+              <div>
+                <div className="text-sm font-medium">Platform update available</div>
+                <p className="text-xs text-muted-foreground">
+                  A newer version of the managed platform components is available
+                  (<span className="font-mono">{chartVersion}</span> → <span className="font-mono">{platformVersion}</span>).
+                  Your Kubernetes version, workloads and data are not changed.
+                </p>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => setPlatformOpen(true)}>
+                Apply platform update
+              </Button>
+            </div>
+          )}
+
           {busy && (
             <div className="rounded-xl border bg-card p-4">
               <div className="mb-3 flex items-center gap-2">
@@ -1475,6 +1507,39 @@ function ClusterDetail({
             </Table>
           </div>
         </div>
+
+        {/* Platform update — opt-in re-pin onto the provider's current platform version. */}
+        <Dialog open={platformOpen} onOpenChange={setPlatformOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Apply platform update</DialogTitle>
+              <DialogDescription>
+                Updates the cluster's managed platform components from{" "}
+                <span className="font-mono">{chartVersion}</span> to{" "}
+                <span className="font-mono">{platformVersion}</span>. Components restart with a
+                rolling update; if the node template changed, worker nodes are replaced one at a
+                time (a new node comes up and is drained into before the old one is removed).
+                Your Kubernetes version, workloads and data are untouched.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPlatformOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => {
+                  act("APPLY_PLATFORM_UPDATE")
+                    .then(() => {
+                      onPatch({ chart_version: platformVersion, sync_status: "OutOfSync" })
+                      toast.success("Platform update started")
+                      setPlatformOpen(false)
+                    })
+                    .catch((e: Error) => toast.error(e.message))
+                }}
+              >
+                Apply update
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Upgrade */}
         <Dialog open={upgradeOpen} onOpenChange={setUpgradeOpen}>
