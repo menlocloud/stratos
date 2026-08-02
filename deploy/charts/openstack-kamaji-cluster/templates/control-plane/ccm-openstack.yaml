@@ -18,8 +18,12 @@
 
   Ordering: the admin-kubeconfig Secret only exists once Kamaji has provisioned
   the control plane, so on a fresh install this pod sits in
-  CreateContainerConfigError for a minute and then starts. That is expected and
-  self-healing — no init container, no hook.
+  CreateContainerConfigError for a minute (a Pending state — no restart is
+  counted). The Secret then lands BEFORE the apiserver actually answers, and a
+  CCM started in that window crashes once — a restart that trips alerting for
+  no reason. The wait-for-apiserver init container closes that window: it polls
+  /readyz over the same mounted kubeconfig and never exits non-zero, so the CCM
+  container starts exactly once, when the control plane is really up.
 */}}
 {{- $cloudConfig := deepCopy ($ccm.cloudConfig | default dict) }}
 {{- /* Floating network for tenant `type: LoadBalancer` Services — the CCM
@@ -87,6 +91,24 @@ spec:
       {{- with $ccm.affinity }}
       affinity: {{ toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        # Blocks (never fails) until the tenant apiserver serves /readyz, so the
+        # CCM's first start cannot crash-and-restart while the control plane is
+        # still coming up. Uses the same admin kubeconfig mount as the CCM.
+        - name: wait-for-apiserver
+          image: {{ ($ccm.waitForApiServer | default dict).image | default "docker.io/bitnami/kubectl:latest" }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until kubectl --kubeconfig /etc/kubernetes/admin.svc get --raw /readyz >/dev/null 2>&1; do
+                echo "waiting for the tenant apiserver…"
+                sleep 3
+              done
+          volumeMounts:
+            - name: admin-kubeconfig
+              mountPath: /etc/kubernetes/admin.svc
+              subPath: admin.svc
+              readOnly: true
       containers:
         - name: cloud-controller-manager
           image: {{ printf "%s:%s" $ccm.image.repository $ccm.image.tag }}

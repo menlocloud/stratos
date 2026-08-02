@@ -331,6 +331,12 @@ kamajiControlPlane:
     # -- Extra `--flag=value` arguments, e.g. cluster-name or a longer
     # --leader-elect-lease-duration on a busy management cluster.
     extraArgs: {}
+    # -- Init container gating the CCM on tenant-apiserver readiness. The admin
+    # kubeconfig Secret appears BEFORE the apiserver answers, so without the
+    # gate the CCM's first boot crashes once and trips restart-based alerting.
+    # Any image with kubectl works.
+    waitForApiServer:
+      image: docker.io/bitnami/kubectl:latest
     resources:
       requests:
         cpu: 100m
