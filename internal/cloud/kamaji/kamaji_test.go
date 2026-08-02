@@ -318,6 +318,30 @@ func TestImageVariants(t *testing.T) {
 	}
 }
 
+// TestClusterAddons: curated toggles render as addons.<name>.enabled, unknown names are
+// rejected, and no picks means no addons block at all (the chart's defaults rule).
+func TestClusterAddons(t *testing.T) {
+	spec := testSpec()
+	spec.Addons = map[string]bool{"certManager": true, "metricsServer": false}
+	v := BuildValues(testCfg(), spec)
+	addons := v["addons"].(map[string]any)
+	if addons["certManager"].(map[string]any)["enabled"] != true ||
+		addons["metricsServer"].(map[string]any)["enabled"] != false {
+		t.Errorf("addons = %v", addons)
+	}
+	// The openstack credential-push toggle must never be client-reachable.
+	if err := (func() error { s := testSpec(); s.Addons = map[string]bool{"openstack": true}; return s.Validate(testCfg().Defaults) })(); err == nil || !strings.Contains(err.Error(), "add-on") {
+		t.Errorf("unknown addon: err = %v", err)
+	}
+	if err := spec.Validate(testCfg().Defaults); err != nil {
+		t.Errorf("valid addons: %v", err)
+	}
+	plain := BuildValues(testCfg(), testSpec())
+	if _, has := plain["addons"]; has {
+		t.Error("no picks must render no addons block")
+	}
+}
+
 func TestBuildValuesBYONetwork(t *testing.T) {
 	cfg := testCfg()
 	spec := testSpec()

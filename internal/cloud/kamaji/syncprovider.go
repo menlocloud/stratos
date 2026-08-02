@@ -113,6 +113,20 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 	if ext := digStr(values, "clusterNetworking", "externalNetworkId"); ext != "" {
 		c["external_network_id"] = ext
 	}
+	// Customer add-on toggles, read back for the UI (absent block = chart defaults).
+	if adds, ok := dig(values, "addons").(map[string]any); ok {
+		out := map[string]any{}
+		for name, raw := range adds {
+			if m, ok := raw.(map[string]any); ok {
+				if enabled, ok := m["enabled"].(bool); ok {
+					out[name] = enabled
+				}
+			}
+		}
+		if len(out) > 0 {
+			c["addons"] = out
+		}
+	}
 	if issuer := digStr(values, "oidc", "issuerUrl"); issuer != "" {
 		c["oidc_issuer"] = issuer
 		// Full block (snake_case like the rest of the payload) — the client OIDC edit form

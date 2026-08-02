@@ -161,8 +161,10 @@ kamajiControlPlane:
       server:
         port: 8132
         resources: {}
-      agent:
-        resources: {}
+      # NOTE: no `resources` here — the KamajiControlPlane CRD's konnectivity AGENT schema has no
+      # such field (only the server does), so the api server structurally prunes it on write and
+      # the rendered-vs-live diff leaves ArgoCD permanently OutOfSync.
+      agent: {}
 
   # -- Kubelet configuration for the hosted control plane
   kubelet:
@@ -460,12 +462,16 @@ nodeGroupDefaults:
   nodeDrainTimeout: 5m0s
   nodeVolumeDetachTimeout: 5m0s
   nodeDeletionTimeout: 5m0s
+  # -- Surge-first rollout: bring the replacement node up, drain the old one (nodeDrainTimeout
+  # above bounds the drain), then delete — one node at a time, zero capacity dip. The old
+  # delete-first default (maxUnavailable 1 / maxSurge 0) took a node away before its
+  # replacement existed. Needs one machine of temporary quota headroom during rollouts.
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 1
-      maxSurge: 0
-      deletePolicy: Random
+      maxUnavailable: 0
+      maxSurge: 1
+      deletePolicy: Oldest
   # -- kubeadm bootstrap configuration for worker nodes
   # Workers still use kubeadm to join the Kamaji-hosted control plane
   kubeadmConfigSpec:

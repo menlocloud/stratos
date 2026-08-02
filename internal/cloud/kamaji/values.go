@@ -107,17 +107,19 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 		}
 	}
 
-	// No `addons` block on purpose. It used to be generated here — cilium + the KAMAJI-FIX
-	// tolerations + openstack.enabled=true with the CSI controller un-pinned — because the chart was
-	// a third-party artifact we could only override from outside. The chart is ours and vendored now
-	// (deploy/charts/openstack-kamaji-cluster), so those defaults live in its values.yaml where they
-	// belong, and stratos stopped duplicating chart knowledge it would have to re-verify on every
-	// chart bump.
-	//
-	// Note the one behavioural change that came with the move: `addons.openstack.enabled` is now
-	// FALSE. That flag also gates the CAAPH push of the cluster's clouds.yaml into the workload
-	// cluster, where any cluster-admin of the tenant could read it; the OpenStack CCM runs
-	// management-side instead (plan D7). Cost: no Cinder CSI until the controller/node split lands.
+	// The addons block carries ONLY the customer's curated toggles (ClusterAddons) — one
+	// `addons.<name>.enabled` per pick, deep-merged over the chart's own defaults. Everything
+	// else about the addons stack (the CNI, mirror pins, and crucially `addons.openstack.enabled`
+	// — the CAAPH clouds.yaml push into the workload cluster, deliberately OFF per plan D7) lives
+	// in the vendored chart's values.yaml and is never rendered here, so a client request cannot
+	// reach it (Validate rejects unknown add-on names).
+	if len(spec.Addons) > 0 {
+		addons := map[string]any{}
+		for name, enabled := range spec.Addons {
+			addons[name] = map[string]any{"enabled": enabled}
+		}
+		values["addons"] = addons
+	}
 	return values
 }
 

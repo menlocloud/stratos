@@ -20,4 +20,4 @@ type: application
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.5.2
+version: 0.5.3

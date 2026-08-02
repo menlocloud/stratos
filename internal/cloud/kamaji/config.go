@@ -119,6 +119,18 @@ type ClusterDefaults struct {
 	AllowedCIDRs []string
 }
 
+// ClusterAddons is the curated add-on menu a customer can toggle per cluster (name →
+// default-enabled). Keys are the addons subchart's own top-level blocks, passed through as
+// `addons.<key>.enabled`; everything else in the addons stack — the CNI, the CSI/credential
+// push, the mirror-registry pins — stays operator territory and is never client-writable.
+var ClusterAddons = map[string]bool{
+	"certManager":       false, // cert-manager (Let's Encrypt & friends)
+	"ingress":           false, // NGINX ingress controller
+	"metricsServer":     true,  // kubectl top / HPA metrics
+	"monitoring":        false, // kube-prometheus-stack + Loki (heavy)
+	"nvidiaGPUOperator": false, // driver/toolkit for NVIDIA GPU pools
+}
+
 // ClusterFQDN is the cluster's public API hostname (<clusterID>.<dnsZone>) — the name
 // external-dns publishes for the API-server LoadBalancer and the apiserver cert carries as a
 // SAN (BuildValues). "" when the provider has no DNS zone.
@@ -179,7 +191,10 @@ type ClusterSpec struct {
 	OIDC map[string]string
 	// AllowedCIDRs restricts API-server LB ingress (Octavia ACL — plan Phase 2a). Empty = open.
 	AllowedCIDRs []string
-	NodeGroups   []NodeGroup
+	// Addons are the customer's picks off the curated ClusterAddons menu (unknown names are
+	// rejected). nil/empty = the chart's own defaults, which match the menu's defaults.
+	Addons     map[string]bool
+	NodeGroups []NodeGroup
 	// NetworkID/SubnetID attach the cluster to a network the customer already owns (EKS-style
 	// "pick your VPC subnet") instead of the per-cluster network CAPO otherwise creates. Both or
 	// neither: CAPO accepts a lone filter, but a network with the wrong subnet picked — or a
@@ -244,6 +259,11 @@ func (s ClusterSpec) Validate(d ClusterDefaults) error {
 	if len(d.Versions) > 0 {
 		if _, ok := d.Versions[s.Version]; !ok {
 			return fmt.Errorf("cluster: version %q is not offered by this provider", s.Version)
+		}
+	}
+	for name := range s.Addons {
+		if _, ok := ClusterAddons[name]; !ok {
+			return fmt.Errorf("cluster: unknown add-on %q", name)
 		}
 	}
 	seen := map[string]bool{}

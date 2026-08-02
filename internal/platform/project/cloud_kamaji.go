@@ -535,6 +535,15 @@ func kamajiSpecFromData(projectID string, d map[string]any) (kamaji.ClusterSpec,
 			}
 		}
 	}
+	// Curated add-on toggles ({name: bool}); Validate rejects names off the menu.
+	if adds, ok := d["addons"].(map[string]any); ok {
+		spec.Addons = map[string]bool{}
+		for name, v := range adds {
+			if b, ok := v.(bool); ok {
+				spec.Addons[name] = b
+			}
+		}
+	}
 	groups, err := kamajiNodeGroups(d["nodeGroups"])
 	if err != nil {
 		return spec, err

@@ -10,7 +10,7 @@ import { useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
-import { ArrowLeft, Boxes, Download, MoreHorizontal, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
+import { ArrowLeft, Boxes, CheckCircle2, Circle, Download, Loader2, MoreHorizontal, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
@@ -38,6 +38,7 @@ import {
 import { gpuCapacityViolations, serverQuotaViolations } from "@/lib/quota"
 import type { CloudResource, Location } from "@/lib/types"
 import { isPrivateNetwork, networkName } from "../network/NetworksPage"
+import { serverName, serverStatus, serverIPs } from "../servers/ServersPage"
 
 type Cluster = Record<string, any>
 type NodeGroupRow = {
@@ -114,6 +115,17 @@ const emptyGroup: NodeGroupRow = {
   name: "workers", flavorId: "", variant: "", count: "3", autoscale: false, min: "1", max: "5",
   rootDisk: DEFAULT_ROOT_DISK_GIB, labels: "", taints: "",
 }
+
+// Curated add-on menu — keys mirror the backend's kamaji.ClusterAddons (an unknown key is a 400).
+// `on` is the default state, kept in line with the chart's own defaults.
+const ADDONS = [
+  { key: "metricsServer", label: "Metrics Server", hint: "kubectl top and autoscaling (HPA) metrics", on: true },
+  { key: "certManager", label: "cert-manager", hint: "TLS certificates from Let's Encrypt or private CAs", on: false },
+  { key: "ingress", label: "NGINX Ingress", hint: "HTTP(S) ingress controller for your Services", on: false },
+  { key: "monitoring", label: "Monitoring stack", hint: "Prometheus, Grafana dashboards and Loki logs (uses ~2 GB RAM)", on: false },
+  { key: "nvidiaGPUOperator", label: "NVIDIA GPU Operator", hint: "Drivers and container toolkit for GPU node groups", on: false },
+] as const
+const defaultAddons = () => Object.fromEntries(ADDONS.map((a) => [a.key, a.on])) as Record<string, boolean>
 
 function cluster(r: CloudResource): Cluster {
   return (r.data?.cluster as Cluster) ?? {}
@@ -313,6 +325,15 @@ function useKubernetesData(pid: string) {
     queryFn: () =>
       apiFetch<CloudResource[]>(`/project/${pid}/resource?type=KUBERNETES_CLUSTER`, { method: "POST", cloud: kScope }),
     enabled: !!pid && !!kScope,
+    // While anything is provisioning/rolling, poll — the list is a live read-through off the
+    // management cluster, so each tick reflects real progress. Quiet clusters stop the polling.
+    refetchInterval: (query) => {
+      const busy = (query.state.data ?? []).some((r) => {
+        const c = cluster(r)
+        return (c.status && c.status !== "READY") || (c.sync_status && c.sync_status !== "Synced")
+      })
+      return busy ? 15000 : false
+    },
   })
   const flavors = useQuery({
     queryKey: ["bulk-action", pid, "LIST_FLAVORS", osScope?.serviceId],
@@ -746,6 +767,7 @@ function ClusterFormDialog({
   const variants = variantsForVersion(version)
   const [ha, setHa] = useState(true)
   const [groups, setGroups] = useState<NodeGroupRow[]>([{ ...emptyGroup }])
+  const [addons, setAddons] = useState<Record<string, boolean>>(defaultAddons)
   const [oidcOpen, setOidcOpen] = useState(false)
   const [oidc, setOidc] = useState<OidcDraft>({ ...emptyOidc })
   const [allowedCidrs, setAllowedCidrs] = useState("")
@@ -768,6 +790,7 @@ function ClusterFormDialog({
         name: name.trim(),
         version,
         ha,
+        addons,
         nodeGroups: groupsToData(groups),
         ...(networkId && subnetId ? { networkId, subnetId } : {}),
         ...(oidc.issuerUrl.trim() ? { oidc: oidcToBody(oidc) } : {}),
@@ -860,6 +883,28 @@ function ClusterFormDialog({
           </div>
 
           <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
+
+          <div className="grid gap-3 rounded-lg border p-3">
+            <div>
+              <Label>Add-ons</Label>
+              <p className="text-xs text-muted-foreground">
+                Installed into the cluster and managed for you. The defaults suit most clusters.
+              </p>
+            </div>
+            {ADDONS.map((a) => (
+              <div key={a.key} className="flex items-center justify-between gap-3">
+                <div>
+                  <Label htmlFor={`addon-${a.key}`} className="text-sm">{a.label}</Label>
+                  <p className="text-xs text-muted-foreground">{a.hint}</p>
+                </div>
+                <Switch
+                  id={`addon-${a.key}`}
+                  checked={addons[a.key] ?? false}
+                  onCheckedChange={(on) => setAddons({ ...addons, [a.key]: on })}
+                />
+              </div>
+            ))}
+          </div>
 
           {networks.length > 0 && (
             <div className="grid gap-3 rounded-lg border p-3">
@@ -1126,9 +1171,68 @@ function ClusterDetail({
   // full-replace action would be built from stale data.
   onPatch: (patch: Record<string, any>) => void
 }) {
+  const navigate = useNavigate()
   const c = cluster(resource)
   const name = (c.name as string) || resource.externalId || resource.id
   const groups = (c.node_groups as Cluster[]) ?? []
+
+  // The cluster's worker VMs — regular SERVER resources whose names are prefixed with the
+  // cluster id (CAPI machine names: <clusterID>-<group>-<hash>-<suffix>). AWS-style: list them
+  // right here, click through to the server's own page.
+  const serversQ = useCloudList(pid, "SERVER")
+  const instances = useMemo(() => {
+    const prefix = (resource.externalId || "") + "-"
+    if (prefix === "-") return []
+    return (serversQ.data ?? [])
+      .filter((r) => serverName(r).startsWith(prefix))
+      .map((r) => {
+        // <clusterID>-<group>-<machineset-hash>-<rand> → the group is everything between the
+        // cluster id and the last two dash segments.
+        const rest = serverName(r).slice(prefix.length)
+        const parts = rest.split("-")
+        const group = parts.length > 2 ? parts.slice(0, -2).join("-") : rest
+        return { r, name: serverName(r), group, status: serverStatus(r), ips: serverIPs(r).join(", ") }
+      })
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [serversQ.data, resource.externalId])
+
+  // Provisioning/rollout progress — a plain-language checklist of what the platform is doing,
+  // derived from the synced state (which the page polls live while anything is in flight).
+  const syncStatus = (c.sync_status as string) || ""
+  const busy = ((c.status as string) && c.status !== "READY") || (syncStatus && syncStatus !== "Synced")
+  // Recomputed per render on purpose — the inputs are tiny and re-derived from the query row.
+  const progressSteps = (() => {
+    const endpointUp = !!(c.endpoint as string)
+    const steps: { label: string; detail: string; done: boolean }[] = [
+      {
+        label: "Control plane",
+        detail: endpointUp ? "API server is up" : "starting the hosted API server (~2 min)",
+        done: endpointUp,
+      },
+    ]
+    for (const g of groups) {
+      const desired = g.autoscale ? Number(g.min ?? 1) : Number(g.count ?? g.replicas ?? 1)
+      const ready = Number(g.ready_replicas ?? 0)
+      const phase = String(g.phase ?? "")
+      steps.push({
+        label: `Node group “${(g.name as string) || "?"}”`,
+        detail:
+          phase === "Running" && ready >= desired
+            ? `${ready} node${ready === 1 ? "" : "s"} ready`
+            : `${ready}/${desired} nodes ready${phase ? ` · ${phase}` : ""} — building VMs, joining the cluster`,
+        done: phase === "Running" && ready >= desired,
+      })
+    }
+    steps.push({
+      label: "Configuration sync",
+      detail: syncStatus === "Synced" ? "everything applied" : `applying the desired state (${syncStatus || "pending"})`,
+      done: syncStatus === "Synced",
+    })
+    return steps
+  })()
+
+  // Add-on picks stamped at create (absent = the platform defaults).
+  const addonStates = (c.addons as Record<string, boolean>) ?? null
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [rotateOpen, setRotateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -1261,6 +1365,45 @@ function ClusterDetail({
             </p>
           )}
 
+          {busy && (
+            <div className="rounded-xl border bg-card p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                <span className="text-sm font-medium">Working on it — this page refreshes itself</span>
+              </div>
+              <ul className="grid gap-2">
+                {progressSteps.map((s, i) => {
+                  const firstPending = progressSteps.findIndex((x) => !x.done)
+                  return (
+                    <li key={i} className="flex items-start gap-2 text-sm">
+                      {s.done ? (
+                        <CheckCircle2 className="mt-0.5 size-4 text-emerald-600" />
+                      ) : i === firstPending ? (
+                        <Loader2 className="mt-0.5 size-4 animate-spin text-muted-foreground" />
+                      ) : (
+                        <Circle className="mt-0.5 size-4 text-muted-foreground/40" />
+                      )}
+                      <span>
+                        {s.label}
+                        <span className="text-muted-foreground"> — {s.detail}</span>
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+
+          {addonStates && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <span>Add-ons:</span>
+              {ADDONS.filter((a) => addonStates[a.key]).map((a) => (
+                <Badge key={a.key} variant="outline">{a.label}</Badge>
+              ))}
+              {ADDONS.every((a) => !addonStates[a.key]) ? <span>none</span> : null}
+            </div>
+          )}
+
           <div className="overflow-hidden rounded-xl border bg-card">
             <Table>
               <TableHeader>
@@ -1289,6 +1432,42 @@ function ClusterDetail({
                       </TableCell>
                       <TableCell className="font-mono text-sm">{g.ready_replicas ?? "—"}</TableCell>
                       <TableCell className="text-sm">{(g.phase as string) || "—"}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* The pool's actual VMs — click through to the server page (console, metrics, volumes). */}
+          <div className="overflow-hidden rounded-xl border bg-card">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Instance</TableHead>
+                  <TableHead>Node group</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>IPs</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {instances.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center text-sm text-muted-foreground">
+                      {serversQ.isLoading ? "Loading instances…" : "No worker instances yet."}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  instances.map((it) => (
+                    <TableRow
+                      key={it.r.id}
+                      className="cursor-pointer"
+                      onClick={() => navigate(`/p/${pid}/servers/${it.r.id}`)}
+                    >
+                      <TableCell className="font-mono text-xs font-medium hover:underline">{it.name}</TableCell>
+                      <TableCell className="text-sm">{it.group}</TableCell>
+                      <TableCell><StatusBadge status={it.status || undefined} /></TableCell>
+                      <TableCell className="font-mono text-xs">{it.ips || "—"}</TableCell>
                     </TableRow>
                   ))
                 )}
