@@ -1,4 +1,4 @@
-﻿package dbaas
+package dbaas
 
 import (
 	"context"
@@ -13,14 +13,14 @@ import (
 
 // fakeAPI implements K8sAPI in memory, recording op order (create-ordering assertions) and
 // modelling the two SSA semantics the real client has: Secret.type is IMMUTABLE (ApplySecret
-// hardcodes Opaque â€” a re-apply onto an operator-minted basic-auth secret must 422) and the
+// hardcodes Opaque — a re-apply onto an operator-minted basic-auth secret must 422) and the
 // label set is REPLACED per apply (same-field-manager retraction). ListSecrets* honor the
-// label selector â€” a typo'd sweep selector must fail tests, not silently no-op in prod.
+// label selector — a typo'd sweep selector must fail tests, not silently no-op in prod.
 type fakeAPI struct {
 	namespaces  map[string]map[string]any
-	secrets     map[string]map[string]any // key ns/name â†’ full object
+	secrets     map[string]map[string]any // key ns/name → full object
 	secretData  map[string]map[string][]byte
-	secretTypes map[string]string // key ns/name â†’ Secret.type
+	secretTypes map[string]string // key ns/name → Secret.type
 	netpols     map[string]map[string]any
 	apps        map[string]map[string]any // key ns/name
 	services    map[string]map[string]any // key ns/name
@@ -298,7 +298,7 @@ func TestNames(t *testing.T) {
 	}
 }
 
-// TestBuildValues pins EVERY chart-values key per engine â€” the chart-drift tripwire (the
+// TestBuildValues pins EVERY chart-values key per engine — the chart-drift tripwire (the
 // database-cluster chart's values.yaml is the other half of this contract).
 func TestBuildValues(t *testing.T) {
 	cfg := testConfig()
@@ -335,7 +335,7 @@ func TestBuildValues(t *testing.T) {
 		if strat["projectId"] != "p1" || strat["resourceId"] != spec.ID || strat["displayName"] != "my db" {
 			t.Errorf("%s: stratos = %v", engine, strat)
 		}
-		// The complete top-level key set â€” a new key must be added HERE and in the chart.
+		// The complete top-level key set — a new key must be added HERE and in the chart.
 		for k := range v {
 			switch k {
 			case "engine", "engineVersion", "instances", "resources", "storage", "network", "stratos":
@@ -364,7 +364,7 @@ func TestBuildApplication(t *testing.T) {
 	}
 	fins, _ := dig(app, "metadata", "finalizers").([]any)
 	if len(fins) != 1 || fins[0] != "resources-finalizer.argocd.argoproj.io" {
-		t.Fatal("resources-finalizer missing â€” delete would not cascade")
+		t.Fatal("resources-finalizer missing — delete would not cascade")
 	}
 	if digStr(app, "spec", "project") != "stratos-dbaas" {
 		t.Fatal("AppProject")
@@ -422,7 +422,7 @@ func TestServiceCreateDelete(t *testing.T) {
 	if digStr(marker, "metadata", "annotations", AnnotationNetworkID) != "net-1" ||
 		digStr(marker, "metadata", "annotations", AnnotationOSProject) != "dbaas-tenant" ||
 		digStr(marker, "metadata", "annotations", AnnotationOSRegion) != "RegionOne" {
-		t.Fatal("net-share annotations are the revocation record â€” must be stamped (incl. region)")
+		t.Fatal("net-share annotations are the revocation record — must be stamped (incl. region)")
 	}
 	// A failed ensureShare reaps the fresh marker and applies no Application.
 	api3 := newFakeAPI()
@@ -500,7 +500,7 @@ func TestFinalizeOrphans(t *testing.T) {
 		api.secretData[k] = map[string][]byte{"network-id": []byte("net-1")}
 	}
 
-	// Fresh marker (inside grace) â†’ pending, untouched.
+	// Fresh marker (inside grace) → pending, untouched.
 	api := newFakeAPI()
 	s := NewWithAPI(api, testConfig(), "svc-dbaas")
 	mkMarker(api, "std-new", time.Minute)
@@ -509,7 +509,7 @@ func TestFinalizeOrphans(t *testing.T) {
 		t.Fatalf("grace window: pending=%d err=%v", pending, err)
 	}
 
-	// Live Application â†’ skipped, not pending.
+	// Live Application → skipped, not pending.
 	api = newFakeAPI()
 	s = NewWithAPI(api, testConfig(), "svc-dbaas")
 	mkMarker(api, "std-live", 2*time.Hour)
@@ -524,7 +524,7 @@ func TestFinalizeOrphans(t *testing.T) {
 		t.Fatal("live database's marker must stay")
 	}
 
-	// LB Service still present â†’ cascade in flight â†’ pending.
+	// LB Service still present → cascade in flight → pending.
 	api = newFakeAPI()
 	s = NewWithAPI(api, testConfig(), "svc-dbaas")
 	mkMarker(api, "std-lb", 2*time.Hour)
@@ -533,7 +533,7 @@ func TestFinalizeOrphans(t *testing.T) {
 		t.Fatalf("lb present: pending=%d err=%v", pending, err)
 	}
 
-	// Revoke fails â†’ FAIL-CLOSED: marker stays, pending.
+	// Revoke fails → FAIL-CLOSED: marker stays, pending.
 	api = newFakeAPI()
 	s = NewWithAPI(api, testConfig(), "svc-dbaas")
 	mkMarker(api, "std-x", 2*time.Hour)
@@ -547,7 +547,7 @@ func TestFinalizeOrphans(t *testing.T) {
 		t.Fatal("marker deleted despite failed revoke")
 	}
 
-	// Sibling live database on the SAME network â†’ revoke skipped, marker reaped, ns kept.
+	// Sibling live database on the SAME network → revoke skipped, marker reaped, ns kept.
 	api = newFakeAPI()
 	s = NewWithAPI(api, testConfig(), "svc-dbaas")
 	mkMarker(api, "std-x", 2*time.Hour)
@@ -610,7 +610,7 @@ func TestFinalizeOrphans(t *testing.T) {
 		t.Fatal("marker must survive an auth-secret delete failure (retry driver)")
 	}
 
-	// Clean orphan â†’ revoke called with the recorded ids, marker + auth reaped, ns GC'd.
+	// Clean orphan → revoke called with the recorded ids, marker + auth reaped, ns GC'd.
 	api = newFakeAPI()
 	s = NewWithAPI(api, testConfig(), "svc-dbaas")
 	api.namespaces["st-p1"] = map[string]any{"metadata": map[string]any{
@@ -691,7 +691,7 @@ func TestSyncProviderList(t *testing.T) {
 	}
 }
 
-// TestConnectionSecretContract pins the per-engine secret tuple â€” the chart templates are the
+// TestConnectionSecretContract pins the per-engine secret tuple — the chart templates are the
 // other half of this contract; a rename on either side must fail here.
 func TestConnectionSecretContract(t *testing.T) {
 	cases := []struct {
