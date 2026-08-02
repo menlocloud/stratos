@@ -9,7 +9,7 @@
   <img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/menlocloud/stratos"/>
   <img alt="GitHub contributors" src="https://img.shields.io/github/contributors/menlocloud/stratos"/>
   <img alt="GitHub closed issues" src="https://img.shields.io/github/issues-closed/menlocloud/stratos"/>
-  <img alt="License: AGPL v3" src="https://img.shields.io/github/license/menlocloud/stratos"/>
+  <img alt="License: Apache 2.0" src="https://img.shields.io/github/license/menlocloud/stratos"/>
 </p>
 
 <p>
@@ -215,5 +215,5 @@ and our [Code of Conduct](CODE_OF_CONDUCT.md). To report a security issue, see
 
 ## 📄 License
 
-Stratos is licensed under the **GNU Affero General Public License v3.0**
-(AGPL-3.0-only). See [`LICENSE`](LICENSE).
+Stratos is licensed under the **Apache License, Version 2.0**
+(Apache-2.0). See [`LICENSE`](LICENSE).
