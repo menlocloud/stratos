@@ -338,20 +338,18 @@ func TestClusterAddons(t *testing.T) {
 	}
 	plain := BuildValues(testCfg(), testSpec())
 	if _, has := plain["addons"]; has {
-		t.Error("no picks and no appcred must render no addons block")
+		t.Error("no picks must render no addons block")
 	}
 
-	// Storage rides on the per-cluster appcred: present (CSI on, CCM stays management-side)
-	// exactly when the cluster runs on its own tenant-scoped credential — never for the
-	// admin-fallback (plan D7 fail-closed).
+	// The credential-push storage leg is GONE: storage ships chart-side (split CSI), so stratos
+	// must never render addons.openstack — with or without an appcred (plan D7).
 	withCred := testSpec()
 	withCred.AppCredID = "cred-1"
-	storage := BuildValues(testCfg(), withCred)["addons"].(map[string]any)["openstack"].(map[string]any)
-	if storage["enabled"] != true || storage["ccm"].(map[string]any)["enabled"] != false {
-		t.Errorf("storage leg = %v", storage)
+	if _, has := BuildValues(testCfg(), withCred)["addons"]; has {
+		t.Error("an appcred must not render an addons block either")
 	}
-	if av := AddonValues(nil, false); len(av) != 0 {
-		t.Errorf("no picks, no cred: %v", av)
+	if av := AddonValues(nil); len(av) != 0 {
+		t.Errorf("no picks: %v", av)
 	}
 
 	// The menu's defaults are a CONTRACT: they must mirror the chart's effective defaults (and
@@ -1002,6 +1000,24 @@ func TestSetChartVersionAndPins(t *testing.T) {
 	}
 	if err := svc.SetChartVersion(ctx, spec.ID, ""); err == nil {
 		t.Error("blank version must error")
+	}
+
+	// A legacy credential-push storage leg (addons.openstack) is scrubbed by the platform
+	// update — the same bump that brings the split CSI stops pushing the credential.
+	values := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	values["addons"] = map[string]any{
+		"openstack":     map[string]any{"enabled": true},
+		"metricsServer": map[string]any{"enabled": true},
+	}
+	if err := svc.SetChartVersion(ctx, spec.ID, "1.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	addons := dig(api.apps["argocd/"+spec.ID], "spec", "source", "helm", "valuesObject", "addons").(map[string]any)
+	if _, has := addons["openstack"]; has {
+		t.Error("platform update must scrub the legacy credential-push leg")
+	}
+	if _, has := addons["metricsServer"]; !has {
+		t.Error("customer picks must survive the scrub")
 	}
 }
 

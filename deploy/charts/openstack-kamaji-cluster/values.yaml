@@ -336,7 +336,7 @@ kamajiControlPlane:
     # -- Init container gating the CCM on tenant-apiserver readiness. The admin
     # kubeconfig Secret appears BEFORE the apiserver answers, so without the
     # gate the CCM's first boot crashes once and trips restart-based alerting.
-    # Any image with kubectl works.
+    # Any image with kubectl works. (The Cinder CSI controller below reuses it.)
     waitForApiServer:
       image: docker.io/bitnami/kubectl:latest
     resources:
@@ -348,6 +348,31 @@ kamajiControlPlane:
     nodeSelector: {}
     tolerations: []
     affinity: {}
+
+  # -- Cinder CSI controller — MANAGEMENT-SIDE, the credential-isolated storage path. The
+  # provisioner/attacher/resizer sidecars drive the tenant api server over the mounted admin
+  # kubeconfig; only this Deployment holds the cloud credential. The workload cluster runs the
+  # credential-free node plugin (addons.csiCinderNode below).
+  cinderCSI:
+    enabled: true
+    replicas: 1
+    image:
+      repository: registry.menlo.ai/k8s-io/provider-os/cinder-csi-plugin
+      tag: v1.36.0
+      pullPolicy: IfNotPresent
+    provisionerImage:
+      repository: registry.menlo.ai/k8s-io/sig-storage/csi-provisioner
+      tag: v5.2.0
+    attacherImage:
+      repository: registry.menlo.ai/k8s-io/sig-storage/csi-attacher
+      tag: v4.8.1
+    resizerImage:
+      repository: registry.menlo.ai/k8s-io/sig-storage/csi-resizer
+      tag: v1.13.2
+    imagePullSecrets: []
+    nodeSelector: {}
+    tolerations: []
+    resources: {}
 
 # =============================================================================
 # Kubernetes Network Configuration
@@ -694,29 +719,12 @@ addons:
   mellanoxNetworkOperator:
     enabled: false
 
-  # -- Monitoring runs STATELESS for now: workload clusters have no StorageClass (Cinder CSI is
-  # off until the controller/node split lands — see the openstack block above), so the subchart's
-  # PVC-backed Prometheus/Alertmanager/Loki defaults would sit Pending forever. Nulls delete the
-  # volume claims at helm coalesce; retention is trimmed to match memory-backed storage. Remove
-  # these overrides when dynamic storage ships.
-  monitoring:
-    kubePrometheusStack:
-      release:
-        values:
-          alertmanager:
-            alertmanagerSpec:
-              retention: 24h
-              storage: null
-          prometheus:
-            prometheusSpec:
-              retention: 24h
-              storageSpec: null
-    lokiStack:
-      release:
-        values:
-          loki:
-            config:
-              limits_config:
-                retention_period: 24h
-            persistence:
-              enabled: false
+  # Monitoring keeps the subchart's PVC-backed defaults: every cluster now has the csi-cinder
+  # default StorageClass (the split-CSI storage path — cinderCSI controller above + the
+  # csiCinderNode leg below), so persistent Prometheus/Alertmanager/Loki bind fine.
+
+  # -- The credential-free Cinder CSI NODE plugin in the workload cluster (its controller runs
+  # management-side — kamajiControlPlane.cinderCSI). This is what gives every cluster its
+  # default StorageClass.
+  csiCinderNode:
+    enabled: true

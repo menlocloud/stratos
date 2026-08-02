@@ -1,0 +1,165 @@
+{{- if .Values.kamajiControlPlane.cinderCSI.enabled }}
+{{- $csi := .Values.kamajiControlPlane.cinderCSI }}
+{{- /*
+  =============================================================================
+  Cinder CSI controller — MANAGEMENT-SIDE (credential isolation)
+  =============================================================================
+  The CSI controller half (external provisioner/attacher/resizer sidecars plus
+  the cinder plugin's controller service) is the ONLY part that authenticates
+  to OpenStack. It runs here, next to the TenantControlPlane pods and the CCM,
+  and drives the tenant cluster through the Kamaji-issued admin kubeconfig
+  (`admin.svc`) — every sidecar takes --kubeconfig. The workload cluster runs
+  only the credential-free node plugin (cluster-addons-menlo csiCinderNode);
+  the cloud credential never leaves the management cluster.
+
+  Same ordering guard as the CCM: the admin-kubeconfig Secret appears before
+  the tenant apiserver answers, so a wait-for-apiserver init container keeps
+  the first boot from crashing into restart-based alerting.
+*/}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "openstack-kamaji-cluster.componentName" (list . "csi-cinder-config") }}
+  labels: {{ include "openstack-kamaji-cluster.componentLabels" (list . "csi-cinder") | nindent 4 }}
+stringData:
+  cloud.conf: |
+    [Global]
+    use-clouds=true
+    clouds-file=/etc/config/clouds.yaml
+    cloud={{ .Values.cloudName }}
+    {{- if .Values.cloudCACert }}
+    ca-file=/etc/config/cacert
+    {{- end }}
+
+    [BlockStorage]
+    ignore-volume-az=true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openstack-kamaji-cluster.componentName" (list . "csi-cinder") }}
+  labels: {{ include "openstack-kamaji-cluster.componentLabels" (list . "csi-cinder") | nindent 4 }}
+spec:
+  replicas: {{ $csi.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "openstack-kamaji-cluster.componentSelectorLabels" (list . "csi-cinder") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openstack-kamaji-cluster.componentSelectorLabels" (list . "csi-cinder") | nindent 8 }}
+    spec:
+      # Talks only to the TENANT api server (mounted kubeconfig) and to OpenStack —
+      # no business with the management cluster's API.
+      automountServiceAccountToken: false
+      {{- with $csi.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $csi.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $csi.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # Same containment as the CCM: never exits non-zero, so the sidecars start exactly
+        # once, when the tenant control plane really answers.
+        - name: wait-for-apiserver
+          image: {{ (.Values.kamajiControlPlane.cloudControllerManager.waitForApiServer | default dict).image | default "docker.io/bitnami/kubectl:latest" }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until kubectl --kubeconfig /etc/kubernetes/admin.svc get --raw /readyz >/dev/null 2>&1; do
+                echo "waiting for the tenant apiserver…"
+                sleep 3
+              done
+          volumeMounts:
+            - name: admin-kubeconfig
+              mountPath: /etc/kubernetes/admin.svc
+              subPath: admin.svc
+              readOnly: true
+      containers:
+        - name: csi-provisioner
+          image: {{ printf "%s:%s" $csi.provisionerImage.repository $csi.provisionerImage.tag }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubeconfig=/etc/kubernetes/admin.svc
+            - --leader-election=true
+            - --leader-election-namespace=kube-system
+            - --feature-gates=Topology=true
+            - --extra-create-metadata
+            - --default-fstype=ext4
+            - --timeout=3m
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: admin-kubeconfig
+              mountPath: /etc/kubernetes/admin.svc
+              subPath: admin.svc
+              readOnly: true
+        - name: csi-attacher
+          image: {{ printf "%s:%s" $csi.attacherImage.repository $csi.attacherImage.tag }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubeconfig=/etc/kubernetes/admin.svc
+            - --leader-election=true
+            - --leader-election-namespace=kube-system
+            - --timeout=3m
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: admin-kubeconfig
+              mountPath: /etc/kubernetes/admin.svc
+              subPath: admin.svc
+              readOnly: true
+        - name: csi-resizer
+          image: {{ printf "%s:%s" $csi.resizerImage.repository $csi.resizerImage.tag }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubeconfig=/etc/kubernetes/admin.svc
+            - --leader-election=true
+            - --leader-election-namespace=kube-system
+            - --timeout=3m
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: admin-kubeconfig
+              mountPath: /etc/kubernetes/admin.svc
+              subPath: admin.svc
+              readOnly: true
+        - name: cinder-csi-plugin
+          image: {{ printf "%s:%s" $csi.image.repository $csi.image.tag }}
+          imagePullPolicy: {{ $csi.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - /bin/cinder-csi-plugin
+            - --endpoint=unix://csi/csi.sock
+            - --cloud-config=/etc/cloud/cloud.conf
+            - --provide-controller-service=true
+            - --provide-node-service=false
+            - --cluster={{ include "openstack-kamaji-cluster.clusterName" . }}
+          {{- with $csi.resources }}
+          resources: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: cloud-config
+              mountPath: /etc/cloud
+              readOnly: true
+            - name: cloud-credentials
+              mountPath: /etc/config
+              readOnly: true
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: cloud-config
+          secret:
+            secretName: {{ include "openstack-kamaji-cluster.componentName" (list . "csi-cinder-config") }}
+        - name: cloud-credentials
+          secret:
+            secretName: {{ include "openstack-kamaji-cluster.cloudCredentialsSecretName" . }}
+        - name: admin-kubeconfig
+          secret:
+            secretName: {{ include "openstack-kamaji-cluster.kamajiAdminKubeconfigSecretName" . }}
+{{- end }}

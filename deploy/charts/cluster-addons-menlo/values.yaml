@@ -462,6 +462,40 @@ nodeProblemDetector:
     values: {}
 
 # Settings for any custom addons
+# Cinder CSI, node-only leg — the credential-isolated storage path. The node plugin runs in the
+# workload cluster with a credential-FREE cloud.conf; the CSI controller (which needs the cloud
+# credential) runs on the management cluster (openstack-kamaji-cluster chart). Independent of
+# `openstack.enabled` on purpose: that flag also pushes the cloud credential into the cluster,
+# which this leg exists to avoid.
+csiCinderNode:
+  enabled: false
+  chart:
+    repo: https://kubernetes.github.io/cloud-provider-openstack
+    name: openstack-cinder-csi
+    version: 2.36.0
+  image:
+    repository: registry.menlo.ai/k8s-io/provider-os/cinder-csi-plugin
+    tag: v1.36.0
+  registrarImage:
+    repository: registry.menlo.ai/k8s-io/sig-storage/csi-node-driver-registrar
+    tag: v2.13.0
+  livenessProbeImage:
+    repository: registry.menlo.ai/k8s-io/sig-storage/livenessprobe
+    tag: v2.15.0
+  # Extra overrides for the upstream openstack-cinder-csi chart (node-only release).
+  values: {}
+  defaultStorageClass:
+    enabled: true
+    name: csi-cinder
+    isClusterDefault: true
+    reclaimPolicy: Delete
+    allowVolumeExpansion: true
+    volumeBindingMode: WaitForFirstConsumer
+    # The Cinder AZ / volume type / fstype for provisioned volumes (blank = cloud defaults).
+    availabilityZone: nova
+    volumeType:
+    fstype:
+
 custom: {}
   # # Indexed by the name of the release on the target cluster
   # my-custom-helm-release:

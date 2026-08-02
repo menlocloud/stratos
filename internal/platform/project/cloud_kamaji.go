@@ -352,16 +352,11 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 				return true
 			}
 		}
-		// The storage leg rides along: preserved when already present, and (for clusters created
-		// before storage shipped) added once the appcred check passes — never dropped by an
-		// addon edit, and never added for an admin-fallback cluster.
-		hasAppCred := ks.ClusterHasAppCred(r.Context(), proj.ID, cr.ExternalID)
+		// Rebuilt wholesale from the picks. A legacy `openstack` entry (the short-lived
+		// credential-push storage leg) is deliberately DROPPED here: the split CSI ships storage
+		// chart-side, and the pushed credential must not survive an addon edit.
 		err = ks.PatchClusterValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
-			prev, _ := values["addons"].(map[string]any)
-			block := kamaji.AddonValues(addons, hasAppCred)
-			if prevStorage, ok := prev["openstack"]; ok && block["openstack"] == nil {
-				block["openstack"] = prevStorage
-			}
+			block := kamaji.AddonValues(addons)
 			if len(block) == 0 {
 				delete(values, "addons") // back to the chart's defaults
 				return nil

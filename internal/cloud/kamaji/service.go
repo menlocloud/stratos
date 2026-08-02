@@ -461,9 +461,11 @@ func (s *Service) PatchClusterValues(ctx context.Context, clusterID string, muta
 }
 
 // SetChartVersion re-pins the cluster's Application onto a chart version (the "platform
-// update"). Values are untouched: ArgoCD re-renders the SAME desired state with the new chart —
-// which may roll the CCM or, when the machine-template output changes between chart versions,
-// the nodes (surge-first per the chart's rollout strategy).
+// update"). ArgoCD re-renders the SAME desired state with the new chart — which may roll the
+// CCM or, when the machine-template output changes between chart versions, the nodes
+// (surge-first per the chart's rollout strategy). One values cleanup rides along: a legacy
+// `addons.openstack` entry (the short-lived credential-push storage leg) is removed, so the
+// update that brings the split CSI also stops pushing the cloud credential into the cluster.
 func (s *Service) SetChartVersion(ctx context.Context, clusterID, version string) error {
 	if version == "" {
 		return fmt.Errorf("kamaji: chart version is required")
@@ -474,26 +476,16 @@ func (s *Service) SetChartVersion(ctx context.Context, clusterID, version string
 			return fmt.Errorf("kamaji: cluster %s: application carries no source", clusterID)
 		}
 		src["targetRevision"] = version
+		if addons, ok := dig(app, "spec", "source", "helm", "valuesObject", "addons").(map[string]any); ok {
+			delete(addons, "openstack")
+			if len(addons) == 0 {
+				if values, ok := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any); ok {
+					delete(values, "addons")
+				}
+			}
+		}
 		return nil
 	})
-}
-
-// ClusterHasAppCred reports whether the cluster runs on its own tenant-scoped application
-// credential (the mint annotations on its clouds.yaml secret) — the gate for pushing the
-// credential-consuming storage addon into the workload cluster. False on any doubt.
-func (s *Service) ClusterHasAppCred(ctx context.Context, projectID, clusterID string) bool {
-	secrets, err := s.api.ListSecrets(ctx, NamespaceFor(projectID), "")
-	if err != nil {
-		return false
-	}
-	want := CloudSecretName(clusterID)
-	for _, sec := range secrets {
-		if digStr(sec, "metadata", "name") != want {
-			continue
-		}
-		return digStr(sec, "metadata", "annotations", AnnotationAppCredID) != ""
-	}
-	return false
 }
 
 // ClusterPin is one managed cluster's chart pin — the admin bump surface's row.

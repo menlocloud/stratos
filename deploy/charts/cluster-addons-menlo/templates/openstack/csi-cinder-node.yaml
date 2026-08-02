@@ -1,0 +1,147 @@
+{{/*
+  =============================================================================
+  Cinder CSI — NODE-ONLY leg (credential isolation)
+  =============================================================================
+  Deploys ONLY the CSI node plugin (plus the default StorageClass) into the
+  workload cluster, with a cloud.conf that carries NO OpenStack credentials:
+  the node service never authenticates — it reads instance identity from the
+  metadata service / config drive and does local format/mount work. Verified
+  against cloud-provider-openstack: the openstack client is only constructed
+  when --provide-controller-service=true (cmd/cinder-csi-plugin/main.go), and
+  the node server methods use metadata + mount utilities exclusively.
+
+  The CONTROLLER half (provisioner/attacher/resizer + the plugin's controller
+  service, which does need the cloud credential) runs on the MANAGEMENT
+  cluster — see the openstack-kamaji-cluster chart's
+  templates/control-plane/csi-cinder-controller.yaml. The credential therefore
+  never enters the workload cluster.
+
+  Deliberately gated INDEPENDENTLY of `openstack.enabled`, which also pushes
+  the cloud credential into the cluster (cloud-config.yaml) — the whole point
+  of this leg is to never need that.
+*/}}
+{{- if .Values.csiCinderNode.enabled }}
+{{- $csi := .Values.csiCinderNode }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "cluster-addons.componentName" (list . "csi-cinder-node") }}-config
+  labels:
+    {{- include "cluster-addons.componentLabels" (list . "csi-cinder-node") | nindent 4 }}
+    addons.stackhpc.com/watch: ""
+stringData:
+  defaults: |
+    csi:
+      plugin:
+        # Node-only: the controller Deployment is rendered but pinned to zero
+        # replicas — the real controller runs on the management cluster with
+        # the credential and a kubeconfig for this cluster's api server.
+        controllerPlugin:
+          replicas: 0
+        nodePlugin:
+          # Run on every node, including tainted GPU/accelerator pools.
+          tolerations:
+            - operator: Exists
+        # This has to be non-empty or the chart fails to render.
+        volumes:
+          - name: cacert
+            emptyDir: {}
+        volumeMounts:
+          - name: cloud-config
+            mountPath: /etc/config
+            readOnly: true
+          - name: cloud-config
+            mountPath: /etc/kubernetes
+            readOnly: true
+      livenessprobe:
+        image:
+          repository: {{ $csi.livenessProbeImage.repository }}
+          tag: {{ $csi.livenessProbeImage.tag | quote }}
+      nodeDriverRegistrar:
+        image:
+          repository: {{ $csi.registrarImage.repository }}
+          tag: {{ $csi.registrarImage.tag | quote }}
+    image:
+      repository: {{ $csi.image.repository }}
+      tag: {{ $csi.image.tag | quote }}
+    secret:
+      enabled: true
+      create: false
+      name: csi-cinder-node-config
+    storageClass:
+      enabled: false
+    clusterID: {{ include "cluster-addons.clusterName" . }}
+  overrides: |
+    {{- toYaml $csi.values | nindent 4 }}
+---
+apiVersion: addons.stackhpc.com/v1alpha1
+kind: HelmRelease
+metadata:
+  name: {{ include "cluster-addons.componentName" (list . "csi-cinder-node") }}
+  labels: {{ include "cluster-addons.componentLabels" (list . "csi-cinder-node") | nindent 4 }}
+spec:
+  clusterName: {{ include "cluster-addons.clusterName" . }}
+  bootstrap: true
+  chart: {{ toYaml $csi.chart | nindent 4 }}
+  targetNamespace: {{ .Values.openstack.targetNamespace }}
+  releaseName: csi-cinder-node
+  valuesSources:
+    - secret:
+        name: {{ include "cluster-addons.componentName" (list . "csi-cinder-node") }}-config
+        key: defaults
+    - secret:
+        name: {{ include "cluster-addons.componentName" (list . "csi-cinder-node") }}-config
+        key: overrides
+---
+apiVersion: addons.stackhpc.com/v1alpha1
+kind: Manifests
+metadata:
+  name: {{ include "cluster-addons.componentName" (list . "csi-cinder-node") }}-manifests
+  labels: {{ include "cluster-addons.componentLabels" (list . "csi-cinder-node") | nindent 4 }}
+spec:
+  clusterName: {{ include "cluster-addons.clusterName" . }}
+  bootstrap: true
+  targetNamespace: {{ .Values.openstack.targetNamespace }}
+  releaseName: csi-cinder-node-manifests
+  manifestSources:
+    # The credential-FREE cloud.conf the node plugin mounts: [Metadata] only.
+    - template: |
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: csi-cinder-node-config
+        stringData:
+          cloud.conf: |
+            [Metadata]
+            search-order=configDrive,metadataService
+            [BlockStorage]
+            rescan-on-resize=true
+{{- if $csi.defaultStorageClass.enabled }}
+    - template: |
+        {{- with $csi.defaultStorageClass }}
+        apiVersion: storage.k8s.io/v1
+        kind: StorageClass
+        metadata:
+          name: {{ .name }}
+          {{- if .isClusterDefault }}
+          annotations:
+            storageclass.kubernetes.io/is-default-class: "true"
+          {{- end }}
+        provisioner: cinder.csi.openstack.org
+        parameters:
+          {{- with .availabilityZone }}
+          availability: {{ . }}
+          {{- end }}
+          {{- with .volumeType }}
+          type: {{ . }}
+          {{- end }}
+          {{- with .fstype }}
+          fstype: {{ . }}
+          {{- end }}
+        reclaimPolicy: {{ .reclaimPolicy }}
+        allowVolumeExpansion: {{ .allowVolumeExpansion }}
+        volumeBindingMode: {{ .volumeBindingMode }}
+        {{- end }}
+{{- end }}
+{{- end }}

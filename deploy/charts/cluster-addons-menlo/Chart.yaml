@@ -18,4 +18,4 @@ description: |
       0.27.0 switched its default to Traefik).
 name: cluster-addons-menlo
 type: application
-version: 0.27.2
+version: 0.28.0
