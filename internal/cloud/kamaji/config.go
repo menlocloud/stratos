@@ -127,11 +127,13 @@ type ClusterDefaults struct {
 // `addons.<key>.enabled`; everything else in the addons stack — the CNI, the CSI/credential
 // push, the mirror-registry pins — stays operator territory and is never client-writable.
 var ClusterAddons = map[string]bool{
-	"certManager":       false, // cert-manager (Let's Encrypt & friends)
-	"ingress":           false, // NGINX ingress controller
-	"metricsServer":     true,  // kubectl top / HPA metrics
-	"monitoring":        false, // kube-prometheus-stack + Loki (heavy)
-	"nvidiaGPUOperator": false, // driver/toolkit for NVIDIA GPU pools
+	"certManager":         false, // cert-manager (Let's Encrypt & friends)
+	"ingress":             false, // NGINX ingress controller
+	"metricsServer":       true,  // kubectl top / HPA metrics
+	"monitoring":          false, // kube-prometheus-stack + Loki (heavy)
+	"nodeProblemDetector": true,  // node faults (kernel hangs, bad disks) as Events; chart default is on
+	"nvidiaGPUOperator":   false, // driver/toolkit for NVIDIA GPU pools
+	"reloader":            false, // roll Deployments when watched ConfigMaps/Secrets change
 }
 
 // ClusterFQDN is the cluster's public API hostname (<clusterID>.<dnsZone>) — the name

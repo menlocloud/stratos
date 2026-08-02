@@ -182,10 +182,10 @@ cloud credential **never enters the workload cluster**:
 
 ## 2c. Add-ons, platform updates, rollouts
 
-- **Add-ons**: customers toggle a curated menu (Metrics Server on by default; cert-manager,
-  NGINX Ingress, Monitoring stack, NVIDIA GPU Operator opt-in) at create and later via
-  *Manage add-ons*. Unknown names 400 — the operator-only levers (CNI, the credential push,
-  the storage-class override) are not client-reachable.
+- **Add-ons**: customers toggle a curated menu (Metrics Server and Node Problem Detector on
+  by default; cert-manager, NGINX Ingress, Monitoring stack, NVIDIA GPU Operator, Reloader
+  opt-in) at create and later via *Manage add-ons*. Unknown names 400 — the operator-only
+  levers (CNI, the credential push, the storage-class override) are not client-reachable.
 - **CNI observability**: the CNI is Cilium with **Hubble and hubble-relay enabled by
   default** (chart ≥ 0.7.0) — every cluster has flow observability out of the box
   (`cilium hubble port-forward` + the `hubble` CLI against the relay). The Hubble UI stays
