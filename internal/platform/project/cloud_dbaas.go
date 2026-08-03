@@ -346,6 +346,7 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 			h.fail(w, httpx.BadRequest(fmt.Sprintf("version %q is not offered for engine %s", version, engine)))
 			return true
 		}
+		backedUp := false
 		err := ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
 			// Upward-only, validated against the LIVE values, not the cache — a stale sync must
 			// not let a downgrade through (the kamaji UPGRADE rule). The chart resolves the new
@@ -356,13 +357,17 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 				return httpx.BadRequest(err.Error())
 			}
 			values["engineVersion"] = version
+			// One patch, so the safety backup cannot be lost to a failed second call.
+			if dbaasWantsBackupFirst(data) {
+				backedUp = dbaas.StampBackupRun(values, dbaasBackupStamp())
+			}
 			return nil
 		})
 		if err != nil {
 			h.fail(w, err)
 			return true
 		}
-		httpx.OK(w, map[string]any{"result": "UPGRADING"})
+		httpx.OK(w, map[string]any{"result": "UPGRADING", "backupStarted": backedUp})
 		return true
 
 	case "RESTART":
@@ -510,12 +515,24 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 			h.fail(w, httpx.BadRequest(err.Error()))
 			return true
 		}
+		// Removing a database DROPS it (the reclaim policy is delete), so the same safety
+		// backup applies here — this is the other action that can lose data outright.
+		backedUp := false
+		if dbaasWantsBackupFirst(data) {
+			if err := ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+				backedUp = dbaas.StampBackupRun(values, dbaasBackupStamp())
+				return nil
+			}); err != nil {
+				h.fail(w, err)
+				return true
+			}
+		}
 		created, err := ds.SetAccess(r.Context(), proj.ID, cr.ExternalID, engine, dbs, users, roles)
 		if err != nil {
 			h.fail(w, err)
 			return true
 		}
-		httpx.OK(w, map[string]any{"result": "UPDATING", "credentials": created})
+		httpx.OK(w, map[string]any{"result": "UPDATING", "credentials": created, "backupStarted": backedUp})
 		return true
 
 	case "SET_BACKUP":
@@ -547,7 +564,7 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 	case "CREATE_BACKUP":
 		// Declarative "back up now": stamp a timestamp the chart turns into one extra run. Same
 		// path as every other change, so it survives a restart mid-flight.
-		if err := ds.TriggerBackup(r.Context(), cr.ExternalID, time.Now().UTC().Format("20060102-150405")); err != nil {
+		if err := ds.TriggerBackup(r.Context(), cr.ExternalID, dbaasBackupStamp()); err != nil {
 			h.fail(w, err)
 			return true
 		}
@@ -776,6 +793,17 @@ func dbaasSpecFromData(projectID string, d map[string]any) (dbaas.DatabaseSpec, 
 	}
 	return spec, nil
 }
+
+// dbaasWantsBackupFirst reads the opt-in safety-backup flag. Absent = no backup: a caller that
+// did not ask must never have one taken behind its back, since backups cost storage.
+func dbaasWantsBackupFirst(d map[string]any) bool {
+	b, _ := d["backupFirst"].(bool)
+	return b
+}
+
+// dbaasBackupStamp is the value CREATE_BACKUP and the safety backups share — a changed stamp is
+// what produces exactly one extra backup.
+func dbaasBackupStamp() string { return time.Now().UTC().Format("20060102-150405") }
 
 // dbaasSourceForRestore proves the restore source belongs to THIS project and matches the
 // engine being created. Cross-project recovery would be a data breach with a friendly UI, and

@@ -1318,3 +1318,34 @@ func TestRestoreFrom(t *testing.T) {
 		t.Error("a non-RFC3339 target time must be rejected")
 	}
 }
+
+// TestStampBackupRun pins the safety-backup helper: it rides an existing values patch, and it
+// is a NO-OP when backups are off — a risky change must never fail because the customer has no
+// object store configured.
+func TestStampBackupRun(t *testing.T) {
+	off := map[string]any{}
+	if StampBackupRun(off, "20260804-090000") {
+		t.Error("no backup block: must report that nothing was taken")
+	}
+	if _, has := off["backup"]; has {
+		t.Error("no backup block: must not invent one")
+	}
+	disabled := map[string]any{"backup": map[string]any{"enabled": false}}
+	if StampBackupRun(disabled, "20260804-090000") {
+		t.Error("backups disabled: must report that nothing was taken")
+	}
+	if _, has := disabled["backup"].(map[string]any)["runAt"]; has {
+		t.Error("backups disabled: must not stamp a run")
+	}
+	on := map[string]any{"backup": map[string]any{"enabled": true, "schedule": "0 2 * * *"}}
+	if !StampBackupRun(on, "20260804-090000") {
+		t.Fatal("backups on: must take one")
+	}
+	block := on["backup"].(map[string]any)
+	if block["runAt"] != "20260804-090000" {
+		t.Errorf("runAt = %v", block["runAt"])
+	}
+	if block["schedule"] != "0 2 * * *" {
+		t.Error("the rest of the backup posture must survive")
+	}
+}

@@ -1124,6 +1124,7 @@ function DatabaseDetail({
   const [platformOpen, setPlatformOpen] = useState(false)
   const [accessOpen, setAccessOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
+  const backupsOn = (d.backup as BackupState | undefined)?.enabled === true
   const [policiesOpen, setPoliciesOpen] = useState(false)
   // MANAGE_ACCESS returns a password per NEWLY declared user, exactly once.
   const [newCredentials, setNewCredentials] = useState<Record<string, string> | null>(null)
@@ -1292,6 +1293,19 @@ function DatabaseDetail({
           {supports(engine, "BACKUP") && backupConfigured && (
             <Button size="sm" variant="outline" onClick={() => setBackupOpen(true)}>Backups</Button>
           )}
+          {supports(engine, "BACKUP") && backupsOn && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                act("CREATE_BACKUP")
+                  .then(() => toast.success("Backup started"))
+                  .catch((e: Error) => toast.error(e.message))
+              }
+            >
+              Back up now
+            </Button>
+          )}
           {supports(engine, "MANAGE_ACCESS") && (
             <Button size="sm" variant="outline" onClick={() => setAccessOpen(true)}>
               {engine === "opensearch" ? "Users & roles" : "Databases & users"}
@@ -1369,11 +1383,12 @@ function DatabaseDetail({
           engine={engine}
           current={String(d.version ?? "")}
           offered={(engines[engine]?.versions ?? []).filter(Boolean)}
+          backupsOn={backupsOn}
           onClose={() => setUpgradeOpen(false)}
-          onSubmit={async (version) => {
-            await act("UPGRADE", { version })
+          onSubmit={async (version, backupFirst) => {
+            await act("UPGRADE", { version, backupFirst })
             onPatch({ version, status: "PROGRESSING" })
-            toast.success("Upgrade started")
+            toast.success(backupFirst ? "Backup and upgrade started" : "Upgrade started")
             setUpgradeOpen(false)
           }}
         />
@@ -1421,6 +1436,7 @@ function DatabaseDetail({
           users={((d.users as AccessUser[]) ?? [])}
           roles={((d.os_roles as AccessRole[]) ?? [])}
           onClose={() => setAccessOpen(false)}
+          backupsOn={backupsOn}
           onSubmit={async (body) => {
             const res = await act("MANAGE_ACCESS", body)
             onPatch({ databases: body.databases, users: body.users, os_roles: body.roles, sync_status: "OutOfSync" })
@@ -1739,19 +1755,22 @@ function ResizeStorageDialog({
 }
 
 function UpgradeVersionDialog({
-  engine, current, offered, onClose, onSubmit,
+  engine, current, offered, backupsOn, onClose, onSubmit,
 }: {
   engine: string
   current: string
   offered: string[]
+  backupsOn: boolean
   onClose: () => void
-  onSubmit: (version: string) => Promise<void>
+  onSubmit: (version: string, backupFirst: boolean) => Promise<void>
 }) {
   // Only strictly newer catalog versions are valid targets — the server rejects anything else.
   const targets = offered.filter((v) => versionGt(v, current))
   const [sel, setSel] = useState("")
   const version = targets.includes(sel) ? sel : targets[0] ?? ""
   const [pending, setPending] = useState(false)
+  // Default ON for the one action that cannot be undone.
+  const [backupFirst, setBackupFirst] = useState(backupsOn)
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
@@ -1782,12 +1801,15 @@ function UpgradeVersionDialog({
             endpoint does not change. Downgrades are not possible.
           </p>
         </div>
+        {backupsOn && (
+          <BackupFirstToggle on={backupFirst} setOn={setBackupFirst} what="the upgrade" />
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button
             onClick={() => {
               setPending(true)
-              onSubmit(version)
+              onSubmit(version, backupFirst && backupsOn)
                 .catch((e: Error) => toast.error(e.message))
                 .finally(() => setPending(false))
             }}
@@ -2052,14 +2074,15 @@ const OPENSEARCH_ROLES = [
 const IDENT_RE = /^[a-z][a-z0-9_]{0,30}$/
 
 function AccessDialog({
-  engine, databases, users, roles, onClose, onSubmit, onRotate,
+  engine, databases, users, roles, backupsOn, onClose, onSubmit, onRotate,
 }: {
   engine: string
   databases: AccessDatabase[]
   users: AccessUser[]
   roles: AccessRole[]
   onClose: () => void
-  onSubmit: (body: { databases: AccessDatabase[]; users: AccessUser[]; roles: AccessRole[] }) => Promise<void>
+  backupsOn: boolean
+  onSubmit: (body: { databases: AccessDatabase[]; users: AccessUser[]; roles: AccessRole[]; backupFirst?: boolean }) => Promise<void>
   onRotate: (username: string) => Promise<void>
 }) {
   const isSearch = engine === "opensearch"
@@ -2072,8 +2095,12 @@ function AccessDialog({
   const [newRolePatterns, setNewRolePatterns] = useState("")
   const [newRoleActions, setNewRoleActions] = useState<string[]>(["read"])
   const [pending, setPending] = useState(false)
+  const [backupFirst, setBackupFirst] = useState(true)
 
   const existing = new Set(users.map((u) => u.name))
+  // Removing a database DROPS it — that is the only shape of this change that loses data, so
+  // the safety backup is offered exactly then rather than on every rename.
+  const removesData = databases.some((d) => !dbs.find((x) => x.name === d.name))
   const addDb = () => {
     const name = newDb.trim()
     if (!IDENT_RE.test(name)) return toast.error("Use lower-case letters, digits and underscores; start with a letter")
@@ -2254,6 +2281,10 @@ function AccessDialog({
             </div>
           </div>
 
+          {backupsOn && removesData ? (
+            <BackupFirstToggle on={backupFirst} setOn={setBackupFirst} what="the change" />
+          ) : null}
+
           <p className="text-xs text-muted-foreground">
             Removing an entry here removes it on the database — for a database that also drops its
             data. Passwords are stored only on the database cluster; rotate to get a new one.
@@ -2269,6 +2300,7 @@ function AccessDialog({
               const payload = {
                 databases: isSearch ? [] : dbs,
                 roles: isSearch ? rs : [],
+                ...(backupsOn && removesData && backupFirst ? { backupFirst: true } : {}),
                 users: us.map((u) => ({
                   name: u.name,
                   ...(isSearch ? { roles: u.roles ?? [] } : { databases: u.databases ?? [] }),
@@ -2322,6 +2354,32 @@ function NewCredentialsDialog({ creds, onClose }: { creds: Record<string, string
 }
 
 type BackupState = { enabled?: boolean; schedule?: string; retentionDays?: number }
+
+// The opt-in safety backup offered before the two actions that can lose data. Deliberately NOT
+// a promise that the change waits for the backup: gating on completion would let one stuck
+// backup block every later change to the database. Continuous archiving is the real guarantee —
+// recovery lands on the second before the change either way; the extra base backup just
+// shortens the replay.
+function BackupFirstToggle({
+  on, setOn, what,
+}: {
+  on: boolean
+  setOn: (v: boolean) => void
+  what: string
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-lg border p-3">
+      <div>
+        <Label htmlFor="bf-toggle" className="text-sm font-medium">Take a backup first</Label>
+        <div className="text-xs text-muted-foreground">
+          Starts a backup alongside {what}. Recovery to any moment before this already works
+          while backups are on; this just makes it faster.
+        </div>
+      </div>
+      <Switch id="bf-toggle" checked={on} onCheckedChange={setOn} />
+    </div>
+  )
+}
 // One row of backup history, as ListBackups normalises it across the three operators.
 type BackupRun = {
   name: string

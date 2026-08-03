@@ -691,6 +691,26 @@ func (s *Service) SetBackup(ctx context.Context, projectID, dbID string, spec Ba
 	return nil
 }
 
+// StampBackupRun adds an out-of-schedule backup to a values document a caller is ALREADY
+// mutating, so a risky change and its safety backup land in ONE patch instead of racing two.
+// No-op when backups are off — a change must never fail because the customer has no object
+// store; the caller decides whether to say so.
+//
+// This does NOT hold the change until the backup finishes, and pretending otherwise would be
+// the dangerous version: gating on completion would mean a stuck backup silently blocks every
+// later change to the database. The real guarantee is continuous archiving — with WAL/binlog
+// shipping on, recovery can land on the second BEFORE the change regardless of when the base
+// backup completed. The extra base backup just shortens the replay.
+func StampBackupRun(values map[string]any, stamp string) bool {
+	block, _ := values["backup"].(map[string]any)
+	if block == nil || block["enabled"] != true {
+		return false
+	}
+	block["runAt"] = stamp
+	values["backup"] = block
+	return true
+}
+
 // TriggerBackup runs an out-of-schedule backup by stamping values.backup.runAt. Every engine
 // template turns a CHANGED value into one extra backup (a new CNPG Backup CR named after the
 // stamp, mariadb's schedule.onDemand identifier, a Percona backup CR), so "back up now" needs
