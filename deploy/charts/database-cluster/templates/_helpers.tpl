@@ -81,6 +81,19 @@ stratos.io/display-name: {{ . | quote }}
 {{- end }}
 
 {{/*
+Platform DNS name of the main endpoint: <resourceId>.<dnsZone>. Empty string
+when the provider has no zone — callers gate on it with `with`/`if`. The
+Dashboards (-dash) and kafka broker (-b<N>) names are derived inline at their
+templates from the same two parts. Derivation twin:
+internal/cloud/dbaas/config.go HostnameFor — change both together.
+*/}}
+{{- define "database-cluster.dnsName" -}}
+{{- if .Values.network.dnsZone -}}
+{{- printf "%s.%s" (include "database-cluster.name" .) .Values.network.dnsZone -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Engine -> client port. The single port the LB Service exposes (for kafka —
 whose LB Services are Strimzi-owned, not chart-owned — this is the external
 listener port, used by the NetworkPolicy).

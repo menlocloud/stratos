@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -262,6 +263,9 @@ func TestSpecValidate(t *testing.T) {
 	s.Replicas = 5
 	cases["replicas off catalog"] = s
 	s = testSpec(EnginePostgreSQL, "17")
+	s.DashboardsEnabled = true
+	cases["dashboards on non-opensearch"] = s
+	s = testSpec(EnginePostgreSQL, "17")
 	s.CPU = 64
 	cases["cpu over limit"] = s
 	s = testSpec(EnginePostgreSQL, "17")
@@ -360,6 +364,51 @@ func TestBuildValues(t *testing.T) {
 	v := BuildValues(cfg, testSpec(EnginePostgreSQL, "17"))
 	if _, has := v["storage"].(map[string]any)["storageClassName"]; has {
 		t.Error("empty storage class must be omitted")
+	}
+	// Dashboards: opensearch-only opt-in block; absent otherwise (SET_SSO patches it later,
+	// an unconditional key would fight that patch).
+	os := testSpec(EngineOpenSearch, "3.3.0")
+	if _, has := BuildValues(cfg, os)["opensearch"]; has {
+		t.Error("opensearch key must be absent when dashboards are off")
+	}
+	os.DashboardsEnabled = true
+	dash := BuildValues(cfg, os)["opensearch"].(map[string]any)["dashboards"].(map[string]any)
+	if dash["enabled"] != true {
+		t.Errorf("dashboards block = %v, want enabled true", dash)
+	}
+	// DNS/TLS: no zone (testConfig) = no dnsZone/certIssuer keys anywhere; zone+issuer = both
+	// emitted (network.dnsZone for every engine, opensearch.certIssuer for opensearch).
+	if _, has := BuildValues(cfg, testSpec(EnginePostgreSQL, "17"))["network"].(map[string]any)["dnsZone"]; has {
+		t.Error("network.dnsZone must be absent without a provider zone")
+	}
+	dnsCfg := cfg
+	dnsCfg.DNSZone, dnsCfg.CertIssuer = "db.example.com", "letsencrypt-dns"
+	if z := BuildValues(dnsCfg, testSpec(EnginePostgreSQL, "17"))["network"].(map[string]any)["dnsZone"]; z != "db.example.com" {
+		t.Errorf("network.dnsZone = %v, want db.example.com", z)
+	}
+	osv := BuildValues(dnsCfg, testSpec(EngineOpenSearch, "3.3.0"))["opensearch"].(map[string]any)
+	if osv["certIssuer"] != "letsencrypt-dns" {
+		t.Errorf("opensearch.certIssuer = %v, want letsencrypt-dns", osv["certIssuer"])
+	}
+	if _, has := BuildValues(dnsCfg, testSpec(EngineMySQL, "8.4"))["opensearch"]; has {
+		t.Error("opensearch block must stay opensearch-only")
+	}
+	if h := dnsCfg.HostnameFor("std-abc"); h != "std-abc.db.example.com" {
+		t.Errorf("HostnameFor = %q", h)
+	}
+	if h := cfg.HostnameFor("std-abc"); h != "" {
+		t.Errorf("HostnameFor without zone = %q, want empty", h)
+	}
+}
+
+// TestReplicaChoices pins the unconfigured default (single node or the HA trio) and that an
+// explicit offer wins.
+func TestReplicaChoices(t *testing.T) {
+	if got := (EngineOffer{}).ReplicaChoices(); !slices.Equal(got, []int{1, 3}) {
+		t.Errorf("default choices = %v, want [1 3]", got)
+	}
+	if got := (EngineOffer{Replicas: []int{3}}).ReplicaChoices(); !slices.Equal(got, []int{3}) {
+		t.Errorf("explicit choices = %v, want [3]", got)
 	}
 }
 

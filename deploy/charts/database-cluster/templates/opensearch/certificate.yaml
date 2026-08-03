@@ -1,0 +1,31 @@
+{{- if and (eq .Values.engine "opensearch") .Values.opensearch.certIssuer .Values.network.dnsZone (not .Values.opensearch.customDomain) }}
+{{/*
+Real certificate for the platform DNS names (API 9200 + Dashboards), replacing
+the operator's self-signed pair — see the tls precedence in
+opensearchcluster.yaml. DNS-01 only: the VIP is a private tenant-subnet IP, an
+HTTP-01 challenge could never reach it, so the referenced ClusterIssuer
+(provider config.database.certIssuer) must hold DNS credentials for the zone.
+Skipped entirely under a customer BYO domain — their secret replaces this one
+and an unused Certificate would still burn issuer quota on renewals.
+
+The Dashboards SAN is unconditional: certificates are immutable once issued,
+and enabling Dashboards later (SET_SSO auto-enable) must not need a reissue.
+*/}}
+{{- $name := include "database-cluster.name" . }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}-tls
+  labels:
+    {{- include "database-cluster.labels" . | nindent 4 }}
+  annotations:
+    {{- include "database-cluster.annotations" . | nindent 4 }}
+spec:
+  secretName: {{ $name }}-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ .Values.opensearch.certIssuer }}
+  dnsNames:
+    - {{ include "database-cluster.dnsName" . }}
+    - {{ printf "%s-dash.%s" $name .Values.network.dnsZone }}
+{{- end }}

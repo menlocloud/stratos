@@ -62,6 +62,11 @@ The Lua health checks are load-bearing: the LB Service's built-in health keeps a
 endpoint — and a missing engine-CRD check would leave Applications Healthy while the database
 is degraded.
 
+Optional, only for the DNS/TLS features (§ Provider registration): **external-dns** watching
+Services (publishes `<id>.<zone>` A records off the chart-stamped hostname annotations) and
+**cert-manager** with a ClusterIssuer that solves **DNS-01** for the zone (the VIPs are private
+tenant-subnet IPs — an HTTP-01 challenge can never reach them).
+
 ## Provider registration
 
 Admin UI → System → Cloud providers → Add provider → **Database (DBaaS)**, or `POST
@@ -77,6 +82,16 @@ Admin UI → System → Cloud providers → Add provider → **Database (DBaaS)*
 - `config.database.memberSubnetId` — the DB-cluster node subnet
   (`loadbalancer.openstack.org/member-subnet-id` on every LB).
 - `config.database.engines` — the curated catalog (versions / default / replicas / `beta`).
+  Replica choices default to `[1, 3]` (single node or the HA trio) and are capped at 3
+  platform-wide; the admin form restricts them per engine with an `@` suffix
+  (`kafka=4.3.0@3`). More than 3 is a deliberate future release, not a config knob.
+- `config.database.dnsZone` (optional) — platform DNS: every database gets `<id>.<zone>`
+  (`-dash` for Dashboards, `-b<N>` per kafka broker — kafka brokers then advertise those names)
+  as an A record to its private VIP, and connection info returns the name instead of the IP.
+- `config.database.certIssuer` (optional, with `dnsZone`) — cert-manager ClusterIssuer name;
+  OpenSearch API + Dashboards then serve a real certificate (`<id>-tls`) for the platform name
+  instead of the operator's self-signed pair. Other engines are raw TCP — an A record is all
+  they need.
 - `config.services.database.<region> = true` — un-hides the client Databases surface.
 
 Seed example: `deploy/seed/external-service-dev.json` (`svc-dbaas-dev`).
@@ -120,7 +135,8 @@ sequenceDiagram
 
 - **Create** — client `POST /project/{id}/cloud` `{type: DATABASE_CLUSTER, data: {name,
   engine, version, replicas, cpu, memoryGiB, storageGiB, networkId, subnetId, allowedCidrs,
-  beta?}}`. Order: namespace (+ its `stratos-default-deny` NetworkPolicy) → net-share marker →
+  beta?, dashboards?}}` (`dashboards` — opensearch only — deploys OpenSearch Dashboards with
+  its own `<id>-dash-lb` endpoint; `SET_SSO` also enables it, SSO rides Dashboards). Order: namespace (+ its `stratos-default-deny` NetworkPolicy) → net-share marker →
   neutron RBAC share → (mariadb/valkey) stratos-owned `<id>-auth` secret → Application —
   marker BEFORE share, so a crash mid-create always leaves a record the sweep converges on.
   Status PENDING → PROGRESSING → READY as ArgoCD converges and the VIP is programmed
@@ -132,7 +148,12 @@ sequenceDiagram
   and ferretdb [frontend/DocumentDB images are a pinned matched pair]), `RESTART`, `RESET_PASSWORD`
   (returned once), `SET_ALLOWED_CIDRS`, `SET_SSO` (opensearch only: Dashboards OIDC against a
   **public** IdP client — no client secret is ever stored; API-side securityconfig wiring is a
-  live-drill item). Engine-gated via `dbaas.Capabilities` — verify each mechanism live before
+  live-drill item), `SET_CUSTOM_DOMAIN` (opensearch only: BYO domain + certificate —
+  `{domain, certPem, keyPem, caPem?}`, validated key-matches-cert/covers-domain/not-expired,
+  written straight to the cluster secret `<id>-custom-tls` and mounted on the http layer +
+  Dashboards; **no ACME** — the customer certifies their own name and points DNS at the
+  endpoint themselves (CNAME to the platform name or an A record to the VIP); empty domain
+  removes it). Engine-gated via `dbaas.Capabilities` — verify each mechanism live before
   widening the map.
 - **Delete** — Application delete only; the ArgoCD resources-finalizer cascades the chart, the
   LB Service delete tears the Octavia LB (and its tenant-subnet port) down. The periodic sweep

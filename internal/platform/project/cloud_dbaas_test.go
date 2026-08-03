@@ -1,8 +1,16 @@
 package project
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDbaasSpecFromData(t *testing.T) {
@@ -73,5 +81,58 @@ func TestDbaasCIDRs(t *testing.T) {
 	}
 	if _, err := dbaasCIDRs("10.0.0.0/8"); err == nil {
 		t.Fatal("non-array must be rejected")
+	}
+}
+
+// TestValidateCustomDomainTLS covers the BYO-cert gate: key must match, name must be covered,
+// expiry enforced, domain shape checked. Certs are minted in-test — no fixtures to go stale.
+func TestValidateCustomDomainTLS(t *testing.T) {
+	mint := func(dnsName string, notAfter time.Time) (certPEM, keyPEM string) {
+		t.Helper()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject:      pkix.Name{CommonName: dnsName},
+			DNSNames:     []string{dnsName},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     notAfter,
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyDER, err := x509.MarshalECPrivateKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+			string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	}
+
+	good, goodKey := mint("search.example.com", time.Now().Add(24*time.Hour))
+	if err := validateCustomDomainTLS("search.example.com", good, goodKey); err != nil {
+		t.Fatalf("valid bundle rejected: %v", err)
+	}
+	if err := validateCustomDomainTLS("other.example.com", good, goodKey); err == nil {
+		t.Fatal("cert not covering the domain must be rejected")
+	}
+	expired, expiredKey := mint("search.example.com", time.Now().Add(-time.Minute))
+	if err := validateCustomDomainTLS("search.example.com", expired, expiredKey); err == nil {
+		t.Fatal("expired cert must be rejected")
+	}
+	_, otherKey := mint("search.example.com", time.Now().Add(24*time.Hour))
+	if err := validateCustomDomainTLS("search.example.com", good, otherKey); err == nil {
+		t.Fatal("mismatched key must be rejected")
+	}
+	for _, bad := range []string{"", "singlelabel", "UPPER.example.com", "-bad.example.com", "a b.example.com"} {
+		if err := validateCustomDomainTLS(bad, good, goodKey); err == nil {
+			t.Fatalf("domain %q must be rejected", bad)
+		}
+	}
+	if err := validateCustomDomainTLS("search.example.com", "", ""); err == nil {
+		t.Fatal("missing PEM material must be rejected")
 	}
 }

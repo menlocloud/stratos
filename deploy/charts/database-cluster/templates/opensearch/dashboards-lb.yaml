@@ -26,6 +26,9 @@ metadata:
     loadbalancer.openstack.org/member-subnet-id: {{ .Values.network.memberSubnetId | quote }}
     # Internal LB — see the annotation note in service-lb.yaml.
     service.beta.kubernetes.io/openstack-internal-load-balancer: "true"
+    {{- if .Values.network.dnsZone }}
+    external-dns.alpha.kubernetes.io/hostname: {{ printf "%s-dash.%s" $name .Values.network.dnsZone }}
+    {{- end }}
     {{- with .Values.network.extraAnnotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

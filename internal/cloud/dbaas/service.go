@@ -475,6 +475,14 @@ func (s *Service) ConnectionInfo(ctx context.Context, projectID, dbID string) (C
 	if info.Host == "" {
 		return ConnInfo{}, fmt.Errorf("dbaas: database %s: endpoint not ready yet (load balancer still provisioning)", dbID)
 	}
+	// DNS names beat the raw VIP once the endpoint exists (the VIP read above stays the
+	// readiness gate — external-dns publishes off the same Service status). A customer domain
+	// (opensearch BYO cert) beats the platform name: that is what their certificate is for.
+	if custom := digStr(app, "spec", "source", "helm", "valuesObject", "opensearch", "customDomain"); custom != "" {
+		info.Host = custom
+	} else if platform := s.cfg.HostnameFor(dbID); platform != "" {
+		info.Host = platform
+	}
 	info.URI = URI(engine, info.Username, info.Password, info.Host, info.Port, info.DBName)
 	return info, nil
 }
@@ -504,6 +512,29 @@ func (s *Service) ResetPassword(ctx context.Context, projectID, dbID, engine str
 		return "", fmt.Errorf("dbaas: rotate password: %w", err)
 	}
 	return password, nil
+}
+
+// SetCustomDomainTLS writes the stratos-owned BYO-certificate secret <id>-custom-tls (keys
+// tls.crt/tls.key, plus ca.crt when a chain is supplied) that the chart mounts on opensearch's
+// http layer and Dashboards. PEM material goes straight to the cluster — never into stratos
+// storage, values, or logs. Stratos-owned like the auth secret, so a same-manager re-apply on
+// rotation is safe.
+func (s *Service) SetCustomDomainTLS(ctx context.Context, projectID, dbID, certPEM, keyPEM, caPEM string) error {
+	data := map[string]string{"tls.crt": certPEM, "tls.key": keyPEM}
+	if caPEM != "" {
+		data["ca.crt"] = caPEM
+	}
+	return s.api.ApplySecret(ctx, NamespaceFor(projectID), CustomTLSSecretName(dbID), data,
+		map[string]string{LabelProject: projectID, LabelService: s.serviceID, LabelManagedBy: ManagedByValue}, nil)
+}
+
+// DeleteCustomDomainTLS removes the BYO-certificate secret (custom domain turned off).
+func (s *Service) DeleteCustomDomainTLS(ctx context.Context, projectID, dbID string) error {
+	err := s.api.DeleteSecret(ctx, NamespaceFor(projectID), CustomTLSSecretName(dbID))
+	if kamajik8s.NotFound(err) {
+		return nil
+	}
+	return err
 }
 
 // lbHost reads the Octavia VIP off the named LB Service ("" while still provisioning).

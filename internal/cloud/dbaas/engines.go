@@ -27,14 +27,17 @@ const (
 type EngineOffer struct {
 	Versions []string
 	Default  string
-	Replicas []int // allowed instance counts; empty = {1}
+	Replicas []int // allowed instance counts; empty = {1, 3}
 	Beta     bool  // pre-GA operator: create requires an explicit beta acknowledgment
 }
 
-// ReplicaChoices is the allowed instance-count set ({1} when unconfigured).
+// ReplicaChoices is the allowed instance-count set. Unconfigured = {1, 3}: single node or the
+// classic HA trio — every engine chart is HA-capable (CNPG instances / Percona GR / mariadb
+// replication+HAProxy / opensearch nodes / KRaft pool). The platform caps counts at 3
+// (DbaasConfig drops larger values at parse); >3 is a deliberate future release, not a config.
 func (o EngineOffer) ReplicaChoices() []int {
 	if len(o.Replicas) == 0 {
-		return []int{1}
+		return []int{1, 3}
 	}
 	return o.Replicas
 }
@@ -68,7 +71,7 @@ var Capabilities = map[string]map[string]bool{
 	EngineMariaDB:    {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false, "SET_AUTOSCALE": true},
 	EngineFerretDB:   {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": false, "SET_AUTOSCALE": true},
-	EngineOpenSearch: {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_AUTOSCALE": true},
+	EngineOpenSearch: {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_CUSTOM_DOMAIN": true, "SET_AUTOSCALE": true},
 	EngineKafka:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 }
 

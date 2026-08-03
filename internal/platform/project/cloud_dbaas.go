@@ -10,11 +10,15 @@ package project
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/menlocloud/stratos/internal/cloud"
@@ -192,7 +196,7 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 	}
 
 	switch action {
-	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO", "SET_AUTOSCALE":
+	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO", "SET_CUSTOM_DOMAIN", "SET_AUTOSCALE":
 		if !known[action] {
 			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support %s", engine, action)))
 			return true
@@ -428,7 +432,63 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 			} else {
 				sso["enabled"] = true
 				block["sso"] = sso
+				// SSO rides Dashboards: the chart reads the sso block only when dashboards are
+				// enabled, so setting SSO on a dashboards-less database deploys them too.
+				// Disabling SSO deliberately does NOT tear the Dashboards down.
+				block["dashboards"] = map[string]any{"enabled": true}
 			}
+			values["opensearch"] = block
+			return nil
+		})
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
+		return true
+
+	case "SET_CUSTOM_DOMAIN":
+		// BYO domain + certificate (opensearch): the customer certifies their own name — no
+		// ACME anywhere. Their DNS points at the endpoint (CNAME to the platform name, or an A
+		// record to the VIP); we mount their cert on the http layer + Dashboards. PEM material
+		// goes straight into the cluster secret — never into stratos storage, values, or logs.
+		// Empty domain = remove (values key + secret; the operator falls back per the chart's
+		// tls precedence).
+		domain := strings.ToLower(strings.TrimSpace(strAny(data["domain"])))
+		if domain == "" {
+			if err := ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+				if block, _ := values["opensearch"].(map[string]any); block != nil {
+					delete(block, "customDomain")
+				}
+				return nil
+			}); err != nil {
+				h.fail(w, err)
+				return true
+			}
+			if err := ds.DeleteCustomDomainTLS(r.Context(), proj.ID, cr.ExternalID); err != nil {
+				h.fail(w, err)
+				return true
+			}
+			httpx.OK(w, map[string]any{"result": "UPDATING"})
+			return true
+		}
+		certPEM, keyPEM := strAny(data["certPem"]), strAny(data["keyPem"])
+		if err := validateCustomDomainTLS(domain, certPEM, keyPEM); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		// Secret BEFORE the values flip — the wrong order points the operator at a secret that
+		// does not exist yet and wedges the rollout.
+		if err := ds.SetCustomDomainTLS(r.Context(), proj.ID, cr.ExternalID, certPEM, keyPEM, strAny(data["caPem"])); err != nil {
+			h.fail(w, err)
+			return true
+		}
+		err := ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+			block, _ := values["opensearch"].(map[string]any)
+			if block == nil {
+				block = map[string]any{}
+			}
+			block["customDomain"] = domain
 			values["opensearch"] = block
 			return nil
 		})
@@ -485,7 +545,7 @@ var errDbaasReadOnly = fmt.Errorf("dbaas: read-only")
 // dbaasSpecFromData maps the client create body → DatabaseSpec. Body shape:
 //
 //	{name, engine, version, replicas, cpu, memoryGiB, storageGiB, storageClass?,
-//	 networkId, subnetId, allowedCidrs:[...], beta?}
+//	 networkId, subnetId, allowedCidrs:[...], beta?, dashboards?}
 //
 // Strict on what it reads (numbers must be numbers — intAny's zero would otherwise turn a typo
 // into "replicas 0" and a confusing catalog error); unknown keys are ignored like every other
@@ -536,7 +596,45 @@ func dbaasSpecFromData(projectID string, d map[string]any) (dbaas.DatabaseSpec, 
 		}
 		spec.BetaAck = b
 	}
+	if raw, has := d["dashboards"]; has && raw != nil {
+		b, ok := raw.(bool)
+		if !ok {
+			return spec, fmt.Errorf("dashboards must be true or false")
+		}
+		spec.DashboardsEnabled = b
+	}
 	return spec, nil
+}
+
+// dbaasDomainRE: lowercase DNS name, at least two labels — the shape a public certificate can
+// actually be issued for.
+var dbaasDomainRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+// validateCustomDomainTLS rejects a BYO cert bundle that could not serve the domain: key must
+// match the cert, the leaf must cover the name and must not be expired. Chain/CA trust is NOT
+// verified — the customer chose their issuer; browsers judge the chain, not us.
+func validateCustomDomainTLS(domain, certPEM, keyPEM string) error {
+	if !dbaasDomainRE.MatchString(domain) || len(domain) > 253 {
+		return fmt.Errorf("domain %q is not a valid DNS name", domain)
+	}
+	if certPEM == "" || keyPEM == "" {
+		return fmt.Errorf("certPem and keyPem are required")
+	}
+	pair, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	if err != nil {
+		return fmt.Errorf("certificate/key pair rejected: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("certificate rejected: %v", err)
+	}
+	if err := leaf.VerifyHostname(domain); err != nil {
+		return fmt.Errorf("certificate does not cover %s: %v", domain, err)
+	}
+	if time.Now().After(leaf.NotAfter) {
+		return fmt.Errorf("certificate expired %s", leaf.NotAfter.Format(time.RFC3339))
+	}
+	return nil
 }
 
 // dbaasCIDRsStrings decodes an allowedCidrs array; blanks are skipped, non-strings rejected.

@@ -51,12 +51,32 @@ spec:
       # operator's default config on first boot.
       plugins.security.allow_default_init_securityindex: "true"
   security:
-    # Operator-generated TLS on both layers; the chart LB (service-lb.yaml)
-    # passes 9200 through as TCP — clients speak HTTPS end to end.
+    # http-layer TLS precedence — the LB (service-lb.yaml) stays TCP
+    # passthrough in every case, clients speak HTTPS end to end:
+    #   1. customer BYO domain -> their cert (<id>-custom-tls, written by
+    #      SET_CUSTOM_DOMAIN — never via values)
+    #   2. platform DNS + issuer -> real cert (<id>-tls, certificate.yaml)
+    #   3. neither -> operator-generated self-signed (original posture)
+    # Transport layer ALWAYS stays operator-generated: it is node-to-node
+    # only, and the security plugin pins those certs (nodes_dn) — a public
+    # cert there breaks cluster formation, not hardens it.
+    # TODO-verify(drill): secret.name is the operator 3.x custom-cert shape
+    # for BOTH layers-of-use below (security.tls.http and dashboards.tls);
+    # the secret needs tls.crt/tls.key (+ ca.crt when a chain is split out).
     # NO security.config here — see header (admin secret generation).
     tls:
       http:
+        {{- if .Values.opensearch.customDomain }}
+        generate: false
+        secret:
+          name: {{ $name }}-custom-tls
+        {{- else if and .Values.opensearch.certIssuer .Values.network.dnsZone }}
+        generate: false
+        secret:
+          name: {{ $name }}-tls
+        {{- else }}
         generate: true
+        {{- end }}
       transport:
         generate: true
         perNode: true
@@ -79,9 +99,21 @@ spec:
     enable: true
     replicas: 1
     version: {{ .Values.engineVersion | quote }}
+    # Same cert precedence as security.tls.http above (the platform cert's
+    # SAN list carries <id>-dash.<zone> for exactly this).
     tls:
       enable: true
+      {{- if .Values.opensearch.customDomain }}
+      generate: false
+      secret:
+        name: {{ $name }}-custom-tls
+      {{- else if and .Values.opensearch.certIssuer .Values.network.dnsZone }}
+      generate: false
+      secret:
+        name: {{ $name }}-tls
+      {{- else }}
       generate: true
+      {{- end }}
     # Fixed small size: Dashboards is a stateless UI, not the product the
     # customer sizes — resources.cpu/memoryGi buy DB nodes only.
     resources:

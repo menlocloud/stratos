@@ -26,6 +26,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -562,6 +563,8 @@ function DatabaseFormDialog({
   const allowedReplicas = offer.replicas?.length ? offer.replicas : [1, 3]
   const [replicasSel, setReplicasSel] = useState("")
   const replicas = allowedReplicas.includes(Number(replicasSel)) ? Number(replicasSel) : allowedReplicas[0]
+  // OpenSearch only: deploy Dashboards (own private endpoint). Ignored for other engines.
+  const [dashboards, setDashboards] = useState(false)
 
   const [preset, setPreset] = useState<string>("S")
   const [cpu, setCpu] = useState(String(SIZE_PRESETS[0].cpu))
@@ -614,6 +617,7 @@ function DatabaseFormDialog({
           : {}),
         // The server refuses a beta engine without the explicit acknowledgement.
         ...(offer.beta ? { beta: true } : {}),
+        ...(engine === "opensearch" && dashboards ? { dashboards: true } : {}),
       })
     } catch (e) {
       toast.error((e as Error).message)
@@ -734,6 +738,19 @@ function DatabaseFormDialog({
               </Select>
             </div>
           </div>
+
+          {engine === "opensearch" ? (
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div>
+                <Label htmlFor="db-dashboards" className="text-sm font-medium">OpenSearch Dashboards</Label>
+                <div className="text-xs text-muted-foreground">
+                  Deploys Dashboards with its own private endpoint in your network. OIDC single
+                  sign-on can be configured after creation.
+                </div>
+              </div>
+              <Switch id="db-dashboards" checked={dashboards} onCheckedChange={setDashboards} />
+            </div>
+          ) : null}
 
           <div className="grid gap-2">
             <Label>Size</Label>
@@ -915,6 +932,7 @@ function DatabaseDetail({
   const [resetOpen, setResetOpen] = useState(false)
   const [cidrsOpen, setCidrsOpen] = useState(false)
   const [ssoOpen, setSsoOpen] = useState(false)
+  const [domainOpen, setDomainOpen] = useState(false)
   const [autoscaleOpen, setAutoscaleOpen] = useState(false)
   // RESET_PASSWORD's result is shown exactly once and never stored anywhere else.
   const [newPassword, setNewPassword] = useState<string | null>(null)
@@ -1043,6 +1061,9 @@ function DatabaseDetail({
           {engine === "opensearch" && (
             <Button size="sm" variant="outline" onClick={() => setSsoOpen(true)}>Configure SSO</Button>
           )}
+          {engine === "opensearch" && (
+            <Button size="sm" variant="outline" onClick={() => setDomainOpen(true)}>Custom domain</Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => setCidrsOpen(true)}>Allowed CIDRs</Button>
           <Button size="sm" variant="destructive" onClick={onDeleted}>
             <Trash2 className="size-4" /> Delete
@@ -1154,6 +1175,18 @@ function DatabaseDetail({
             onPatch({ status: "UPDATING" })
             toast.success("SSO configuration update started")
             setSsoOpen(false)
+          }}
+        />
+      )}
+
+      {domainOpen && (
+        <CustomDomainDialog
+          onClose={() => setDomainOpen(false)}
+          onSubmit={async (data) => {
+            await act("SET_CUSTOM_DOMAIN", data)
+            onPatch({ status: "UPDATING" })
+            toast.success(data.domain ? "Custom domain update started" : "Custom domain removed")
+            setDomainOpen(false)
           }}
         />
       )}
@@ -1654,6 +1687,77 @@ function AutoscaleDialog({
             disabled={!valid || pending}
           >
             {pending ? "Applying…" : "Apply"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// OpenSearch only — bring-your-own domain + certificate (SET_CUSTOM_DOMAIN). No ACME: the
+// customer certifies their own name and points DNS at the endpoint themselves. Submitting an
+// empty domain removes the custom domain.
+function CustomDomainDialog({
+  onClose, onSubmit,
+}: {
+  onClose: () => void
+  onSubmit: (data: { domain: string; certPem?: string; keyPem?: string; caPem?: string }) => Promise<void>
+}) {
+  const [domain, setDomain] = useState("")
+  const [certPem, setCertPem] = useState("")
+  const [keyPem, setKeyPem] = useState("")
+  const [caPem, setCaPem] = useState("")
+  const [pending, setPending] = useState(false)
+  const removing = domain.trim() === ""
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Custom domain</DialogTitle>
+          <DialogDescription>
+            Serve the OpenSearch API and Dashboards on your own domain with your own TLS
+            certificate. Point your DNS at the endpoint (CNAME to the platform hostname, or an A
+            record to the endpoint IP). Submit with an empty domain to remove.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          <div className="grid gap-2">
+            <Label htmlFor="cd-domain">Domain</Label>
+            <Input id="cd-domain" className="font-mono" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="search.example.com" />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="cd-cert">Certificate (PEM, full chain)</Label>
+            <Textarea id="cd-cert" className="min-h-24 font-mono text-xs" value={certPem} onChange={(e) => setCertPem(e.target.value)} placeholder={"-----BEGIN CERTIFICATE-----"} />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="cd-key">Private key (PEM)</Label>
+            <Textarea id="cd-key" className="min-h-24 font-mono text-xs" value={keyPem} onChange={(e) => setKeyPem(e.target.value)} placeholder={"-----BEGIN PRIVATE KEY-----"} />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="cd-ca">CA chain (PEM, optional)</Label>
+            <Textarea id="cd-ca" className="min-h-16 font-mono text-xs" value={caPem} onChange={(e) => setCaPem(e.target.value)} placeholder={"-----BEGIN CERTIFICATE-----"} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The key is stored only on the database cluster, never in the platform. Rotate by
+            submitting the same domain with a new certificate.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            variant={removing ? "destructive" : "default"}
+            disabled={pending || (!removing && (!certPem.trim() || !keyPem.trim()))}
+            onClick={() => {
+              setPending(true)
+              const data = removing
+                ? { domain: "" }
+                : { domain: domain.trim(), certPem: certPem.trim(), keyPem: keyPem.trim(), ...(caPem.trim() ? { caPem: caPem.trim() } : {}) }
+              onSubmit(data)
+                .catch((e: Error) => toast.error(e.message))
+                .finally(() => setPending(false))
+            }}
+          >
+            {pending ? "Applying…" : removing ? "Remove domain" : "Apply"}
           </Button>
         </DialogFooter>
       </DialogContent>

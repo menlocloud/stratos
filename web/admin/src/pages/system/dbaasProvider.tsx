@@ -28,6 +28,10 @@ export type DbaasFormState = {
   osProjectId: string
   // The dbaas-side subnet LB members live on (Octavia member-subnet-id annotation).
   memberSubnetId: string
+  // Platform DNS zone: every database gets <id>.<zone> via external-dns. Optional.
+  dnsZone: string
+  // cert-manager ClusterIssuer (DNS-01 for dnsZone) for real opensearch certs. Optional.
+  certIssuer: string
   storageClasses: string // comma-separated
   engines: string // one "postgresql=16,17,18" line per engine
   valkeyEnabled: boolean // valkey is pre-GA — its line is rejected unless explicitly enabled
@@ -49,6 +53,8 @@ export const emptyDbaasForm: DbaasFormState = {
   osServiceId: "",
   osProjectId: "",
   memberSubnetId: "",
+  dnsZone: "",
+  certIssuer: "",
   storageClasses: "",
   engines: "",
   valkeyEnabled: false,
@@ -60,11 +66,12 @@ export const DBAAS_ENGINES = ["postgresql", "mysql", "mariadb", "valkey", "ferre
 const splitCsv = (s: string) => s.split(",").map((v) => v.trim()).filter(Boolean)
 
 // parseEngines turns the engines textarea into the config.database.engines map. Line grammar:
-// `postgresql=16,17,18` — one line per engine, only the known engine keys, at least one
-// version. null = malformed (bad line shape, unknown engine, duplicate line, empty version
-// list, or a valkey line while the beta switch is off).
-export function parseEngines(raw: string, valkeyEnabled: boolean): Record<string, { versions: string[] }> | null {
-  const out: Record<string, { versions: string[] }> = {}
+// `postgresql=16,17,18` with an optional replica-choice suffix `@1,3` (allowed counts 1..3 —
+// the platform cap; omitted = the server default of 1 or 3). null = malformed (bad line shape,
+// unknown engine, duplicate line, empty version list, replicas outside 1..3, or a valkey line
+// while the beta switch is off).
+export function parseEngines(raw: string, valkeyEnabled: boolean): Record<string, { versions: string[]; replicas?: number[] }> | null {
+  const out: Record<string, { versions: string[]; replicas?: number[] }> = {}
   for (const line of raw.split("\n")) {
     const t = line.trim()
     if (!t) continue
@@ -74,9 +81,18 @@ export function parseEngines(raw: string, valkeyEnabled: boolean): Record<string
     if (!(DBAAS_ENGINES as readonly string[]).includes(engine)) return null
     if (engine === "valkey" && !valkeyEnabled) return null
     if (out[engine]) return null
-    const versions = splitCsv(t.slice(eq + 1))
+    const rest = t.slice(eq + 1)
+    const at = rest.indexOf("@")
+    const versions = splitCsv(at >= 0 ? rest.slice(0, at) : rest)
     if (versions.length === 0) return null
-    out[engine] = { versions }
+    let replicas: number[] | undefined
+    if (at >= 0) {
+      const parts = splitCsv(rest.slice(at + 1))
+      replicas = parts.map(Number)
+      if (replicas.length === 0 || replicas.some((n) => !Number.isInteger(n) || n < 1 || n > 3)) return null
+      if (new Set(replicas).size !== replicas.length) return null
+    }
+    out[engine] = replicas ? { versions, replicas } : { versions }
   }
   return out
 }
@@ -90,7 +106,7 @@ export const dbaasFormValid = (f: DbaasFormState, requireKubeconfig = true) => {
 
 // The database.* keys the form edits directly — everything else stored under config.database
 // (limits, future keys) passes through dbaasConfigBlocks untouched.
-const FORM_OWNED_DATABASE_KEYS = ["osServiceId", "osProjectId", "memberSubnetId", "storageClasses", "engines"]
+const FORM_OWNED_DATABASE_KEYS = ["osServiceId", "osProjectId", "memberSubnetId", "dnsZone", "certIssuer", "storageClasses", "engines"]
 
 // dbaasConfigBlocks are the two config sub-objects stratos reads. The admin update route
 // replaces top-level config keys wholesale, so each block must always be sent complete —
@@ -102,11 +118,13 @@ export function dbaasConfigBlocks(f: DbaasFormState) {
   const stored = f.storedDatabase ?? {}
   const storedEngines = (stored.engines as Record<string, Record<string, any>>) ?? {}
   const engines: Record<string, any> = {}
-  for (const [name, { versions }] of Object.entries(parseEngines(f.engines, f.valkeyEnabled) ?? {})) {
+  for (const [name, { versions, replicas }] of Object.entries(parseEngines(f.engines, f.valkeyEnabled) ?? {})) {
     const prev = storedEngines[name] ?? {}
     engines[name] = {
       ...prev,
       versions,
+      // An explicit @suffix replaces the stored replica choices; without one they survive.
+      ...(replicas ? { replicas } : {}),
       default: prev.default && versions.includes(prev.default) ? prev.default : versions[0],
       // valkey only parses with the beta switch on; the server refuses a beta engine without
       // the customer acknowledgement, so its offer must always carry the beta flag.
@@ -128,6 +146,8 @@ export function dbaasConfigBlocks(f: DbaasFormState) {
       osServiceId: f.osServiceId.trim(),
       osProjectId: f.osProjectId.trim(),
       memberSubnetId: f.memberSubnetId.trim(),
+      dnsZone: f.dnsZone.trim(),
+      certIssuer: f.certIssuer.trim(),
       storageClasses: splitCsv(f.storageClasses),
       engines,
     },
@@ -177,6 +197,8 @@ export function dbaasFormFromService(svc: {
     osServiceId: String(database.osServiceId ?? ""),
     osProjectId: String(database.osProjectId ?? ""),
     memberSubnetId: String(database.memberSubnetId ?? ""),
+    dnsZone: String(database.dnsZone ?? ""),
+    certIssuer: String(database.certIssuer ?? ""),
     storageClasses: ((database.storageClasses as string[]) ?? []).join(","),
     engines: engineLines.join("\n"),
     valkeyEnabled: !!engines.valkey,
@@ -290,6 +312,24 @@ export function DbaasProviderForm({
           </p>
         </div>
       </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="db-dnszone">DNS zone (optional)</Label>
+          <Input id="db-dnszone" className="font-mono" value={form.dnsZone} onChange={(e) => setForm({ ...form, dnsZone: e.target.value })} placeholder="db.sg1.menlo.ai" autoComplete="off" />
+          <p className="text-xs text-muted-foreground">
+            Every database gets <code>&lt;id&gt;.&lt;zone&gt;</code> as an A record to its private
+            VIP — needs external-dns on the DB cluster watching Services.
+          </p>
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="db-certissuer">Cert issuer (optional)</Label>
+          <Input id="db-certissuer" className="font-mono" value={form.certIssuer} onChange={(e) => setForm({ ...form, certIssuer: e.target.value })} placeholder="letsencrypt-dns" autoComplete="off" />
+          <p className="text-xs text-muted-foreground">
+            cert-manager ClusterIssuer solving DNS-01 for the zone — OpenSearch API + Dashboards
+            then get real certificates instead of self-signed.
+          </p>
+        </div>
+      </div>
       <div className="grid gap-2">
         <Label htmlFor="db-storageclasses">StorageClasses (comma-separated, optional)</Label>
         <Input id="db-storageclasses" className="font-mono" value={form.storageClasses} onChange={(e) => setForm({ ...form, storageClasses: e.target.value })} placeholder="csi-cinder, csi-cinder-highiops" />
@@ -309,7 +349,9 @@ export function DbaasProviderForm({
         <p className="text-xs text-muted-foreground">
           One line per engine, versions comma-separated. Known engines:{" "}
           <code>{DBAAS_ENGINES.join(", ")}</code>. Only listed engines/versions are offered to
-          customers; a <code>valkey</code> line needs the beta switch below.
+          customers; a <code>valkey</code> line needs the beta switch below. Optional{" "}
+          <code>@1,3</code> suffix restricts the replica choices (allowed 1–3; default: 1 or 3),
+          e.g. <code>kafka=4.3.0@3</code>.
         </p>
       </div>
       <div className="flex items-center justify-between rounded-lg border p-3">

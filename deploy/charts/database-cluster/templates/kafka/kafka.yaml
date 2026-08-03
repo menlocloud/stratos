@@ -98,13 +98,26 @@ spec:
           bootstrap:
             annotations:
               {{- toYaml $lbAnnotations | nindent 14 }}
+              {{- with (include "database-cluster.dnsName" $) }}
+              external-dns.alpha.kubernetes.io/hostname: {{ . }}
+              {{- end }}
           # Every broker gets its OWN Octavia LB (advertised address) — the
-          # N in the N+1 amphora math (see header).
+          # N in the N+1 amphora math (see header). With a dnsZone each broker
+          # additionally advertises its DNS name (<id>-b<N>.<zone>) instead of
+          # the raw VIP, published by external-dns off the same annotation.
           brokers:
+            {{- $name := include "database-cluster.name" $ }}
+            {{- $zone := .Values.network.dnsZone }}
             {{- range $i := until (int .Values.instances) }}
             - broker: {{ $i }}
               annotations:
                 {{- toYaml $lbAnnotations | nindent 16 }}
+                {{- if $zone }}
+                external-dns.alpha.kubernetes.io/hostname: {{ printf "%s-b%d.%s" $name $i $zone }}
+                {{- end }}
+              {{- if $zone }}
+              advertisedHost: {{ printf "%s-b%d.%s" $name $i $zone }}
+              {{- end }}
             {{- end }}
     config:
       {{- toYaml $config | nindent 6 }}

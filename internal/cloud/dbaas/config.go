@@ -29,6 +29,22 @@ func NamespaceFor(projectID string) string { return "st-" + projectID }
 // so it lives here next to the other name derivations.
 func LBServiceName(dbID string) string { return dbID + "-lb" }
 
+// HostnameFor is a database's platform DNS name ("" without a zone). The chart derives the
+// SAME strings from values.network.dnsZone (`database-cluster.dnsName` in _helpers.tpl, plus
+// the `-dash`/`-b<N>` variants) — change both together or connection info and the published
+// records drift apart.
+func (c Config) HostnameFor(dbID string) string {
+	if c.DNSZone == "" {
+		return ""
+	}
+	return dbID + "." + c.DNSZone
+}
+
+// CustomTLSSecretName is the stratos-owned BYO-certificate secret for an opensearch database's
+// customer domain (SET_CUSTOM_DOMAIN writes it; the chart mounts it on the http layer and
+// Dashboards when values.opensearch.customDomain is set).
+func CustomTLSSecretName(dbID string) string { return dbID + "-custom-tls" }
+
 // NetShareSecretName is the per-database neutron-RBAC marker secret (DB-cluster side only): the
 // ONLY durable record that the customer network was shared with the dbaas keystone project.
 // FinalizeOrphans reads its annotations to revoke the share once the delete cascade — and with
@@ -88,6 +104,17 @@ type Config struct {
 	// MemberSubnetID is the DB-cluster node subnet — every LB's
 	// loadbalancer.openstack.org/member-subnet-id annotation.
 	MemberSubnetID string
+	// DNSZone (optional) turns on platform DNS names: every database gets `<id>.<zone>` (plus
+	// `<id>-dash.<zone>` for Dashboards and `<id>-b<N>.<zone>` per kafka broker) as an A record
+	// to its private VIP, published by external-dns on the DB cluster off the chart-stamped
+	// hostname annotations. Ids never change, so the names survive display renames (the kamaji
+	// dnsZone precedent). Empty = endpoints stay raw VIPs.
+	DNSZone string
+	// CertIssuer (optional, opensearch only) is a cert-manager ClusterIssuer on the DB cluster
+	// able to solve DNS-01 for DNSZone. When BOTH are set the chart swaps opensearch's
+	// self-signed http/Dashboards certs for a real `<id>-tls` certificate — the VIP is private,
+	// so DNS-01 is the only viable challenge for platform names.
+	CertIssuer string
 	// StorageClasses is the storage-class allowlist offered to customers (empty = cluster
 	// default only).
 	StorageClasses []string
@@ -147,6 +174,9 @@ type DatabaseSpec struct {
 	// BetaAck acknowledges a beta engine (valkey): required true when the engine's offer is
 	// flagged Beta, so nobody lands on a pre-GA operator by accident.
 	BetaAck bool
+	// DashboardsEnabled deploys OpenSearch Dashboards (opensearch only) with its own
+	// tenant-facing LB (<id>-dash-lb). SET_SSO also flips this on — SSO rides Dashboards.
+	DashboardsEnabled bool
 }
 
 // Validate rejects an unbuildable spec against the provider catalog/limits.
@@ -173,6 +203,9 @@ func (s DatabaseSpec) Validate(c Config) error {
 	}
 	if replicas := offer.ReplicaChoices(); !slices.Contains(replicas, s.Replicas) {
 		return fmt.Errorf("database: engine %s offers %v replicas, not %d", s.Engine, replicas, s.Replicas)
+	}
+	if s.DashboardsEnabled && s.Engine != EngineOpenSearch {
+		return fmt.Errorf("database: dashboards are an opensearch feature")
 	}
 	if s.CPU < 1 || (c.Limits.MaxCPU > 0 && s.CPU > c.Limits.MaxCPU) {
 		return fmt.Errorf("database: cpu must be 1..%d", max(c.Limits.MaxCPU, 1))

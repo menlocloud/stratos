@@ -45,6 +45,10 @@ metadata:
     # This is OCCM's ServiceAnnotationLoadBalancerInternal — the only annotation
     # that flips internal (loadbalancer.openstack.org/internal does NOT exist).
     service.beta.kubernetes.io/openstack-internal-load-balancer: "true"
+    {{- with (include "database-cluster.dnsName" .) }}
+    # external-dns publishes this as an A record to the (private) VIP.
+    external-dns.alpha.kubernetes.io/hostname: {{ . }}
+    {{- end }}
     {{- with .Values.network.extraAnnotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

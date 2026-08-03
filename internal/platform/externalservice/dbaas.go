@@ -77,7 +77,8 @@ func (e *ExternalService) DbaasConfig() dbaas.Config {
 			}
 			if rs, ok := m["replicas"].([]any); ok {
 				for _, r := range rs {
-					if n := intOf(r); n > 0 {
+					// Platform-wide cap: 1..3 instances (see EngineOffer.ReplicaChoices).
+					if n := intOf(r); n >= 1 && n <= 3 {
 						offer.Replicas = append(offer.Replicas, n)
 					}
 				}
@@ -99,6 +100,8 @@ func (e *ExternalService) DbaasConfig() dbaas.Config {
 		OSServiceID:    str(db["osServiceId"]),
 		OSProjectID:    str(db["osProjectId"]),
 		MemberSubnetID: str(db["memberSubnetId"]),
+		DNSZone:        str(db["dnsZone"]),
+		CertIssuer:     str(db["certIssuer"]),
 		StorageClasses: strList(db["storageClasses"]),
 		Limits: dbaas.Limits{
 			MaxCPU:        intOf(limits["maxCpu"]),

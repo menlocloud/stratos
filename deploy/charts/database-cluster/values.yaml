@@ -82,6 +82,12 @@ network:
   # -- Extra annotations merged onto the LB Service (escape hatch for
   # provider-specific Octavia knobs).
   extraAnnotations: {}
+  # -- Platform DNS zone (provider config.database.dnsZone). When set, every
+  # LB Service is annotated for external-dns: `<resourceId>.<zone>` (main),
+  # `<resourceId>-dash.<zone>` (Dashboards) and `<resourceId>-b<N>.<zone>` per
+  # kafka broker (also its advertisedHost). internal/cloud/dbaas/config.go
+  # HostnameFor is the derivation twin — change both together.
+  dnsZone: ""
 
 # -- Stratos identity of this database. projectId + resourceId REQUIRED.
 # resourceId (std-xxxxxxxx) is the base name of EVERY object this chart
@@ -197,6 +203,17 @@ opensearch:
   # (templates/opensearch/dashboards-lb.yaml).
   dashboards:
     enabled: false
+  # -- cert-manager ClusterIssuer for a REAL certificate on the platform DNS
+  # name (provider config.database.certIssuer; must solve DNS-01 for
+  # network.dnsZone — the VIP is private, HTTP-01 cannot reach it). Set
+  # together with network.dnsZone it renders Certificate <id>-tls and swaps
+  # the operator's self-signed http/Dashboards certs for it.
+  certIssuer: ""
+  # -- Customer BYO domain (SET_CUSTOM_DOMAIN action). Set together with the
+  # stratos-written secret <id>-custom-tls (their certificate + key); wins
+  # over certIssuer on the http layer + Dashboards. DNS stays customer-side
+  # (CNAME to the platform name or an A record to the VIP).
+  customDomain: ""
   # -- Dashboards OIDC SSO, written by the SET_SSO action
   # (internal/cloud/dbaas/engines.go). PUBLIC IdP client ONLY — there is
   # deliberately no clientSecret key here and never will be (no secrets in
