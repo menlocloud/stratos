@@ -245,8 +245,25 @@ Application CR is readable by anyone with argocd read).
 
 CNPG `instanceRole: primary` LB selector + restart annotation; Percona served CRD version,
 secret keys, haproxy labels; mariadb `podMetadata` passthrough + `-primary` Service naming;
-the whole valkey CRD (beta gate stays closed until pinned); FerretDB healthz + CNPG
-DocumentDB bootstrap; engineVersion→image maps; Lua status value sets; PodMonitor ports.
+the whole valkey CRD (beta gate stays closed until pinned); FerretDB healthz;
+engineVersion→image maps; Lua status value sets; PodMonitor ports.
+
+**Closed at the first live drill (chart 0.4.1) — the FerretDB/CNPG bootstrap.** CNPG does not
+use the image entrypoint, so nothing in `/docker-entrypoint-initdb.d/` runs and every setting
+those scripts write must live in the Cluster spec instead:
+
+- `postgresUID/postgresGID: 999` — the FerretDB image is built on the official `postgres`
+  image (uid 999), not CNPG's own (uid 26). Missing it, `initdb` fails at bootstrap with
+  `could not look up effective user ID 26: user does not exist` and the Job retries forever.
+  **Both fields are immutable**, so a database created before 0.4.1 cannot be repaired — it
+  must be deleted and recreated.
+- `shared_preload_libraries: [pg_cron, pg_documentdb_core, pg_documentdb]` and
+  `cron.database_name: app` — `documentdb.control` requires `pg_cron`, so the
+  `CREATE EXTENSION documentdb CASCADE` creates it too, and pg_cron refuses any database
+  other than `cron.database_name`; it must therefore name the CNPG **app** database (what the
+  frontend connects to), not the image's `postgres` default.
+- The `documentdb.*` feature GUCs from `10-preload.sh`. CNPG's webhook keeps custom extension
+  parameters verbatim (verified with `kubectl apply --dry-run=server`).
 
 ## Troubleshooting
 

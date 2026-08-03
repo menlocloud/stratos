@@ -26,17 +26,44 @@ metadata:
 spec:
   instances: {{ int .Values.instances }}
   imageName: {{ .Values.ferretdb.postgresImage }}
-  # DocumentDB extension requirements. TODO-verify(drill): the FerretDB CNPG
-  # guide's exact bootstrap stanza for the pinned image pair — whether the
-  # extension must be created in the app database or comes preloaded, and the
-  # required shared_preload_libraries set (flagged in the plan's verify list
-  # together with the frontend healthz port).
+  # The postgres user in the FerretDB image is uid/gid 999 (it is built on the
+  # official postgres image), NOT the 26/26 CNPG assumes for its OWN images.
+  # Without this, initdb dies at bootstrap with
+  #   "initdb: could not look up effective user ID 26: user does not exist"
+  # and the Job retries forever. IMMUTABLE after creation — a database created
+  # by an older chart cannot be repaired in place, it must be recreated.
+  postgresUID: 999
+  postgresGID: 999
+  # DocumentDB requirements, taken verbatim from the image's own bootstrap
+  # scripts (/docker-entrypoint-initdb.d/10-preload.sh + 20-install.sql), which
+  # CNPG never runs — it does not use the image entrypoint, so everything those
+  # scripts would have written into postgresql.conf must live here instead.
+  #
+  # pg_cron is LOAD-BEARING, not optional: documentdb.control declares
+  #   requires = 'documentdb_core, pg_cron, tsm_system_rows, vector, postgis, rum'
+  # so the CASCADE below creates pg_cron too — and pg_cron refuses to be created
+  # in any database other than cron.database_name. That is why the setting names
+  # the CNPG APP database (the one the frontend connects to, deployment.yaml),
+  # not the image default of `postgres`. Order matters: pg_cron first.
   postgresql:
     shared_preload_libraries:
+      - pg_cron
       - pg_documentdb_core
       - pg_documentdb
+    parameters:
+      cron.database_name: app
+      documentdb.enableCompact: "true"
+      documentdb.enableLetAndCollationForQueryMatch: "true"
+      documentdb.enableNowSystemVariable: "true"
+      documentdb.enableSortbyIdPushDownToPrimaryKey: "true"
+      documentdb.enableSchemaValidation: "true"
+      documentdb.enableBypassDocumentValidation: "true"
+      documentdb.enableUserCrud: "true"
+      documentdb.maxUserLimit: "100"
   bootstrap:
     initdb:
+      # Runs in the app database as superuser — the CNPG equivalent of the
+      # image's 20-install.sql (`CREATE EXTENSION documentdb CASCADE`).
       postInitApplicationSQL:
         - CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;
   storage:
