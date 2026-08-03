@@ -121,17 +121,37 @@ amphora flavor, and `port` quota to match. Exhausted amphora quota surfaces as t
 parked `<pending>` — the Application stays Progressing and the database never goes READY, with
 nothing obviously wrong on the k8s side; check the Octavia quota first.
 
-## Backups (optional, per provider)
+## Every CRD the chart can render
 
-Object-store backups need one more component on this cluster:
+Audited by rendering the chart across all seven engines with every feature on and checking each
+`apiVersion/Kind` against a live cluster. A missing CRD does not fail at render — ArgoCD reports
+the resource as `Missing` / `OutOfSync` with "Resource not found in cluster", which is quiet
+enough to lose.
 
-| Chart | Namespace | Why |
-|---|---|---|
-| `plugin-barman-cloud` 0.7.1 | `cnpg-system` | CloudNativePG backup + PITR. Installs the `barmancloud.cnpg.io` **ObjectStore** CRD that postgresql and ferretdb databases reference. |
+| Component | Provides | Namespace | Needed for |
+|---|---|---|---|
+| `cloudnative-pg` | `postgresql.cnpg.io` Cluster, Backup, ScheduledBackup, Database | `cnpg-system` | postgresql, ferretdb |
+| `plugin-barman-cloud` 0.7.1 | **`barmancloud.cnpg.io` ObjectStore** | `cnpg-system` | postgresql/ferretdb BACKUPS and restore |
+| `ps-operator` | `ps.percona.com` PerconaServerMySQL, ...Backup, ...Restore | `ps-operator` | mysql |
+| `mariadb-operator` (+ `-crds`) | `k8s.mariadb.com` MariaDB, Database, User, Grant, PhysicalBackup, PointInTimeRecovery | `mariadb-operator` | mariadb |
+| `opensearch-operator` | `opensearch.org` OpenSearchCluster, OpensearchUser, OpensearchRole, OpensearchUserRoleBinding, OpenSearchISMPolicy | `opensearch-operator-system` | opensearch |
+| `strimzi-kafka-operator` | `kafka.strimzi.io` Kafka, KafkaNodePool, KafkaUser | `strimzi-system` | kafka |
+| **valkey-operator** (no chart — see below) | `hyperspike.io` Valkey | `valkey-operator-system` | valkey (beta) |
+| `cert-manager` | `cert-manager.io` Certificate | cluster-wide | opensearch with a platform TLS certificate |
+| `vpa` (recommender only) | `autoscaling.k8s.io` VerticalPodAutoscaler | `vpa` | the opt-in vertical autoscale tick |
 
-Without it, a postgresql/ferretdb database with backups enabled fails to sync — the ObjectStore
-kind does not exist. mariadb and mysql need nothing extra; their operators back up on their own.
+Everything except valkey-operator is in the internal helm mirror (`charts-mirror.yaml`) with an
+umbrella chart and an ArgoCD Application in infra-ops under
+`kubernetes/clusters/<cluster>/charts/` and `.../manifests/argo-apps/`.
 
-The in-core `spec.backup.barmanObjectStore` is deliberately NOT used: deprecated in CNPG 1.26,
-**removed in 1.31**, so it would buy one minor version and then force a rewrite of every Cluster
-spec, ScheduledBackup and stored restore recipe.
+**valkey-operator is the exception**: upstream publishes only an `install.yaml` per GitHub
+release, with no helm chart at all, so it is vendored as plain manifests in infra-ops
+(`manifests/valkey-operator/install.yaml`, pinned to a release tag) and synced by a plain
+directory Application. Bumping it means re-downloading that file from the new tag. **Until it is
+installed, any valkey database fails to sync** — so either install it or drop `valkey` from the
+provider's engine catalog rather than leaving a beta engine on offer that cannot provision.
+
+**Why the barman PLUGIN and not in-core `spec.backup.barmanObjectStore`:** the in-core object
+store is deprecated in CNPG 1.26 and **removed in 1.31**, so it would buy one minor version and
+then force a rewrite of every Cluster spec, ScheduledBackup and stored restore recipe. mariadb
+and mysql need nothing extra for backups; their operators do it themselves.

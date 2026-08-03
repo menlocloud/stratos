@@ -67,6 +67,12 @@ Services (publishes `<id>.<zone>` A records off the chart-stamped hostname annot
 **cert-manager** with a ClusterIssuer that solves **DNS-01** for the zone (the VIPs are private
 tenant-subnet IPs — an HTTP-01 challenge can never reach them).
 
+`deploy/dbaas-cluster/README.md` carries the full CRD table — every `apiVersion/Kind` this chart
+can render, audited against a live cluster. Two are easy to miss because nothing fails at
+render time, only at sync: **`plugin-barman-cloud`** (the `barmancloud.cnpg.io` ObjectStore that
+postgresql/ferretdb backups reference) and **valkey-operator**, which upstream ships as a raw
+`install.yaml` with no helm chart, so it is vendored in infra-ops rather than mirrored.
+
 ## Provider registration
 
 Admin UI → System → Cloud providers → Add provider → **Database (DBaaS)**, or `POST
