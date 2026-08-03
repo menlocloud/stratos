@@ -27,6 +27,18 @@ spec:
   replay, so recovery lands on a backup boundary rather than an exact second.
   */}}
   bootstrapFrom:
+    {{- if and .Values.restore.targetTime .Values.restore.pitr }}
+    {{/*
+    TRUE point-in-time recovery: replay the source's archived binlogs up to the
+    instant asked for. Only available when the SOURCE ran replication, because
+    that is the only topology 26.6.0 archives binlogs on — otherwise the s3
+    branch below lands on the nearest physical backup instead, which is a
+    coarser answer but never a wrong one.
+    */}}
+    pointInTimeRecoveryRef:
+      name: {{ printf "%s-pitr" .Values.restore.sourceId }}
+    targetRecoveryTime: {{ .Values.restore.targetTime | quote }}
+    {{- else }}
     backupContentType: Physical
     {{- with .Values.restore.targetTime }}
     targetRecoveryTime: {{ . | quote }}
@@ -51,6 +63,7 @@ spec:
           name: {{ . }}
           key: ca.crt
         {{- end }}
+    {{- end }}
   {{- end }}
   replicas: {{ int .Values.instances }}
   {{- if gt (int .Values.instances) 1 }}

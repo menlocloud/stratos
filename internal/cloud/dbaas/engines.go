@@ -69,11 +69,11 @@ func (o EngineOffer) ReplicaChoices() []int {
 // what customers ask to restore, and neither operator has an object-store backup CR worth the
 // surface.
 //
-// RESTORE is narrower than BACKUP on purpose. postgresql/ferretdb/mariadb recover by
-// BOOTSTRAPPING A NEW instance from an object-store folder, which is a create-time shape and is
-// what this platform offers. mysql backs up fine but its PerconaServerMySQLRestore targets a
-// RUNNING cluster — a different mechanism with a different failure model, so it is left out
-// rather than half-wired.
+// RESTORE always produces a NEW database, but the mechanism differs. postgresql/ferretdb/mariadb
+// BOOTSTRAP from an object-store folder. mysql cannot bootstrap: its PerconaServerMySQLRestore
+// targets a RUNNING cluster — so the chart brings the new cluster up empty and then applies a
+// Restore against it (sync-wave 1), which the operator carries out. Same outcome for the
+// customer, two phases underneath, and it needs a specific backup NAME rather than a search.
 //
 // MANAGE_ACCESS (postgresql/mariadb/opensearch) is customer-managed logical databases, users
 // and grants, declared in values and rendered as the operators' own CRs (CNPG Database +
@@ -89,7 +89,7 @@ func (o EngineOffer) ReplicaChoices() []int {
 // RESIZE_STORAGE, so it self-disables for valkey/opensearch.
 var Capabilities = map[string]map[string]bool{
 	EnginePostgreSQL: {"BACKUP": true, "RESTORE": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
-	EngineMySQL:      {"BACKUP": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
+	EngineMySQL:      {"BACKUP": true, "RESTORE": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 	EngineMariaDB:    {"BACKUP": true, "RESTORE": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
 	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false, "SET_AUTOSCALE": true},
 	EngineFerretDB:   {"BACKUP": true, "RESTORE": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},

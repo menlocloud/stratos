@@ -245,6 +245,8 @@ export default function DatabasesPage() {
         .filter(({ d }: { d: Db }) => (d.backup as { enabled?: boolean } | undefined)?.enabled === true)
         .map(({ r, d }: { r: CloudResource; d: Db }) => ({
           id: (r.externalId ?? r.id) as string,
+          // The action route keys on the RESOURCE id while restoreFrom names the database id.
+          resourceId: r.id,
           name: (d.name as string) || r.externalId || r.id,
           engine: String(d.engine ?? ""),
         })),
@@ -440,6 +442,8 @@ export default function DatabasesPage() {
 
       {createOpen && (
         <DatabaseFormDialog
+          pid={pid}
+          scope={createScope}
           restoreSources={restoreSources}
           engines={createEngines}
           limits={createSvc?.databaseLimits}
@@ -588,14 +592,17 @@ export function DatabaseClusterDetailPage() {
 const CLUSTER_DEFAULT_STORAGE = "__cluster-default__"
 
 function DatabaseFormDialog({
-  engines, limits, storageClasses, restoreSources, networks, locations, locKey, onLocKey, onClose, onSubmit,
+  engines, limits, storageClasses, restoreSources, pid, scope, networks, locations, locKey, onLocKey, onClose, onSubmit,
 }: {
   engines: Record<string, DatabaseEngineOffer>
   limits?: DatabaseLimits
   storageClasses?: string[]
   // Databases already in this project that a new one could be recovered from — same engine,
   // backups on. The page owns the list, so the dialog never re-fetches it.
-  restoreSources: { id: string; name: string; engine: string }[]
+  restoreSources: { id: string; name: string; engine: string; resourceId: string }[]
+  // Needed only to list a source's backups when the engine restores by name (mysql).
+  pid: string
+  scope: CloudScope | undefined
   networks: NetworkOption[]
   locations: Location[]
   locKey: string
@@ -626,6 +633,18 @@ function DatabaseFormDialog({
   const [restoreFrom, setRestoreFrom] = useState("")
   const [restoreTime, setRestoreTime] = useState("")
   const restoreCandidates = restoreSources.filter((c) => c.engine === engine)
+  // mysql restores by NAMING a backup object; the other engines find their own base backup.
+  const needsBackupPick = engine === "mysql"
+  const [restoreBackup, setRestoreBackup] = useState("")
+  const sourceBackups = useMutation({
+    mutationFn: (sourceResourceId: string) =>
+      apiFetch<{ result?: { name: string; phase?: string; finishedAt?: string }[] }>(
+        `/project/${pid}/cloud/${sourceResourceId}/action`,
+        { method: "POST", body: { action: "LIST_BACKUPS", data: {} }, cloud: scope },
+      ),
+    onError: (e: Error) => toast.error(e.message),
+  })
+  const backupChoices = sourceBackups.data?.result ?? []
   // Dashboards OIDC, offered up front so SSO does not need a second trip through the actions
   // menu. Same fields (and same server-side rule) as the post-create SSO dialog.
   const [ssoConnectUrl, setSsoConnectUrl] = useState("")
@@ -662,7 +681,8 @@ function DatabaseFormDialog({
   const cpuOk = Number(cpu) >= 1 && (!maxCpu || Number(cpu) <= maxCpu)
   const memoryOk = Number(memory) >= 1 && (!maxMemory || Number(memory) <= maxMemory)
   const storageOk = Number(storage) >= 1 && (!maxStorage || Number(storage) <= maxStorage)
-  const valid = !!name.trim() && !!engine && !!version && networkValid && cpuOk && memoryOk && storageOk
+  const restoreOk = !restoreFrom || !needsBackupPick || !!restoreBackup
+  const valid = !!name.trim() && !!engine && !!version && networkValid && cpuOk && memoryOk && storageOk && restoreOk
 
   const submit = async () => {
     setPending(true)
@@ -688,6 +708,7 @@ function DatabaseFormDialog({
               restoreFrom: {
                 sourceDatabaseId: restoreFrom,
                 ...(restoreTime ? { targetTime: new Date(restoreTime).toISOString() } : {}),
+                ...(restoreBackup ? { backupName: restoreBackup } : {}),
               },
             }
           : {}),
@@ -798,7 +819,16 @@ function DatabaseFormDialog({
                 Recovers another {engineLabel(engine)} database into this new one. The source is
                 left running and untouched.
               </p>
-              <Select value={restoreFrom || "none"} onValueChange={(v) => setRestoreFrom(v === "none" ? "" : v)}>
+              <Select
+                value={restoreFrom || "none"}
+                onValueChange={(v) => {
+                  const id = v === "none" ? "" : v
+                  setRestoreFrom(id)
+                  setRestoreBackup("")
+                  const picked = restoreCandidates.find((c) => c.id === id)
+                  if (id && needsBackupPick && picked) sourceBackups.mutate(picked.resourceId)
+                }}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">Start empty</SelectItem>
@@ -807,6 +837,28 @@ function DatabaseFormDialog({
                   ))}
                 </SelectContent>
               </Select>
+              {restoreFrom && needsBackupPick ? (
+                <div className="grid gap-1">
+                  <Label className="text-xs">Backup to restore</Label>
+                  <Select value={restoreBackup} onValueChange={setRestoreBackup}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={sourceBackups.isPending ? "Loading…" : "Pick a backup"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {backupChoices.map((b) => (
+                        <SelectItem key={b.name} value={b.name}>
+                          {b.name} {b.finishedAt ? `· ${timeAgo(b.finishedAt)}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {backupChoices.length === 0 && !sourceBackups.isPending ? (
+                    <p className="text-xs text-muted-foreground">
+                      This database has no completed backups yet.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               {restoreFrom ? (
                 <div className="grid gap-1">
                   <Label htmlFor="rs-time" className="text-xs">Recover to (optional)</Label>

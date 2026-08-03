@@ -345,7 +345,7 @@ archive reaches.
 |---|---|
 | `postgresql`, `ferretdb` | CNPG `bootstrap.recovery` + `externalClusters[].plugin` pointing at a SECOND ObjectStore that addresses the SOURCE's folder, with `recoveryTarget.targetTime` for PITR. For ferretdb the recovery REPLACES initdb — the extension, its roles and the grant all come back inside the datadir. |
 | `mariadb` | `spec.bootstrapFrom` with `backupContentType: Physical` (the operator only infers the type from `backupRef`, and the default Logical would replay a datadir copy as SQL) plus `targetRecoveryTime`, which picks the nearest backup rather than replaying binlogs. |
-| `mysql` | Not offered. Percona restores into a RUNNING cluster, which is a different mechanism with a different failure model — left out rather than half-wired. |
+| `mysql` | Cannot bootstrap from a backup — the Percona restore CR targets a RUNNING cluster. So the chart brings the new cluster up empty (wave 0) and applies a `PerconaServerMySQLRestore` against it (wave 1); same outcome, two phases underneath. It names a specific backup OBJECT rather than searching the store, so the create form makes the customer pick one. `spec.pitr.type: date` rolls binlogs forward, and Percona wants `YYYY-MM-DD hh:mm:ss` rather than RFC3339. |
 
 `serverName` on the CNPG external cluster MUST be the SOURCE's id: barman looks for base backups
 under that name and a wrong one finds nothing instead of failing. The recovery ObjectStore is
@@ -356,6 +356,16 @@ The source is proven server-side to belong to the SAME project and run the SAME 
 without that check a customer could name any database id on the platform and recover someone
 else's data into their own instance. Its credential Secret is written BEFORE the Application,
 because the operator starts recovering the moment the CR lands.
+
+**Point-in-time recovery, per engine.** postgresql and ferretdb replay WAL to the exact instant.
+mysql replays binlogs to the second, which is why every backed-up cluster also runs
+`spec.backup.pitr.enabled` — the binlog server is what makes a chosen second possible at all.
+mariadb is the conditional one: a `PointInTimeRecovery` CR archives binlogs, but
+mariadb-operator 26.6.0 supports that **only on the replication topology**, which this platform
+runs only when a database has more than one instance. Stratos decides that server-side from the
+source's replica count rather than asking: with replication the restore replays binlogs to the
+instant, without it the same request still honours the timestamp but lands on the nearest
+physical backup. Coarser, never wrong, and never silently ignored.
 
 Compression is on everywhere (snappy for CNPG data and WAL, gzip for mariadb, `--compress=zstd`
 for xtrabackup): the operator defaults are all "no compression", which is the slow, expensive

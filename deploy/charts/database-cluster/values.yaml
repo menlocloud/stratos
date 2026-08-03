@@ -176,6 +176,15 @@ restore:
   sourceId: ""
   # -- RFC3339 instant to recover to. Empty = replay everything available.
   targetTime: ""
+  # -- mariadb only, decided server-side: replay the source's archived binlogs
+  # to targetTime instead of landing on the nearest physical backup. Requires
+  # the SOURCE to have run replication, the only topology 26.6.0 archives
+  # binlogs on.
+  pitr: false
+  # -- The specific backup object to restore from. Required for mysql, whose
+  # restore CR names a backup rather than searching the object store; the other
+  # engines find their own base backup.
+  backupName: ""
   # -- Secret holding the object-store credentials (written before the
   # Application, because the bootstrap reads S3 immediately).
   credsSecret: ""

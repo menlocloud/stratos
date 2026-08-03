@@ -52,6 +52,10 @@ spec:
   */}}
   backup:
     enabled: true
+    {{/* The binlog server streams binlogs to the same object store; without it
+         a restore can only land on a backup boundary, never a chosen second. */}}
+    pitr:
+      enabled: true
     storages:
       stratos:
         type: s3

@@ -72,7 +72,14 @@ func (h *Handler) dbaasCreate(w http.ResponseWriter, r *http.Request, u *user.Us
 			h.fail(w, httpx.BadRequest(err.Error()))
 			return
 		}
-		_ = src
+		// True binlog PITR is decided here, not by the customer: mariadb-operator archives
+		// binlogs only on the replication topology, which this platform runs only when the
+		// SOURCE had more than one instance. Without it the restore still honours the
+		// timestamp, just to the nearest physical backup — coarser, never wrong.
+		if spec.Engine == dbaas.EngineMariaDB && spec.RestoreFrom.TargetTime != "" {
+			d, _ := src.Data["database"].(map[string]any)
+			spec.RestoreFrom.PITR = intAny(d["replicas"]) > 1
+		}
 	}
 	// Network placement: the ids are customer input — PROVE they belong to the project's own
 	// tenant before sharing the network with the ops-owned dbaas project. The binding is pinned
@@ -753,6 +760,7 @@ func dbaasSpecFromData(projectID string, d map[string]any) (dbaas.DatabaseSpec, 
 		spec.RestoreFrom = &dbaas.RestoreSource{
 			SourceID:   strings.TrimSpace(strAny(obj["sourceDatabaseId"])),
 			TargetTime: strings.TrimSpace(strAny(obj["targetTime"])),
+			BackupName: strings.TrimSpace(strAny(obj["backupName"])),
 		}
 	}
 	if raw, has := d["sso"]; has && raw != nil {

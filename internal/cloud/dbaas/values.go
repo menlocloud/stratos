@@ -101,6 +101,12 @@ func restoreValues(cfg Config, dbID string, src RestoreSource) map[string]any {
 	if src.TargetTime != "" {
 		out["targetTime"] = src.TargetTime
 	}
+	if src.BackupName != "" {
+		out["backupName"] = src.BackupName
+	}
+	if src.PITR {
+		out["pitr"] = true
+	}
 	return out
 }
 

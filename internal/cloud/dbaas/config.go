@@ -278,6 +278,11 @@ func (s DatabaseSpec) Validate(c Config) error {
 		if err := s.RestoreFrom.Validate(); err != nil {
 			return err
 		}
+		// mysql restores by naming a backup OBJECT; the other engines search the object store
+		// for the right base backup themselves.
+		if s.Engine == EngineMySQL && s.RestoreFrom.BackupName == "" {
+			return fmt.Errorf("database: restoring %s needs a specific backup to restore from", s.Engine)
+		}
 	}
 	if s.CPU < 1 || (c.Limits.MaxCPU > 0 && s.CPU > c.Limits.MaxCPU) {
 		return fmt.Errorf("database: cpu must be 1..%d", max(c.Limits.MaxCPU, 1))
@@ -357,6 +362,15 @@ type RestoreSource struct {
 	// TargetTime (RFC3339) recovers to that instant instead of the latest available state.
 	// Empty = replay everything, i.e. as close to the failure as the archive reaches.
 	TargetTime string
+	// PITR asks for true point-in-time recovery rather than "the nearest backup". Only
+	// meaningful for mariadb, and only when the SOURCE ran replication — 26.6.0 archives
+	// binlogs on no other topology. The handler decides it from the source's replica count;
+	// customers never send it.
+	PITR bool
+	// BackupName pins WHICH backup to start from. Optional for CNPG and mariadb, which find
+	// the right base backup themselves; REQUIRED for mysql, whose restore CR names a specific
+	// PerconaServerMySQLBackup object rather than searching the object store.
+	BackupName string
 }
 
 // Validate checks a restore request in isolation; the caller additionally proves the source
@@ -370,8 +384,15 @@ func (r RestoreSource) Validate() error {
 			return fmt.Errorf("restore: targetTime must be an RFC3339 timestamp")
 		}
 	}
+	// The name reaches a CR reference, so keep it to the shape k8s names take.
+	if r.BackupName != "" && !k8sNameRE.MatchString(r.BackupName) {
+		return fmt.Errorf("restore: backupName %q is not a valid backup name", r.BackupName)
+	}
 	return nil
 }
+
+// k8sNameRE is the RFC1123 subdomain shape a Kubernetes object name takes.
+var k8sNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
 
 // BackupSpec is a database's desired backup posture.
 type BackupSpec struct {
