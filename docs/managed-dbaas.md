@@ -264,6 +264,19 @@ those scripts write must live in the Cluster spec instead:
   frontend connects to), not the image's `postgres` default.
 - The `documentdb.*` feature GUCs from `10-preload.sh`. CNPG's webhook keeps custom extension
   parameters verbatim (verified with `kubectl apply --dry-run=server`).
+- `GRANT documentdb_admin_role TO app` — ours, not the image's. The extension's API schemas are
+  owned by `documentdb_admin_role` while the frontend connects as CNPG's unprivileged `app`
+  owner, so without it every call fails with `permission denied for schema documentdb_api`.
+  (FerretDB's own guide sidesteps this by running as the superuser; we do not expose one.)
+- `pg_hba` loopback `trust`. DocumentDB opens an internal libpq connection back to itself with
+  no password for its DDL, and CNPG's generated `pg_hba` ends in `scram-sha-256`, so
+  `drop_collection` and friends fail with `fe_sendauth: no password supplied ... while
+  executing command over libpq connection`. Loopback only, on a pod that holds exactly one
+  customer's database and offers them no shell.
+
+All five were proven on the live cluster: a clean bootstrap from this chart, then
+create_collection → insert_one → read → drop_collection as the `app` role over TCP through the
+`-rw` Service — the exact `FERRETDB_POSTGRESQL_URL` path.
 
 ## Troubleshooting
 

@@ -60,12 +60,27 @@ spec:
       documentdb.enableBypassDocumentValidation: "true"
       documentdb.enableUserCrud: "true"
       documentdb.maxUserLimit: "100"
+    # DocumentDB opens an internal libpq connection back to itself over
+    # loopback with NO password (drop_collection and friends run their DDL
+    # through it). CNPG's generated pg_hba ends in scram-sha-256, so without
+    # these two rules those calls die with
+    #   fe_sendauth: no password supplied / while executing command over libpq
+    # Loopback only, and the pod runs exactly one customer's database with no
+    # customer-reachable shell, so nothing outside the pod can use it.
+    pg_hba:
+      - host all all 127.0.0.1/32 trust
+      - host all all ::1/128 trust
   bootstrap:
     initdb:
       # Runs in the app database as superuser — the CNPG equivalent of the
       # image's 20-install.sql (`CREATE EXTENSION documentdb CASCADE`).
+      # The GRANT is ours, not the image's: the extension's API schemas are
+      # owned by documentdb_admin_role, while the frontend connects as CNPG's
+      # unprivileged `app` owner (deployment.yaml) — without it every call
+      # fails with "permission denied for schema documentdb_api".
       postInitApplicationSQL:
         - CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;
+        - GRANT documentdb_admin_role TO app;
   storage:
     {{/* Sized from the SAME storage.sizeGi every other engine uses — one knob,
          so RESIZE_STORAGE (values.storage.sizeGi, grow-only) works uniformly. */}}
