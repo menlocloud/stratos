@@ -102,14 +102,21 @@ function endpointOf(d: Db): string {
   return d.port ? `${host}:${d.port}` : host
 }
 
-function sizeOf(d: Db): string {
+function computeOf(d: Db): string {
   const parts = [
     d.cpu != null ? `${d.cpu} vCPU` : "",
     d.memory_gib != null ? `${d.memory_gib} GiB` : "",
-    d.storage_gib != null ? `${d.storage_gib} GiB disk` : "",
   ].filter(Boolean)
   const n = Number(d.replicas) || 0
-  return parts.join(" · ") + (n > 1 ? ` × ${n}` : "")
+  return parts.join(" · ") + (parts.length && n > 1 ? ` × ${n}` : "")
+}
+
+function diskOf(d: Db): string {
+  return d.storage_gib != null ? `${d.storage_gib} GiB disk` : ""
+}
+
+function sizeOf(d: Db): string {
+  return [computeOf(d), diskOf(d)].filter(Boolean).join(" · ")
 }
 
 // Stable key for a location picker — the API array order is not stable, so never key by index.
@@ -306,7 +313,7 @@ export default function DatabasesPage() {
         header: "Endpoint",
         cell: ({ row, getValue }) => {
           const ep = getValue() as string
-          if (ep) return <span className="font-mono text-xs">{ep}</span>
+          if (ep) return <span className="block max-w-[26ch] font-mono text-xs break-all" title={ep}>{ep}</span>
           return dbSettled(database(row.original)) ? (
             <span className="text-xs text-muted-foreground">—</span>
           ) : (
@@ -320,7 +327,18 @@ export default function DatabasesPage() {
         id: "size",
         accessorFn: (r) => Number(database(r).cpu) || 0,
         header: sortableHeader("Size"),
-        cell: ({ row }) => <span className="text-sm whitespace-nowrap">{sizeOf(database(row.original)) || "—"}</span>,
+        cell: ({ row }) => {
+          const d = database(row.original)
+          const compute = computeOf(d)
+          const disk = diskOf(d)
+          if (!compute && !disk) return <span className="text-sm">—</span>
+          return (
+            <div className="text-sm leading-tight">
+              <div>{compute || "—"}</div>
+              {disk ? <div className="text-xs text-muted-foreground">{disk}</div> : null}
+            </div>
+          )
+        },
       },
       {
         id: "created",
@@ -981,6 +999,7 @@ function DatabaseDetail({
   const [autoscaleOpen, setAutoscaleOpen] = useState(false)
   const [platformOpen, setPlatformOpen] = useState(false)
   const [accessOpen, setAccessOpen] = useState(false)
+  const [policiesOpen, setPoliciesOpen] = useState(false)
   // MANAGE_ACCESS returns a password per NEWLY declared user, exactly once.
   const [newCredentials, setNewCredentials] = useState<Record<string, string> | null>(null)
   // RESET_PASSWORD's result is shown exactly once and never stored anywhere else.
@@ -1142,6 +1161,9 @@ function DatabaseDetail({
           {engine === "opensearch" && (
             <Button size="sm" variant="outline" onClick={() => setDomainOpen(true)}>Custom domain</Button>
           )}
+          {engine === "opensearch" && (
+            <Button size="sm" variant="outline" onClick={() => setPoliciesOpen(true)}>Index policies</Button>
+          )}
           {supports(engine, "MANAGE_ACCESS") && (
             <Button size="sm" variant="outline" onClick={() => setAccessOpen(true)}>
               {engine === "opensearch" ? "Users & roles" : "Databases & users"}
@@ -1269,10 +1291,11 @@ function DatabaseDetail({
           engine={engine}
           databases={((d.databases as AccessDatabase[]) ?? [])}
           users={((d.users as AccessUser[]) ?? [])}
+          roles={((d.os_roles as AccessRole[]) ?? [])}
           onClose={() => setAccessOpen(false)}
           onSubmit={async (body) => {
             const res = await act("MANAGE_ACCESS", body)
-            onPatch({ databases: body.databases, users: body.users, sync_status: "OutOfSync" })
+            onPatch({ databases: body.databases, users: body.users, os_roles: body.roles, sync_status: "OutOfSync" })
             const creds = (res as { credentials?: Record<string, string> }).credentials
             if (creds && Object.keys(creds).length > 0) setNewCredentials(creds)
             toast.success("Databases and users updated")
@@ -1283,6 +1306,19 @@ function DatabaseDetail({
             const r = res as { username?: string; password?: string }
             if (r.password) setNewCredentials({ [r.username ?? username]: r.password })
             toast.success(`Password rotated for ${username}`)
+          }}
+        />
+      )}
+
+      {policiesOpen && (
+        <IndexPoliciesDialog
+          policies={((d.index_policies as IndexPolicy[]) ?? [])}
+          onClose={() => setPoliciesOpen(false)}
+          onSubmit={async (policies) => {
+            await act("SET_INDEX_POLICIES", { policies })
+            onPatch({ index_policies: policies, sync_status: "OutOfSync" })
+            toast.success("Index policies updated")
+            setPoliciesOpen(false)
           }}
         />
       )}
@@ -1838,6 +1874,19 @@ function AutoscaleDialog({
 }
 
 type AccessDatabase = { name: string; owner?: string }
+type AccessRole = { name: string; indexPatterns?: string[]; actions?: string[] }
+type IndexPolicy = {
+  name: string
+  indexPatterns?: string[]
+  deleteAfterDays?: number
+  rolloverGiB?: number
+  rolloverDays?: number
+}
+
+// OpenSearch ACTION GROUPS a custom role may grant — mirrors osActionGroups server-side.
+// Action groups, never raw action strings: "indices:admin/*" is a management grant wearing an
+// index permission costume.
+const OPENSEARCH_ACTIONS = ["read", "search", "write", "crud", "create_index", "delete", "manage"]
 type AccessUser = { name: string; login?: string; databases?: string[]; roles?: string[] }
 
 // Built-in OpenSearch roles a customer may bind — mirrors the server-side allowlist in
@@ -1854,20 +1903,25 @@ const OPENSEARCH_ROLES = [
 const IDENT_RE = /^[a-z][a-z0-9_]{0,30}$/
 
 function AccessDialog({
-  engine, databases, users, onClose, onSubmit, onRotate,
+  engine, databases, users, roles, onClose, onSubmit, onRotate,
 }: {
   engine: string
   databases: AccessDatabase[]
   users: AccessUser[]
+  roles: AccessRole[]
   onClose: () => void
-  onSubmit: (body: { databases: AccessDatabase[]; users: AccessUser[] }) => Promise<void>
+  onSubmit: (body: { databases: AccessDatabase[]; users: AccessUser[]; roles: AccessRole[] }) => Promise<void>
   onRotate: (username: string) => Promise<void>
 }) {
   const isSearch = engine === "opensearch"
   const [dbs, setDbs] = useState<AccessDatabase[]>(databases)
   const [us, setUs] = useState<AccessUser[]>(users)
+  const [rs, setRs] = useState<AccessRole[]>(roles)
   const [newDb, setNewDb] = useState("")
   const [newUser, setNewUser] = useState("")
+  const [newRole, setNewRole] = useState("")
+  const [newRolePatterns, setNewRolePatterns] = useState("")
+  const [newRoleActions, setNewRoleActions] = useState<string[]>(["read"])
   const [pending, setPending] = useState(false)
 
   const existing = new Set(users.map((u) => u.name))
@@ -1884,6 +1938,18 @@ function AccessDialog({
     if (us.some((u) => u.name === name)) return toast.error(`${name} already exists`)
     setUs([...us, { name, databases: [], roles: [] }])
     setNewUser("")
+  }
+  const addRole = () => {
+    const name = newRole.trim()
+    const patterns = newRolePatterns.split(",").map((v) => v.trim()).filter(Boolean)
+    if (!IDENT_RE.test(name)) return toast.error("Use lower-case letters, digits and underscores; start with a letter")
+    if (OPENSEARCH_ROLES.includes(name)) return toast.error(`${name} is a built-in role name`)
+    if (rs.some((r) => r.name === name)) return toast.error(`${name} already exists`)
+    if (patterns.length === 0) return toast.error("At least one index pattern is required")
+    if (newRoleActions.length === 0) return toast.error("At least one permission is required")
+    setRs([...rs, { name, indexPatterns: patterns, actions: newRoleActions }])
+    setNewRole("")
+    setNewRolePatterns("")
   }
   const toggle = (user: AccessUser, key: "databases" | "roles", value: string) => {
     const list = user[key] ?? []
@@ -1931,6 +1997,57 @@ function AccessDialog({
             </div>
           )}
 
+          {isSearch && (
+            <div className="grid gap-2">
+              <Label>Custom roles</Label>
+              {rs.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  None. Built-in roles cover the common cases; add one to scope access to your own
+                  index patterns.
+                </p>
+              ) : (
+                rs.map((r) => (
+                  <div key={r.name} className="flex items-center justify-between rounded-lg border p-2">
+                    <div>
+                      <div className="font-mono text-sm">{r.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {(r.indexPatterns ?? []).join(", ")} · {(r.actions ?? []).join(", ")}
+                      </div>
+                    </div>
+                    <Button size="sm" variant="ghost" onClick={() => setRs(rs.filter((x) => x.name !== r.name))}>
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                ))
+              )}
+              <div className="grid gap-2 rounded-lg border p-3">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Input value={newRole} onChange={(e) => setNewRole(e.target.value)} placeholder="logs_reader" className="font-mono" />
+                  <Input value={newRolePatterns} onChange={(e) => setNewRolePatterns(e.target.value)} placeholder="logs-*, app-*" className="font-mono" />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {OPENSEARCH_ACTIONS.map((a) => (
+                    <Button
+                      key={a}
+                      size="sm"
+                      variant={newRoleActions.includes(a) ? "default" : "outline"}
+                      onClick={() =>
+                        setNewRoleActions(
+                          newRoleActions.includes(a)
+                            ? newRoleActions.filter((v) => v !== a)
+                            : [...newRoleActions, a],
+                        )
+                      }
+                    >
+                      {a}
+                    </Button>
+                  ))}
+                </div>
+                <Button variant="outline" onClick={addRole}>Add role</Button>
+              </div>
+            </div>
+          )}
+
           <div className="grid gap-2">
             <Label>Users</Label>
             {us.length === 0 ? (
@@ -1961,7 +2078,7 @@ function AccessDialog({
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {(isSearch ? OPENSEARCH_ROLES : dbs.map((d) => d.name)).map((value) => {
+                    {(isSearch ? [...OPENSEARCH_ROLES, ...rs.map((r) => r.name)] : dbs.map((d) => d.name)).map((value) => {
                       const key = isSearch ? "roles" : "databases"
                       const on = (u[key] ?? []).includes(value)
                       return (
@@ -2002,6 +2119,7 @@ function AccessDialog({
               setPending(true)
               const payload = {
                 databases: isSearch ? [] : dbs,
+                roles: isSearch ? rs : [],
                 users: us.map((u) => ({
                   name: u.name,
                   ...(isSearch ? { roles: u.roles ?? [] } : { databases: u.databases ?? [] }),
@@ -2048,6 +2166,130 @@ function NewCredentialsDialog({ creds, onClose }: { creds: Record<string, string
         </div>
         <DialogFooter>
           <Button onClick={onClose}>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// OpenSearch only — index retention (ISM), narrowed to the shape customers ask for. The whole
+// list is sent every time, so removing a row removes the policy.
+function IndexPoliciesDialog({
+  policies, onClose, onSubmit,
+}: {
+  policies: IndexPolicy[]
+  onClose: () => void
+  onSubmit: (policies: IndexPolicy[]) => Promise<void>
+}) {
+  const [ps, setPs] = useState<IndexPolicy[]>(policies)
+  const [name, setName] = useState("")
+  const [patterns, setPatterns] = useState("")
+  const [keepDays, setKeepDays] = useState("30")
+  const [rolloverGiB, setRolloverGiB] = useState("")
+  const [rolloverDays, setRolloverDays] = useState("")
+  const [pending, setPending] = useState(false)
+
+  const add = () => {
+    const n = name.trim()
+    const pats = patterns.split(",").map((v) => v.trim()).filter(Boolean)
+    const keep = Number(keepDays)
+    const rgb = Number(rolloverGiB) || 0
+    const rdays = Number(rolloverDays) || 0
+    if (!IDENT_RE.test(n)) return toast.error("Use lower-case letters, digits and underscores; start with a letter")
+    if (ps.some((p) => p.name === n)) return toast.error(`${n} already exists`)
+    if (pats.length === 0) return toast.error("At least one index pattern is required")
+    if (!Number.isInteger(keep) || keep < 1 || keep > 3650) return toast.error("Keep for must be 1–3650 days")
+    if (rdays && rdays >= keep) return toast.error("Roll over age must be less than the keep period")
+    setPs([...ps, {
+      name: n,
+      indexPatterns: pats,
+      deleteAfterDays: keep,
+      ...(rgb ? { rolloverGiB: rgb } : {}),
+      ...(rdays ? { rolloverDays: rdays } : {}),
+    }])
+    setName("")
+    setPatterns("")
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Index policies</DialogTitle>
+          <DialogDescription>
+            Retention for indices matching a pattern: keep them for a period, then delete them.
+            Optionally roll the write index over first, so the deletion falls on whole indices
+            instead of documents. Applies to existing indices as well as new ones.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-4 py-2">
+          {ps.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No policies yet — indices are kept forever.</p>
+          ) : (
+            ps.map((p) => (
+              <div key={p.name} className="flex items-center justify-between rounded-lg border p-3">
+                <div>
+                  <div className="font-mono text-sm">{p.name}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {(p.indexPatterns ?? []).join(", ")} · keep {p.deleteAfterDays}d
+                    {p.rolloverGiB ? ` · roll at ${p.rolloverGiB} GiB` : ""}
+                    {p.rolloverDays ? ` · roll at ${p.rolloverDays}d` : ""}
+                  </div>
+                </div>
+                <Button size="sm" variant="ghost" onClick={() => setPs(ps.filter((x) => x.name !== p.name))}>
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
+            ))
+          )}
+
+          <div className="grid gap-2 rounded-lg border p-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-1">
+                <Label htmlFor="ip-name" className="text-xs">Name</Label>
+                <Input id="ip-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="logs30" className="font-mono" />
+              </div>
+              <div className="grid gap-1">
+                <Label htmlFor="ip-pat" className="text-xs">Index patterns</Label>
+                <Input id="ip-pat" value={patterns} onChange={(e) => setPatterns(e.target.value)} placeholder="logs-*, app-*" className="font-mono" />
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="grid gap-1">
+                <Label htmlFor="ip-keep" className="text-xs">Keep for (days)</Label>
+                <Input id="ip-keep" value={keepDays} onChange={(e) => setKeepDays(e.target.value)} inputMode="numeric" />
+              </div>
+              <div className="grid gap-1">
+                <Label htmlFor="ip-rgb" className="text-xs">Roll over at (GiB)</Label>
+                <Input id="ip-rgb" value={rolloverGiB} onChange={(e) => setRolloverGiB(e.target.value)} inputMode="numeric" placeholder="optional" />
+              </div>
+              <div className="grid gap-1">
+                <Label htmlFor="ip-rd" className="text-xs">Roll over at (days)</Label>
+                <Input id="ip-rd" value={rolloverDays} onChange={(e) => setRolloverDays(e.target.value)} inputMode="numeric" placeholder="optional" />
+              </div>
+            </div>
+            <Button variant="outline" onClick={add}>Add policy</Button>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Deletion is permanent and runs unattended — check the patterns before applying.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={pending}
+            onClick={() => {
+              setPending(true)
+              onSubmit(ps)
+                .catch((e: Error) => toast.error(e.message))
+                .finally(() => setPending(false))
+            }}
+          >
+            {pending ? "Applying…" : "Apply"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

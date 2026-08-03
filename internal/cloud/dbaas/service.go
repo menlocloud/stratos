@@ -518,8 +518,8 @@ func (s *Service) ResetPassword(ctx context.Context, projectID, dbID, engine str
 // Secret that does not exist yet wedges the operator) and deleted AFTER it (an operator still
 // reconciling a removed user must not find its Secret gone mid-flight). Passwords for NEW users
 // are generated here and returned ONCE, exactly like ResetPassword — nothing stores them.
-func (s *Service) SetAccess(ctx context.Context, projectID, dbID, engine string, dbs []DBDatabase, users []DBUser) (map[string]string, error) {
-	if err := ValidateAccess(engine, dbs, users); err != nil {
+func (s *Service) SetAccess(ctx context.Context, projectID, dbID, engine string, dbs []DBDatabase, users []DBUser, roles []OSRole) (map[string]string, error) {
+	if err := ValidateAccess(engine, dbs, users, roles); err != nil {
 		return nil, err
 	}
 	existing, err := s.accessUsernames(ctx, dbID)
@@ -549,6 +549,14 @@ func (s *Service) SetAccess(ctx context.Context, projectID, dbID, engine string,
 	if err := s.PatchDatabaseValues(ctx, dbID, func(values map[string]any) error {
 		values["databases"] = databasesValues(dbs, users)
 		values["users"] = usersValues(dbs, users)
+		if engine == EngineOpenSearch {
+			block, _ := values["opensearch"].(map[string]any)
+			if block == nil {
+				block = map[string]any{}
+			}
+			block["roles"] = osRolesValues(roles)
+			values["opensearch"] = block
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -561,6 +569,24 @@ func (s *Service) SetAccess(ctx context.Context, projectID, dbID, engine string,
 		}
 	}
 	return created, nil
+}
+
+// SetIndexPolicies reconciles a database's OpenSearch retention policies (ISM). Declarative
+// like SetAccess: the caller sends the whole list. No secrets involved, so this is a plain
+// values patch — the chart expands each entry into an OpensearchISMPolicy state machine.
+func (s *Service) SetIndexPolicies(ctx context.Context, dbID string, policies []OSIndexPolicy) error {
+	if err := ValidateOSIndexPolicies(policies); err != nil {
+		return err
+	}
+	return s.PatchDatabaseValues(ctx, dbID, func(values map[string]any) error {
+		block, _ := values["opensearch"].(map[string]any)
+		if block == nil {
+			block = map[string]any{}
+		}
+		block["indexPolicies"] = osIndexPoliciesValues(policies)
+		values["opensearch"] = block
+		return nil
+	})
 }
 
 // ResetUserPassword rotates a customer-created user's password. Stratos owns that Secret, so

@@ -59,8 +59,14 @@ spec:
     name: {{ $name }}
   users:
     - {{ $login }}
+  {{/* Built-in role names pass through; a customer role resolves through the
+       same <id>-r-<name> prefix its CR is created under (roles.yaml). */}}
   roles:
-    {{- toYaml . | nindent 4 }}
+    {{- $custom := dict }}
+    {{- range $.Values.opensearch.roles }}{{ $_ := set $custom .name true }}{{ end }}
+    {{- range . }}
+    - {{ if index $custom . }}{{ printf "%s-r-%s" $name . }}{{ else }}{{ . }}{{ end }}
+    {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

@@ -14,6 +14,7 @@ import (
 	"net"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // Namespace / naming derivations — the ONE place these are derived (kamaji precedent).
@@ -304,10 +305,114 @@ var openSearchRoles = map[string]bool{
 	"index_management_full_access": true, "logstash": true,
 }
 
+// OSRole is a customer-defined OpenSearch role: index permissions expressed as patterns plus
+// action groups. Cluster permissions are deliberately NOT customer-settable — they are how a
+// role reaches other tenants' concerns (and the operator's own admin surface).
+type OSRole struct {
+	Name string
+	// IndexPatterns the role applies to (e.g. "logs-*").
+	IndexPatterns []string
+	// Actions are OpenSearch ACTION GROUP names, allowlisted (osActionGroups).
+	Actions []string
+}
+
+// OSIndexPolicy is a retention/rollover policy, the useful subset of ISM. The full ISM state
+// machine is an operator-grade tool; this is the shape customers actually ask for, and the
+// chart expands it into the real two-state policy.
+type OSIndexPolicy struct {
+	Name          string
+	IndexPatterns []string
+	// DeleteAfterDays is the index age at which the policy deletes it. REQUIRED (>0) — a
+	// policy that never deletes is a no-op that still costs a CR.
+	DeleteAfterDays int
+	// RolloverGiB / RolloverDays roll the write index over before it ages out. 0 = no rollover.
+	RolloverGiB  int
+	RolloverDays int
+}
+
+// osActionGroups is the allowlist of OpenSearch built-in action groups a customer role may
+// grant. Free-form action strings are refused: "indices:admin/*" in the wrong hands is a
+// cluster-management grant wearing an index-permission costume.
+var osActionGroups = map[string]bool{
+	"read": true, "search": true, "get": true, "write": true, "index": true,
+	"crud": true, "delete": true, "create_index": true, "manage": true,
+	"indices_all": true, "data_access": true,
+}
+
+// ValidateOSRoles checks customer-defined roles: safe names, at least one pattern, and only
+// allowlisted action groups.
+func ValidateOSRoles(roles []OSRole) error {
+	seen := map[string]bool{}
+	for _, r := range roles {
+		switch {
+		case !ValidIdent(r.Name):
+			return fmt.Errorf("role %q: names must be lower-case, start with a letter and use only letters, digits and underscores (max 31)", r.Name)
+		case seen[r.Name]:
+			return fmt.Errorf("role %q is listed twice", r.Name)
+		case openSearchRoles[r.Name]:
+			return fmt.Errorf("role %q is a built-in role name", r.Name)
+		case len(r.IndexPatterns) == 0:
+			return fmt.Errorf("role %q: at least one index pattern is required", r.Name)
+		case len(r.Actions) == 0:
+			return fmt.Errorf("role %q: at least one permission is required", r.Name)
+		}
+		seen[r.Name] = true
+		for _, p := range r.IndexPatterns {
+			if p == "" || len(p) > 255 || strings.ContainsAny(p, " \t\n\"'\\") {
+				return fmt.Errorf("role %q: index pattern %q is not valid", r.Name, p)
+			}
+		}
+		for _, a := range r.Actions {
+			if !osActionGroups[a] {
+				return fmt.Errorf("role %q: permission %q is not offered", r.Name, a)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateOSIndexPolicies checks retention policies: safe names, real patterns, and a delete
+// age that actually comes after any rollover age.
+func ValidateOSIndexPolicies(policies []OSIndexPolicy) error {
+	seen := map[string]bool{}
+	for _, p := range policies {
+		switch {
+		case !ValidIdent(p.Name):
+			return fmt.Errorf("policy %q: names must be lower-case, start with a letter and use only letters, digits and underscores (max 31)", p.Name)
+		case seen[p.Name]:
+			return fmt.Errorf("policy %q is listed twice", p.Name)
+		case len(p.IndexPatterns) == 0:
+			return fmt.Errorf("policy %q: at least one index pattern is required", p.Name)
+		case p.DeleteAfterDays < 1 || p.DeleteAfterDays > 3650:
+			return fmt.Errorf("policy %q: delete after must be 1..3650 days", p.Name)
+		case p.RolloverGiB < 0 || p.RolloverGiB > 10000:
+			return fmt.Errorf("policy %q: rollover size must be 0..10000 GiB", p.Name)
+		case p.RolloverDays < 0 || p.RolloverDays >= p.DeleteAfterDays:
+			return fmt.Errorf("policy %q: rollover age must be less than the delete age", p.Name)
+		}
+		seen[p.Name] = true
+		for _, pat := range p.IndexPatterns {
+			if pat == "" || len(pat) > 255 || strings.ContainsAny(pat, " \t\n\"'\\") {
+				return fmt.Errorf("policy %q: index pattern %q is not valid", p.Name, pat)
+			}
+		}
+	}
+	return nil
+}
+
 // ValidateAccess checks a whole desired access list against the engine before anything is
 // written. Fail here, not at the operator: half-applied access (a Secret with no CR, or a Grant
 // naming a user that was rejected) is the state nobody can reason about.
-func ValidateAccess(engine string, dbs []DBDatabase, users []DBUser) error {
+func ValidateAccess(engine string, dbs []DBDatabase, users []DBUser, roles []OSRole) error {
+	if engine == EngineOpenSearch {
+		if err := ValidateOSRoles(roles); err != nil {
+			return err
+		}
+	}
+	custom := map[string]bool{}
+	for _, r := range roles {
+		custom[r.Name] = true
+	}
 	names := map[string]bool{}
 	for _, u := range users {
 		switch {
@@ -321,7 +426,9 @@ func ValidateAccess(engine string, dbs []DBDatabase, users []DBUser) error {
 		names[u.Name] = true
 		if engine == EngineOpenSearch {
 			for _, r := range u.Roles {
-				if !openSearchRoles[r] {
+				// Built-in role, or one the caller declared in this very request. Anything else
+				// would bind to whatever happens to exist in the cluster.
+				if !openSearchRoles[r] && !custom[r] {
 					return fmt.Errorf("user %q: role %q is not offered", u.Name, r)
 				}
 			}

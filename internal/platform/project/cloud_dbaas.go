@@ -213,7 +213,7 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 	}
 
 	switch action {
-	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO", "SET_CUSTOM_DOMAIN", "SET_AUTOSCALE", "MANAGE_ACCESS":
+	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO", "SET_CUSTOM_DOMAIN", "SET_AUTOSCALE", "MANAGE_ACCESS", "SET_INDEX_POLICIES":
 		if !known[action] {
 			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support %s", engine, action)))
 			return true
@@ -470,23 +470,42 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 		// Declarative: the client sends the FULL desired list of logical databases and users,
 		// so a dropped entry is a removal. Passwords for newly declared users come back once,
 		// in this response only — nothing stores them.
-		dbs, users, err := dbaasAccessFromData(data)
+		dbs, users, roles, err := dbaasAccessFromData(data)
 		if err != nil {
 			h.fail(w, httpx.BadRequest(err.Error()))
 			return true
 		}
 		// Validate before anything is written so a rejected list cannot leave half-created
 		// Secrets behind (SetAccess re-checks; this is what turns a bad list into a 400).
-		if err := dbaas.ValidateAccess(engine, dbs, users); err != nil {
+		if err := dbaas.ValidateAccess(engine, dbs, users, roles); err != nil {
 			h.fail(w, httpx.BadRequest(err.Error()))
 			return true
 		}
-		created, err := ds.SetAccess(r.Context(), proj.ID, cr.ExternalID, engine, dbs, users)
+		created, err := ds.SetAccess(r.Context(), proj.ID, cr.ExternalID, engine, dbs, users, roles)
 		if err != nil {
 			h.fail(w, err)
 			return true
 		}
 		httpx.OK(w, map[string]any{"result": "UPDATING", "credentials": created})
+		return true
+
+	case "SET_INDEX_POLICIES":
+		// OpenSearch ISM, narrowed to what customers actually ask for: retention, with optional
+		// rollover. Declarative like MANAGE_ACCESS — the whole list, every time.
+		policies, err := dbaasIndexPoliciesFromData(data)
+		if err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		if err := dbaas.ValidateOSIndexPolicies(policies); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		if err := ds.SetIndexPolicies(r.Context(), cr.ExternalID, policies); err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
 		return true
 
 	case "RESET_USER_PASSWORD":
@@ -679,7 +698,7 @@ func dbaasSpecFromData(projectID string, d map[string]any) (dbaas.DatabaseSpec, 
 //
 // Shape only — dbaas.ValidateAccess owns the rules (identifier charset, reserved names,
 // cross-references, the OpenSearch role allowlist).
-func dbaasAccessFromData(d map[string]any) ([]dbaas.DBDatabase, []dbaas.DBUser, error) {
+func dbaasAccessFromData(d map[string]any) ([]dbaas.DBDatabase, []dbaas.DBUser, []dbaas.OSRole, error) {
 	strList := func(v any, what string) ([]string, error) {
 		if v == nil {
 			return nil, nil
@@ -721,7 +740,7 @@ func dbaasAccessFromData(d map[string]any) ([]dbaas.DBDatabase, []dbaas.DBUser, 
 
 	rawDBs, err := objList(d["databases"], "databases")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	dbs := make([]dbaas.DBDatabase, 0, len(rawDBs))
 	for _, obj := range rawDBs {
@@ -732,25 +751,84 @@ func dbaasAccessFromData(d map[string]any) ([]dbaas.DBDatabase, []dbaas.DBUser, 
 	}
 	rawUsers, err := objList(d["users"], "users")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	users := make([]dbaas.DBUser, 0, len(rawUsers))
 	for _, obj := range rawUsers {
 		grants, err := strList(obj["databases"], "user databases")
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		roles, err := strList(obj["roles"], "user roles")
+		userRoles, err := strList(obj["roles"], "user roles")
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		users = append(users, dbaas.DBUser{
 			Name:      strings.TrimSpace(strAny(obj["name"])),
 			Databases: grants,
-			Roles:     roles,
+			Roles:     userRoles,
 		})
 	}
-	return dbs, users, nil
+	rawRoles, err := objList(d["roles"], "roles")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	roles := make([]dbaas.OSRole, 0, len(rawRoles))
+	for _, obj := range rawRoles {
+		patterns, err := strList(obj["indexPatterns"], "role index patterns")
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		actions, err := strList(obj["actions"], "role permissions")
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		roles = append(roles, dbaas.OSRole{
+			Name:          strings.TrimSpace(strAny(obj["name"])),
+			IndexPatterns: patterns,
+			Actions:       actions,
+		})
+	}
+	return dbs, users, roles, nil
+}
+
+// dbaasIndexPoliciesFromData decodes a SET_INDEX_POLICIES body:
+//
+//	{policies: [{name, indexPatterns: [...], deleteAfterDays, rolloverGiB?, rolloverDays?}]}
+func dbaasIndexPoliciesFromData(d map[string]any) ([]dbaas.OSIndexPolicy, error) {
+	items, ok := d["policies"].([]any)
+	if d["policies"] != nil && !ok {
+		return nil, fmt.Errorf("policies must be an array of objects")
+	}
+	out := make([]dbaas.OSIndexPolicy, 0, len(items))
+	for _, raw := range items {
+		obj, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("policies must be an array of objects")
+		}
+		patternsRaw, ok := obj["indexPatterns"].([]any)
+		if obj["indexPatterns"] != nil && !ok {
+			return nil, fmt.Errorf("indexPatterns must be an array of patterns")
+		}
+		patterns := make([]string, 0, len(patternsRaw))
+		for _, p := range patternsRaw {
+			s, ok := p.(string)
+			if !ok {
+				return nil, fmt.Errorf("indexPatterns must be an array of patterns")
+			}
+			if s = strings.TrimSpace(s); s != "" {
+				patterns = append(patterns, s)
+			}
+		}
+		out = append(out, dbaas.OSIndexPolicy{
+			Name:            strings.TrimSpace(strAny(obj["name"])),
+			IndexPatterns:   patterns,
+			DeleteAfterDays: intAny(obj["deleteAfterDays"]),
+			RolloverGiB:     intAny(obj["rolloverGiB"]),
+			RolloverDays:    intAny(obj["rolloverDays"]),
+		})
+	}
+	return out, nil
 }
 
 // dbaasSSOFields pulls the Dashboards OIDC block out of a request body. Shared by create and

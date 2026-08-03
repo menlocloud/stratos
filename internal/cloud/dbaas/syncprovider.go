@@ -106,13 +106,16 @@ func databaseDataWithHost(cfg Config, app map[string]any, host string) map[strin
 		// endpoint is what the customer connects to (their domain > platform DNS name > VIP);
 		// endpoint_ip keeps the raw VIP, which is what a BYO domain's A record must target.
 		// Both are "" until Octavia programs the VIP — billing keys on endpoint being non-empty.
-		"endpoint":      cfg.PublicHost(digStr(app, "metadata", "name"), digStr(values, "opensearch", "customDomain"), host),
-		"endpoint_ip":   host,
+		"endpoint":    cfg.PublicHost(digStr(app, "metadata", "name"), digStr(values, "opensearch", "customDomain"), host),
+		"endpoint_ip": host,
 		// Customer-managed access, echoed from the values so the UI can list it without a
 		// second read. Names only — passwords live in per-user Secrets on the DB cluster.
-		"databases":     accessNames(values, "databases"),
-		"users":         accessNames(values, "users"),
-		"port":          Port(engine),
+		"databases": accessNames(values, "databases"),
+		"users":     accessNames(values, "users"),
+		// opensearch-only surfaces; empty slices elsewhere, which stay bson-stable.
+		"os_roles":       osList(values, "roles"),
+		"index_policies": osList(values, "indexPolicies"),
+		"port":           Port(engine),
 	}
 	for key, path := range map[string][]string{
 		"replicas":    {"instances"},
@@ -175,6 +178,20 @@ func accessNames(values map[string]any, key string) []any {
 			}
 		}
 		out = append(out, entry)
+	}
+	return out
+}
+
+// osList echoes an opensearch sub-list (custom roles, retention policies) from the values so the
+// client can render what is deployed without a second read. Plain strings/numbers only.
+func osList(values map[string]any, key string) []any {
+	block, _ := dig(values, "opensearch").(map[string]any)
+	list, _ := dig(block, key).([]any)
+	out := make([]any, 0, len(list))
+	for _, raw := range list {
+		if item, ok := raw.(map[string]any); ok {
+			out = append(out, item)
+		}
 	}
 	return out
 }

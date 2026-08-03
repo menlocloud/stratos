@@ -967,7 +967,7 @@ func TestSetChartVersionAndPins(t *testing.T) {
 func TestValidateAccess(t *testing.T) {
 	ok := []DBUser{{Name: "alice", Databases: []string{"orders"}}}
 	okDBs := []DBDatabase{{Name: "orders", Owner: "alice"}}
-	if err := ValidateAccess(EnginePostgreSQL, okDBs, ok); err != nil {
+	if err := ValidateAccess(EnginePostgreSQL, okDBs, ok, nil); err != nil {
 		t.Fatalf("valid access rejected: %v", err)
 	}
 	bad := map[string]struct {
@@ -991,15 +991,15 @@ func TestValidateAccess(t *testing.T) {
 		"grant on unknown database": {nil, []DBUser{{Name: "alice", Databases: []string{"ghost"}}}},
 	}
 	for name, tc := range bad {
-		if err := ValidateAccess(EnginePostgreSQL, tc.dbs, tc.users); err == nil {
+		if err := ValidateAccess(EnginePostgreSQL, tc.dbs, tc.users, nil); err == nil {
 			t.Errorf("%s: must be rejected", name)
 		}
 	}
 	// OpenSearch roles are an allowlist — an unknown role is a silent privilege grant otherwise.
-	if err := ValidateAccess(EngineOpenSearch, nil, []DBUser{{Name: "alice", Roles: []string{"readall"}}}); err != nil {
+	if err := ValidateAccess(EngineOpenSearch, nil, []DBUser{{Name: "alice", Roles: []string{"readall"}}}, nil); err != nil {
 		t.Errorf("built-in role rejected: %v", err)
 	}
-	if err := ValidateAccess(EngineOpenSearch, nil, []DBUser{{Name: "alice", Roles: []string{"superuser"}}}); err == nil {
+	if err := ValidateAccess(EngineOpenSearch, nil, []DBUser{{Name: "alice", Roles: []string{"superuser"}}}, nil); err == nil {
 		t.Error("unknown opensearch role must be rejected")
 	}
 }
@@ -1018,7 +1018,7 @@ func TestSetAccess(t *testing.T) {
 
 	created, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EnginePostgreSQL,
 		[]DBDatabase{{Name: "orders", Owner: "alice"}},
-		[]DBUser{{Name: "alice", Databases: []string{"orders"}}, {Name: "bob", Databases: []string{"orders"}}})
+		[]DBUser{{Name: "alice", Databases: []string{"orders"}}, {Name: "bob", Databases: []string{"orders"}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1055,7 +1055,7 @@ func TestSetAccess(t *testing.T) {
 	// becomes the owner, otherwise postgres hands it to the app role and the grant is a no-op.
 	if _, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EnginePostgreSQL,
 		[]DBDatabase{{Name: "logs"}},
-		[]DBUser{{Name: "alice", Databases: []string{"logs"}}, {Name: "bob", Databases: []string{"logs"}}}); err != nil {
+		[]DBUser{{Name: "alice", Databases: []string{"logs"}}, {Name: "bob", Databases: []string{"logs"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	app, _ = api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
@@ -1068,7 +1068,7 @@ func TestSetAccess(t *testing.T) {
 	// Re-declaring without bob removes bob's Secret and keeps alice's password stable.
 	alicePassword := created["alice"]
 	created2, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EnginePostgreSQL,
-		[]DBDatabase{{Name: "orders", Owner: "alice"}}, []DBUser{{Name: "alice", Databases: []string{"orders"}}})
+		[]DBDatabase{{Name: "orders", Owner: "alice"}}, []DBUser{{Name: "alice", Databases: []string{"orders"}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1095,7 +1095,7 @@ func TestSetAccess(t *testing.T) {
 	}
 	// A rejected list must not write anything: bob stays gone.
 	if _, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EnginePostgreSQL, nil,
-		[]DBUser{{Name: "bob"}, {Name: "DROP TABLE"}}); err == nil {
+		[]DBUser{{Name: "bob"}, {Name: "DROP TABLE"}}, nil); err == nil {
 		t.Fatal("an invalid list must be rejected")
 	}
 	if data, _ := api.GetSecretData(context.Background(), ns, UserSecretName(spec.ID, "bob")); data != nil {

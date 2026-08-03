@@ -111,6 +111,54 @@ func effectiveOwners(dbs []DBDatabase, users []DBUser) map[string]string {
 	return out
 }
 
+// osRolesValues renders customer-defined roles. The chart turns each into an OpensearchRole CR
+// whose NAME is the role name OpenSearch sees (prefixed, like users — one namespace holds every
+// database in the project), so `role` echoes the effective name back for display.
+func osRolesValues(roles []OSRole) []any {
+	out := make([]any, 0, len(roles))
+	for _, r := range roles {
+		patterns := make([]any, 0, len(r.IndexPatterns))
+		for _, p := range r.IndexPatterns {
+			patterns = append(patterns, p)
+		}
+		actions := make([]any, 0, len(r.Actions))
+		for _, a := range r.Actions {
+			actions = append(actions, a)
+		}
+		out = append(out, map[string]any{
+			"name":          r.Name,
+			"indexPatterns": patterns,
+			"actions":       actions,
+		})
+	}
+	return out
+}
+
+// osIndexPoliciesValues renders retention policies. Only the customer-facing knobs travel; the
+// chart expands them into the real ISM state machine.
+func osIndexPoliciesValues(policies []OSIndexPolicy) []any {
+	out := make([]any, 0, len(policies))
+	for _, p := range policies {
+		patterns := make([]any, 0, len(p.IndexPatterns))
+		for _, pat := range p.IndexPatterns {
+			patterns = append(patterns, pat)
+		}
+		entry := map[string]any{
+			"name":            p.Name,
+			"indexPatterns":   patterns,
+			"deleteAfterDays": p.DeleteAfterDays,
+		}
+		if p.RolloverGiB > 0 {
+			entry["rolloverGiB"] = p.RolloverGiB
+		}
+		if p.RolloverDays > 0 {
+			entry["rolloverDays"] = p.RolloverDays
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 func usersValues(dbs []DBDatabase, users []DBUser) []any {
 	// A postgres role reaches a database by being a member of that database's owner role, so
 	// each user's grants become inRoles on the owners of the databases it listed.

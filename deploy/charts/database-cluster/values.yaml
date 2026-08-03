@@ -233,6 +233,21 @@ opensearch:
   # over certIssuer on the http layer + Dashboards. DNS stays customer-side
   # (CNAME to the platform name or an A record to the VIP).
   customDomain: ""
+  # -- Customer-defined roles (MANAGE_ACCESS, opensearch only). Each renders an
+  # OpensearchRole CR named <resourceId>-r-<name> — that prefixed name IS the
+  # role name in OpenSearch, and users.yaml resolves it. `actions` are built-in
+  # ACTION GROUPS from a server-side allowlist; cluster-level permissions are
+  # deliberately not a customer knob.
+  # [{name: logs_reader, indexPatterns: ["logs-*"], actions: [read, search]}]
+  roles: []
+
+  # -- Index retention (SET_INDEX_POLICIES, opensearch only). Four numbers, not
+  # the full ISM state machine: templates/opensearch/ismpolicy.yaml expands each
+  # entry into a hot->delete policy bound to the patterns. rolloverGiB /
+  # rolloverDays are optional; deleteAfterDays is required.
+  # [{name: logs30, indexPatterns: ["logs-*"], deleteAfterDays: 30, rolloverGiB: 50}]
+  indexPolicies: []
+
   # -- Dashboards OIDC SSO, written by the SET_SSO action
   # (internal/cloud/dbaas/engines.go). PUBLIC IdP client ONLY — there is
   # deliberately no clientSecret key here and never will be (no secrets in

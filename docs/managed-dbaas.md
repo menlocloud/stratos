@@ -267,6 +267,21 @@ not planned), so `dbaas.ValidIdent` (`^[a-z][a-z0-9_]{0,30}$`) plus a reserved-n
 escaping layer. `TestValidateAccess` pins it. Never relax that regex without replacing the
 mechanism.
 
+**OpenSearch also gets two surfaces of its own**, both declarative and both driven from the
+same page:
+
+- **Custom roles** ride `MANAGE_ACCESS` alongside users (`roles: [{name, indexPatterns,
+  actions}]`). `actions` are built-in OpenSearch ACTION GROUPS from a server-side allowlist —
+  raw action strings are refused, because `indices:admin/*` is a management grant wearing an
+  index-permission costume, and cluster-level permissions are not offered at all. Like users,
+  the CR name is the role name, so a custom role is `<id>-r-<name>` and the role binding
+  resolves it through that prefix.
+- **Index retention** is `SET_INDEX_POLICIES` (`{policies: [{name, indexPatterns,
+  deleteAfterDays, rolloverGiB?, rolloverDays?}]}`). Four numbers rather than the full ISM state
+  machine, which the chart expands into a real `hot -> delete` policy bound to the patterns.
+  Note the kind casing: `OpenSearchISMPolicy`, while its siblings are `OpensearchUser` /
+  `OpensearchRole` — upstream is inconsistent and `kubectl api-resources` is the authority.
+
 The access CRs carry `argocd.argoproj.io/sync-wave: "1"`: they reference the engine CR, whose
 webhooks reject a User/Database/Grant naming a cluster that does not exist yet.
 
