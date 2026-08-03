@@ -41,22 +41,33 @@ spec:
       secretAccessKey:
         name: {{ .Values.backup.s3.credsSecret }}
         key: ACCESS_SECRET_KEY
-    {{- if .Values.backup.s3.pathStyle }}
     {{/*
-    barman uses boto3, which already switches to path-style when a custom
-    endpoint_url is set — but pinning it is cheap insurance against the RGW
-    virtual-host trap, where an unlisted Host makes the gateway parse the
-    bucket out of the hostname.
+    Compression: snappy for the base backup and the WAL stream. The enum offers
+    bzip2|gzip|lz4|snappy and the default is NONE — an uncompressed base backup
+    is the slow, expensive default nobody notices until the object-store bill
+    or a restore window shows up. snappy/lz4 decompress fast, which matters
+    more here than ratio: this data is read while something is on fire.
     */}}
     data:
+      compression: snappy
+      {{- if .Values.backup.s3.pathStyle }}
       additionalCommandArgs:
         - "--addressing-style=path"
+      {{- end }}
     wal:
+      compression: snappy
+      {{- if .Values.backup.s3.pathStyle }}
       archiveAdditionalCommandArgs:
         - "--addressing-style=path"
       restoreAdditionalCommandArgs:
         - "--addressing-style=path"
-    {{- end }}
+      {{- end }}
+    {{/*
+    The --addressing-style=path args above are cheap insurance against the RGW
+    virtual-host trap, where an unlisted Host makes the gateway parse the
+    bucket out of the hostname. boto3 already picks path-style for a custom
+    endpoint_url; pinning it costs nothing.
+    */}}
   {{- with include "database-cluster.backupRetention" . }}
   retentionPolicy: {{ . | quote }}
   {{- end }}

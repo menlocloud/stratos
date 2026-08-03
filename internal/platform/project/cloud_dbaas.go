@@ -63,6 +63,17 @@ func (h *Handler) dbaasCreate(w http.ResponseWriter, r *http.Request, u *user.Us
 		h.fail(w, httpx.BadRequest(err.Error()))
 		return
 	}
+	// Restore reads another database's backups, so PROVE the source is one of this project's
+	// databases and shares the engine. Without this check a customer could name any database id
+	// on the platform and recover someone else's data into their own instance.
+	if spec.RestoreFrom != nil {
+		src, err := h.dbaasSourceForRestore(r.Context(), proj, spec)
+		if err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return
+		}
+		_ = src
+	}
 	// Network placement: the ids are customer input — PROVE they belong to the project's own
 	// tenant before sharing the network with the ops-owned dbaas project. The binding is pinned
 	// to the provider's cfg.OSServiceID: the RBAC share is only meaningful on the SAME cloud as
@@ -734,6 +745,16 @@ func dbaasSpecFromData(projectID string, d map[string]any) (dbaas.DatabaseSpec, 
 		}
 		spec.DashboardsEnabled = b
 	}
+	if raw, has := d["restoreFrom"]; has && raw != nil {
+		obj, ok := raw.(map[string]any)
+		if !ok {
+			return spec, fmt.Errorf("restoreFrom must be an object")
+		}
+		spec.RestoreFrom = &dbaas.RestoreSource{
+			SourceID:   strings.TrimSpace(strAny(obj["sourceDatabaseId"])),
+			TargetTime: strings.TrimSpace(strAny(obj["targetTime"])),
+		}
+	}
 	if raw, has := d["sso"]; has && raw != nil {
 		block, ok := raw.(map[string]any)
 		if !ok {
@@ -746,6 +767,31 @@ func dbaasSpecFromData(projectID string, d map[string]any) (dbaas.DatabaseSpec, 
 		spec.SSO = sso
 	}
 	return spec, nil
+}
+
+// dbaasSourceForRestore proves the restore source belongs to THIS project and matches the
+// engine being created. Cross-project recovery would be a data breach with a friendly UI, and
+// a cross-engine one is a corrupt datadir.
+func (h *Handler) dbaasSourceForRestore(ctx context.Context, proj *Project, spec dbaas.DatabaseSpec) (*cloud.CloudResource, error) {
+	rows, err := h.cloud.FindByProjectAndType(ctx, proj.ID, cloud.TypeDatabaseCluster)
+	if err != nil {
+		return nil, fmt.Errorf("could not verify the source database")
+	}
+	for i := range rows {
+		cr := &rows[i]
+		if cr.ExternalID != spec.RestoreFrom.SourceID {
+			continue
+		}
+		d, _ := cr.Data["database"].(map[string]any)
+		if engine, _ := d["engine"].(string); engine != spec.Engine {
+			return nil, fmt.Errorf("the source database runs %s, not %s", engine, spec.Engine)
+		}
+		if backup, _ := d["backup"].(map[string]any); backup == nil || backup["enabled"] != true {
+			return nil, fmt.Errorf("the source database has no backups to restore from")
+		}
+		return cr, nil
+	}
+	return nil, fmt.Errorf("source database %q is not in this project", spec.RestoreFrom.SourceID)
 }
 
 // dbaasAccessFromData decodes a MANAGE_ACCESS body:

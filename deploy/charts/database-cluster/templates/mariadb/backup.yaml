@@ -30,6 +30,17 @@ metadata:
 spec:
   mariaDbRef:
     name: {{ $name }}
+  {{/*
+  target defaults to "Replica" — "physical backups will only be taken in ready
+  replicas". A single-instance database HAS no replica, so the default would
+  quietly never produce a backup. PreferReplica keeps the load off the primary
+  when a replica exists and falls back to it when one does not.
+  */}}
+  target: PreferReplica
+  {{/* gzip, not bzip2: the enum offers none|bzip2|gzip and bzip2 costs several
+       times the CPU for a few percent of size — the wrong trade for something
+       that runs unattended and is read under pressure. */}}
+  compression: gzip
   {{- with include "database-cluster.backupRetentionHours" . }}
   {{/* Go duration — days are not a unit here, see the helper. */}}
   maxRetention: {{ . }}

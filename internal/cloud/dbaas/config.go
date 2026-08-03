@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Namespace / naming derivations — the ONE place these are derived (kamaji precedent).
@@ -225,6 +226,11 @@ type DatabaseSpec struct {
 	// DashboardsEnabled deploys OpenSearch Dashboards (opensearch only) with its own
 	// tenant-facing LB (<id>-dash-lb). SET_SSO also flips this on — SSO rides Dashboards.
 	DashboardsEnabled bool
+	// RestoreFrom bootstraps this database from ANOTHER database's backups instead of an empty
+	// datadir. Restore is create-time by nature: the physical backups these engines take can
+	// only be laid down on a fresh data directory, so recovery produces a NEW database and the
+	// damaged one stays untouched until the customer is satisfied.
+	RestoreFrom *RestoreSource
 	// SSO is the Dashboards OIDC block, accepted at create so a customer does not have to
 	// create the database and then immediately reconfigure it. Same shape SET_SSO patches
 	// later (values.opensearch.sso); empty = off. Setting it implies DashboardsEnabled.
@@ -261,6 +267,17 @@ func (s DatabaseSpec) Validate(c Config) error {
 	}
 	if len(s.SSO) > 0 && s.Engine != EngineOpenSearch {
 		return fmt.Errorf("database: sso is an opensearch feature")
+	}
+	if s.RestoreFrom != nil {
+		// RESTORE, not BACKUP: mysql backs up fine, but the Percona restore CR targets a
+		// RUNNING cluster rather than bootstrapping a new one, so it is a different shape and
+		// not offered here.
+		if !Capabilities[s.Engine]["RESTORE"] {
+			return fmt.Errorf("database: engine %s cannot be restored into a new database", s.Engine)
+		}
+		if err := s.RestoreFrom.Validate(); err != nil {
+			return err
+		}
 	}
 	if s.CPU < 1 || (c.Limits.MaxCPU > 0 && s.CPU > c.Limits.MaxCPU) {
 		return fmt.Errorf("database: cpu must be 1..%d", max(c.Limits.MaxCPU, 1))
@@ -331,6 +348,30 @@ var BackupCredKeys = struct{ CNPGAccess, CNPGSecret, AWSAccess, AWSSecret string
 // in this area — a 5-field string in a 6-field parser silently runs at the wrong time. Stratos
 // stores five; the CNPG template prepends the seconds field.
 var cronRE = regexp.MustCompile(`^[-0-9*/,]+ [-0-9*/,]+ [-0-9*/,?LW]+ [-0-9*/,]+ [-0-9*/,?L#]+$`)
+
+// RestoreSource names what a new database recovers from.
+type RestoreSource struct {
+	// SourceID is the database id whose backups are read. Its object-store folder is derived
+	// the same way the source's own backup path was, so nothing else needs recording.
+	SourceID string
+	// TargetTime (RFC3339) recovers to that instant instead of the latest available state.
+	// Empty = replay everything, i.e. as close to the failure as the archive reaches.
+	TargetTime string
+}
+
+// Validate checks a restore request in isolation; the caller additionally proves the source
+// exists, shares this engine and actually has backups.
+func (r RestoreSource) Validate() error {
+	if !strings.HasPrefix(r.SourceID, "std-") {
+		return fmt.Errorf("restore: sourceDatabaseId is required")
+	}
+	if r.TargetTime != "" {
+		if _, err := time.Parse(time.RFC3339, r.TargetTime); err != nil {
+			return fmt.Errorf("restore: targetTime must be an RFC3339 timestamp")
+		}
+	}
+	return nil
+}
 
 // BackupSpec is a database's desired backup posture.
 type BackupSpec struct {

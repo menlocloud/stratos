@@ -163,6 +163,30 @@ backup:
     # (CNPG) and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (Percona, mariadb).
     credsSecret: ""
 
+# -- Recovery source, stamped by the create path when a database is restored
+# from another one's backups (internal/cloud/dbaas/values.go restoreValues).
+# Empty sourceId = a normal, empty database. Restore is create-time by nature:
+# these engines take PHYSICAL backups, which can only be laid on a fresh data
+# directory, so recovery produces a NEW database and leaves the damaged one
+# untouched. postgresql/ferretdb recover via CNPG bootstrap.recovery, mariadb
+# via bootstrapFrom; mysql is not offered (its restore CR targets a running
+# cluster, which is a different shape).
+restore:
+  # -- The database id whose object-store folder is read.
+  sourceId: ""
+  # -- RFC3339 instant to recover to. Empty = replay everything available.
+  targetTime: ""
+  # -- Secret holding the object-store credentials (written before the
+  # Application, because the bootstrap reads S3 immediately).
+  credsSecret: ""
+  s3:
+    endpoint: ""
+    bucket: ""
+    prefix: ""
+    region: ""
+    pathStyle: true
+    caCertSecret: ""
+
 # -- RESTART lever: an RFC3339 timestamp stamped by stratos on the RESTART
 # action. A changed value rolls the database pods via each engine's documented
 # restart mechanism (CNPG cluster annotation, Deployment/pod-template

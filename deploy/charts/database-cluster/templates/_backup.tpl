@@ -36,6 +36,24 @@ field; Percona and mariadb take the 5-field string as-is.
 {{- end -}}
 {{- end }}
 
+{{/* The SOURCE database's folder, for recovery. Derived exactly like
+     backupPath so the two sides can never disagree about where a backup went. */}}
+{{- define "database-cluster.restorePath" -}}
+{{- with .Values.restore.s3.prefix -}}
+{{- printf "s3://%s/%s/%s" $.Values.restore.s3.bucket . $.Values.restore.sourceId -}}
+{{- else -}}
+{{- printf "s3://%s/%s" .Values.restore.s3.bucket .Values.restore.sourceId -}}
+{{- end -}}
+{{- end }}
+
+{{- define "database-cluster.restoreHostPort" -}}
+{{- .Values.restore.s3.endpoint | trimPrefix "https://" | trimPrefix "http://" | trimSuffix "/" -}}
+{{- end }}
+
+{{- define "database-cluster.restoreTLS" -}}
+{{- if hasPrefix "https://" .Values.restore.s3.endpoint -}}true{{- else -}}false{{- end -}}
+{{- end }}
+
 {{/* mariadb wants HOST:PORT with NO scheme and decides TLS from a separate
      flag, so the scheme has to be stripped and remembered. */}}
 {{- define "database-cluster.backupHostPort" -}}

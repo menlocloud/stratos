@@ -75,6 +75,9 @@ const HIDDEN_ACTIONS: Record<string, Set<string>> = {
   // Caches and streams are not what customers restore, and neither pinned operator has an
   // object-store backup CR worth the surface.
   BACKUP: new Set(["valkey", "opensearch", "kafka"]),
+  // mysql backs up but cannot be recovered into a NEW instance — its restore CR targets a
+  // running cluster. Mirrors the RESTORE capability server-side.
+  RESTORE: new Set(["mysql", "valkey", "opensearch", "kafka"]),
 }
 const supports = (engine: string, action: string) => !HIDDEN_ACTIONS[action]?.has(engine)
 
@@ -233,6 +236,20 @@ export default function DatabasesPage() {
   const createScope: CloudScope | undefined =
     createLoc?.serviceId && createLoc?.region ? { serviceId: createLoc.serviceId, region: createLoc.region } : undefined
   const createEngines = useMemo(() => enginesFor(createLoc?.serviceId), [enginesFor, createLoc?.serviceId])
+  // Restore sources: this project's databases that actually have backups to read. Filtered by
+  // engine inside the dialog, since the engine is picked there.
+  const restoreSources = useMemo(
+    () =>
+      (data ?? [])
+        .map((r: CloudResource) => ({ r, d: database(r) }))
+        .filter(({ d }: { d: Db }) => (d.backup as { enabled?: boolean } | undefined)?.enabled === true)
+        .map(({ r, d }: { r: CloudResource; d: Db }) => ({
+          id: (r.externalId ?? r.id) as string,
+          name: (d.name as string) || r.externalId || r.id,
+          engine: String(d.engine ?? ""),
+        })),
+    [data],
+  )
   const createSvc = serviceFor(createLoc?.serviceId)
 
   // The project's own networks + subnets (cached NETWORK/SUBNET resources, default cloud scope =
@@ -423,6 +440,7 @@ export default function DatabasesPage() {
 
       {createOpen && (
         <DatabaseFormDialog
+          restoreSources={restoreSources}
           engines={createEngines}
           limits={createSvc?.databaseLimits}
           storageClasses={createSvc?.databaseStorageClasses}
@@ -570,11 +588,14 @@ export function DatabaseClusterDetailPage() {
 const CLUSTER_DEFAULT_STORAGE = "__cluster-default__"
 
 function DatabaseFormDialog({
-  engines, limits, storageClasses, networks, locations, locKey, onLocKey, onClose, onSubmit,
+  engines, limits, storageClasses, restoreSources, networks, locations, locKey, onLocKey, onClose, onSubmit,
 }: {
   engines: Record<string, DatabaseEngineOffer>
   limits?: DatabaseLimits
   storageClasses?: string[]
+  // Databases already in this project that a new one could be recovered from — same engine,
+  // backups on. The page owns the list, so the dialog never re-fetches it.
+  restoreSources: { id: string; name: string; engine: string }[]
   networks: NetworkOption[]
   locations: Location[]
   locKey: string
@@ -595,8 +616,16 @@ function DatabaseFormDialog({
   const allowedReplicas = offer.replicas?.length ? offer.replicas : [1, 3]
   const [replicasSel, setReplicasSel] = useState("")
   const replicas = allowedReplicas.includes(Number(replicasSel)) ? Number(replicasSel) : allowedReplicas[0]
+  // Databases in this project that could be recovered from: same engine, backups on.
+  // Computed by the page, which already has the list — the dialog must not re-fetch it.
   // OpenSearch only: deploy Dashboards (own private endpoint). Ignored for other engines.
   const [dashboards, setDashboards] = useState(false)
+  // Restore-from-backup. A recovered database is a NEW one: these engines take physical
+  // backups, which can only be laid on a fresh data directory, so the damaged database stays
+  // untouched until the customer is satisfied with the replacement.
+  const [restoreFrom, setRestoreFrom] = useState("")
+  const [restoreTime, setRestoreTime] = useState("")
+  const restoreCandidates = restoreSources.filter((c) => c.engine === engine)
   // Dashboards OIDC, offered up front so SSO does not need a second trip through the actions
   // menu. Same fields (and same server-side rule) as the post-create SSO dialog.
   const [ssoConnectUrl, setSsoConnectUrl] = useState("")
@@ -654,6 +683,14 @@ function DatabaseFormDialog({
           : {}),
         // The server refuses a beta engine without the explicit acknowledgement.
         ...(offer.beta ? { beta: true } : {}),
+        ...(restoreFrom
+          ? {
+              restoreFrom: {
+                sourceDatabaseId: restoreFrom,
+                ...(restoreTime ? { targetTime: new Date(restoreTime).toISOString() } : {}),
+              },
+            }
+          : {}),
         ...(engine === "opensearch" && dashboards ? { dashboards: true } : {}),
         ...(engine === "opensearch" && dashboards && ssoConnectUrl.trim() && ssoClientId.trim()
           ? {
@@ -753,6 +790,34 @@ function DatabaseFormDialog({
               </p>
             ) : null}
           </div>
+
+          {supports(engine, "RESTORE") && restoreCandidates.length > 0 && (
+            <div className="grid gap-2 rounded-lg border p-3">
+              <Label>Restore from a backup (optional)</Label>
+              <p className="text-xs text-muted-foreground">
+                Recovers another {engineLabel(engine)} database into this new one. The source is
+                left running and untouched.
+              </p>
+              <Select value={restoreFrom || "none"} onValueChange={(v) => setRestoreFrom(v === "none" ? "" : v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Start empty</SelectItem>
+                  {restoreCandidates.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {restoreFrom ? (
+                <div className="grid gap-1">
+                  <Label htmlFor="rs-time" className="text-xs">Recover to (optional)</Label>
+                  <Input id="rs-time" type="datetime-local" value={restoreTime} onChange={(e) => setRestoreTime(e.target.value)} />
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty to recover as close to now as the archive reaches.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-2">

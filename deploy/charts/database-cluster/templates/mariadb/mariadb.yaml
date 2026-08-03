@@ -16,6 +16,42 @@ metadata:
   annotations:
     {{- include "database-cluster.annotations" . | nindent 4 }}
 spec:
+  {{- if .Values.restore.sourceId }}
+  {{/*
+  Physical restore into a NEW instance. backupContentType MUST be set
+  explicitly for a raw S3 source — the operator only infers it from backupRef
+  or volumeSnapshotRef, and the default (Logical) would try to replay a
+  datadir copy as a SQL dump.
+
+  targetRecoveryTime picks the backup closest to that instant; it is not binlog
+  replay, so recovery lands on a backup boundary rather than an exact second.
+  */}}
+  bootstrapFrom:
+    backupContentType: Physical
+    {{- with .Values.restore.targetTime }}
+    targetRecoveryTime: {{ . | quote }}
+    {{- end }}
+    s3:
+      bucket: {{ .Values.restore.s3.bucket | quote }}
+      endpoint: {{ include "database-cluster.restoreHostPort" . | quote }}
+      prefix: {{ printf "%s/%s" (.Values.restore.s3.prefix | default "stratos") .Values.restore.sourceId | quote }}
+      {{- with .Values.restore.s3.region }}
+      region: {{ . | quote }}
+      {{- end }}
+      accessKeyIdSecretKeyRef:
+        name: {{ .Values.restore.credsSecret }}
+        key: AWS_ACCESS_KEY_ID
+      secretAccessKeySecretKeyRef:
+        name: {{ .Values.restore.credsSecret }}
+        key: AWS_SECRET_ACCESS_KEY
+      tls:
+        enabled: {{ include "database-cluster.restoreTLS" . }}
+        {{- with .Values.restore.s3.caCertSecret }}
+        caSecretKeyRef:
+          name: {{ . }}
+          key: ca.crt
+        {{- end }}
+  {{- end }}
   replicas: {{ int .Values.instances }}
   {{- if gt (int .Values.instances) 1 }}
   replication:

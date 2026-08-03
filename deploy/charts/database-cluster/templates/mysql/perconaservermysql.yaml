@@ -64,14 +64,20 @@ spec:
           region: {{ . | quote }}
           {{- end }}
           credentialsSecret: {{ .Values.backup.s3.credsSecret }}
-        {{- if .Values.backup.s3.pathStyle }}
         containerOptions:
+          {{/* Percona exposes no compression enum — it is an xtrabackup flag.
+               zstd is the fast-both-ways choice, and an uncompressed physical
+               backup is the expensive default nobody notices until a restore. */}}
+          args:
+            xtrabackup:
+              - "--compress=zstd"
+          {{- if .Values.backup.s3.pathStyle }}
           env:
             # RGW is path-style; xbcloud defaults to bucket-lookup auto, which
             # tries the virtual-host form first.
             - name: XBCLOUD_EXTRA_ARGS
               value: "--s3-bucket-lookup=path"
-        {{- end }}
+          {{- end }}
     {{- with .Values.backup.schedule }}
     schedule:
       - name: stratos-scheduled

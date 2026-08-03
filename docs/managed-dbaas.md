@@ -333,10 +333,35 @@ tests or by a live `apply --dry-run=server`:
 Retention is days everywhere except Percona, which counts BACKUPS; at one run per day the two
 agree, and a sub-daily schedule keeps proportionally less wall-clock history.
 
-**Restore is not wired yet.** Three of the four engines can only restore into a NEW instance
-(CNPG always bootstraps a new Cluster; mariadb physical/PITR goes through `bootstrapFrom` on a
-new MariaDB), so restore belongs on the create path as "new database from a backup" rather than
-as an action on the existing one. The backups and the WAL/binlog archive are being taken today.
+### Restore
+
+Restore is a CREATE, not an action: these engines take physical backups, which can only be laid
+on a fresh data directory, so recovery produces a NEW database and the damaged one keeps running
+untouched until the customer is satisfied with the replacement. The create body carries
+`restoreFrom: {sourceDatabaseId, targetTime?}`; omit `targetTime` to replay everything the
+archive reaches.
+
+| Engine | How |
+|---|---|
+| `postgresql`, `ferretdb` | CNPG `bootstrap.recovery` + `externalClusters[].plugin` pointing at a SECOND ObjectStore that addresses the SOURCE's folder, with `recoveryTarget.targetTime` for PITR. For ferretdb the recovery REPLACES initdb — the extension, its roles and the grant all come back inside the datadir. |
+| `mariadb` | `spec.bootstrapFrom` with `backupContentType: Physical` (the operator only infers the type from `backupRef`, and the default Logical would replay a datadir copy as SQL) plus `targetRecoveryTime`, which picks the nearest backup rather than replaying binlogs. |
+| `mysql` | Not offered. Percona restores into a RUNNING cluster, which is a different mechanism with a different failure model — left out rather than half-wired. |
+
+`serverName` on the CNPG external cluster MUST be the SOURCE's id: barman looks for base backups
+under that name and a wrong one finds nothing instead of failing. The recovery ObjectStore is
+deliberately separate from the one the new database backs up TO, so a restore can never write
+into the folder it is reading.
+
+The source is proven server-side to belong to the SAME project and run the SAME engine —
+without that check a customer could name any database id on the platform and recover someone
+else's data into their own instance. Its credential Secret is written BEFORE the Application,
+because the operator starts recovering the moment the CR lands.
+
+Compression is on everywhere (snappy for CNPG data and WAL, gzip for mariadb, `--compress=zstd`
+for xtrabackup): the operator defaults are all "no compression", which is the slow, expensive
+default nobody notices until a restore window or an object-store bill shows up. mariadb also
+runs `target: PreferReplica` — the CRD default is `Replica`, and a single-instance database has
+no replica, so backups would quietly never be taken.
 
 ## Connection secrets (contract, pinned by TestConnectionSecretContract)
 

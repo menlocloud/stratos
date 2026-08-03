@@ -70,6 +70,27 @@ spec:
     pg_hba:
       - host all all 127.0.0.1/32 trust
       - host all all ::1/128 trust
+  {{- if .Values.restore.sourceId }}
+  {{/*
+  Recovery replaces initdb entirely: the DocumentDB extension, its roles and the
+  grant all come back inside the restored datadir, so re-running the bootstrap
+  SQL would be both redundant and wrong. serverName must be the SOURCE's id.
+  */}}
+  bootstrap:
+    recovery:
+      source: restore-origin
+      {{- with .Values.restore.targetTime }}
+      recoveryTarget:
+        targetTime: {{ . | quote }}
+      {{- end }}
+  externalClusters:
+    - name: restore-origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: {{ include "database-cluster.name" . }}-restore-store
+          serverName: {{ .Values.restore.sourceId }}
+  {{- else }}
   bootstrap:
     initdb:
       # Runs in the app database as superuser — the CNPG equivalent of the
@@ -81,6 +102,7 @@ spec:
       postInitApplicationSQL:
         - CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;
         - GRANT documentdb_admin_role TO app;
+  {{- end }}
   {{- if include "database-cluster.backupEnabled" . }}
   {{/* barman-cloud plugin: isWALArchiver is what turns on continuous WAL
        archiving, i.e. what makes point-in-time recovery possible at all.

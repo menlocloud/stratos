@@ -1252,3 +1252,69 @@ func TestListBackups(t *testing.T) {
 		t.Error("an engine with no backup CR must report that, not an empty list")
 	}
 }
+
+// TestRestoreFrom pins the recovery contract: values name the SOURCE's folder, the credential
+// Secret exists before the Application (the bootstrap reads S3 immediately), and engines whose
+// restore targets a running cluster are refused rather than half-wired.
+func TestRestoreFrom(t *testing.T) {
+	api := newFakeAPI()
+	cfg := testConfig()
+	cfg.Backup = BackupConfig{
+		Endpoint: "https://s3.example", Bucket: "backups", Prefix: "az1",
+		AccessKey: "AK", SecretKey: "SK", PathStyle: true,
+	}
+	svc := NewWithAPI(api, cfg, "svc-1")
+	spec := testSpec(EnginePostgreSQL, "17")
+	spec.RestoreFrom = &RestoreSource{SourceID: "std-source01", TargetTime: "2026-08-03T10:00:00Z"}
+	if _, err := svc.CreateDatabase(context.Background(), spec, NetShare{NetworkID: "net-1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Ordering is the whole point: the credential must exist by the time the Application does.
+	secretAt, appAt := -1, -1
+	for i, op := range api.ops {
+		if op == "secret:"+BackupSecretName(spec.ID) {
+			secretAt = i
+		}
+		if op == "app:"+spec.ID {
+			appAt = i
+		}
+	}
+	if secretAt < 0 || appAt < 0 || secretAt > appAt {
+		t.Fatalf("restore credentials must be applied before the Application: %v", api.ops)
+	}
+	app, _ := api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
+	values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	restore, _ := values["restore"].(map[string]any)
+	if restore["sourceId"] != "std-source01" || restore["targetTime"] != "2026-08-03T10:00:00Z" {
+		t.Fatalf("restore values = %v", restore)
+	}
+	if restore["credsSecret"] != BackupSecretName(spec.ID) {
+		t.Errorf("restore must read through this database's own credential secret, got %v", restore["credsSecret"])
+	}
+	if strings.Contains(fmt.Sprint(values), "SK") && strings.Contains(fmt.Sprint(values), "AK") {
+		t.Error("restore credentials leaked into values")
+	}
+
+	// A normal create carries no restore block at all.
+	plain := BuildValues(cfg, testSpec(EnginePostgreSQL, "17"))
+	if _, has := plain["restore"]; has {
+		t.Error("a non-restoring database must not carry a restore block")
+	}
+
+	// mysql backs up but cannot bootstrap from a backup — refuse rather than half-wire it.
+	my := testSpec(EngineMySQL, "8.4")
+	my.RestoreFrom = &RestoreSource{SourceID: "std-source01"}
+	if err := my.Validate(cfg); err == nil {
+		t.Error("mysql restore-into-new-database must be refused")
+	}
+	// Malformed sources are rejected before anything is written.
+	bad := testSpec(EnginePostgreSQL, "17")
+	bad.RestoreFrom = &RestoreSource{SourceID: "not-an-id"}
+	if err := bad.Validate(cfg); err == nil {
+		t.Error("a source id that is not a database id must be rejected")
+	}
+	bad.RestoreFrom = &RestoreSource{SourceID: "std-source01", TargetTime: "yesterday"}
+	if err := bad.Validate(cfg); err == nil {
+		t.Error("a non-RFC3339 target time must be rejected")
+	}
+}

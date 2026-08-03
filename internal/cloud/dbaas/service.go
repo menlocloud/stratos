@@ -156,6 +156,23 @@ func (s *Service) CreateDatabase(ctx context.Context, spec DatabaseSpec, share N
 			return nil, fmt.Errorf("dbaas: apply auth secret: %w", err)
 		}
 	}
+	// A restoring database reads the object store during BOOTSTRAP, so its credential Secret
+	// must exist before the Application does — the operator starts recovering the moment the CR
+	// lands, and a missing Secret there is a failed bootstrap, not a retry.
+	if spec.RestoreFrom != nil {
+		if !s.cfg.Backup.Enabled() {
+			return nil, fmt.Errorf("dbaas: this location has no backup object store configured")
+		}
+		if err := s.api.ApplySecret(ctx, ns, BackupSecretName(spec.ID), map[string]string{
+			BackupCredKeys.CNPGAccess: s.cfg.Backup.AccessKey,
+			BackupCredKeys.CNPGSecret: s.cfg.Backup.SecretKey,
+			BackupCredKeys.AWSAccess:  s.cfg.Backup.AccessKey,
+			BackupCredKeys.AWSSecret:  s.cfg.Backup.SecretKey,
+		}, map[string]string{LabelProject: spec.ProjectID, LabelService: s.serviceID, LabelManagedBy: ManagedByValue},
+			nil); err != nil {
+			return nil, fmt.Errorf("dbaas: apply restore credentials: %w", err)
+		}
+	}
 	values := BuildValues(s.cfg, spec)
 	app := BuildApplication(s.cfg, spec, s.serviceID, s.cfg.ChartVersion, values)
 	if err := s.api.ApplyApplication(ctx, app); err != nil {

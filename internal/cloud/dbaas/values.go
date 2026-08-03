@@ -71,7 +71,37 @@ func BuildValues(cfg Config, spec DatabaseSpec) map[string]any {
 			values["opensearch"] = osBlock
 		}
 	}
+	if spec.RestoreFrom != nil {
+		values["restore"] = restoreValues(cfg, spec.ID, *spec.RestoreFrom)
+	}
 	return values
+}
+
+// restoreValues renders the recovery source. The new database reads the SOURCE's folder in the
+// same bucket, so only the source id travels — the path is derived identically on both sides.
+// Credentials come from the new database's own backup Secret, which the create path writes
+// before the Application exists precisely so the bootstrap can read them.
+func restoreValues(cfg Config, dbID string, src RestoreSource) map[string]any {
+	out := map[string]any{
+		"sourceId":    src.SourceID,
+		"credsSecret": BackupSecretName(dbID),
+		"s3": map[string]any{
+			"endpoint":  cfg.Backup.Endpoint,
+			"bucket":    cfg.Backup.Bucket,
+			"prefix":    cfg.Backup.Prefix,
+			"pathStyle": cfg.Backup.PathStyle,
+		},
+	}
+	if cfg.Backup.Region != "" {
+		out["s3"].(map[string]any)["region"] = cfg.Backup.Region
+	}
+	if cfg.Backup.CACertSecret != "" {
+		out["s3"].(map[string]any)["caCertSecret"] = cfg.Backup.CACertSecret
+	}
+	if src.TargetTime != "" {
+		out["targetTime"] = src.TargetTime
+	}
+	return out
 }
 
 // backupValues renders the chart's backup block. The object store comes from the PROVIDER, the
