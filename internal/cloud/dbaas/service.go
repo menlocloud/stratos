@@ -31,6 +31,7 @@ type K8sAPI interface {
 	DeleteApplication(ctx context.Context, ns, name string) error
 	GetService(ctx context.Context, ns, name string) (map[string]any, error)
 	GetVPA(ctx context.Context, ns, name string) (map[string]any, error)
+	ListCRs(ctx context.Context, group, version, plural, ns, labelSelector string) ([]map[string]any, error)
 }
 
 // defaultFinalizeGrace: a net-share marker secret younger than this is never treated as an
@@ -633,6 +634,104 @@ func (s *Service) accessUsernames(ctx context.Context, dbID string) (map[string]
 		}
 	}
 	return out, nil
+}
+
+// SetBackup turns object-store backups on or off for one database and sets its schedule and
+// retention. The credential Secret is written BEFORE the values flip and removed AFTER it — the
+// same ordering discipline as the BYO certificate, and for the same reason: an operator that
+// reconciles a backup CR pointing at a Secret which does not exist yet wedges, and one still
+// draining a disabled schedule must not lose its credential mid-run.
+func (s *Service) SetBackup(ctx context.Context, projectID, dbID string, spec BackupSpec) error {
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+	if spec.Enabled && !s.cfg.Backup.Enabled() {
+		return fmt.Errorf("dbaas: this location has no backup object store configured")
+	}
+	ns := NamespaceFor(projectID)
+	if spec.Enabled {
+		if err := s.api.ApplySecret(ctx, ns, BackupSecretName(dbID), map[string]string{
+			BackupCredKeys.CNPGAccess: s.cfg.Backup.AccessKey,
+			BackupCredKeys.CNPGSecret: s.cfg.Backup.SecretKey,
+			BackupCredKeys.AWSAccess:  s.cfg.Backup.AccessKey,
+			BackupCredKeys.AWSSecret:  s.cfg.Backup.SecretKey,
+		}, map[string]string{LabelProject: projectID, LabelService: s.serviceID, LabelManagedBy: ManagedByValue},
+			nil); err != nil {
+			return fmt.Errorf("dbaas: apply backup credentials: %w", err)
+		}
+	}
+	if err := s.PatchDatabaseValues(ctx, dbID, func(values map[string]any) error {
+		values["backup"] = backupValues(s.cfg, dbID, spec)
+		return nil
+	}); err != nil {
+		return err
+	}
+	if !spec.Enabled {
+		if err := s.api.DeleteSecret(ctx, ns, BackupSecretName(dbID)); err != nil && !kamajik8s.NotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// TriggerBackup runs an out-of-schedule backup by stamping values.backup.runAt. Every engine
+// template turns a CHANGED value into one extra backup (a new CNPG Backup CR named after the
+// stamp, mariadb's schedule.onDemand identifier, a Percona backup CR), so "back up now" needs
+// no imperative API against the DB cluster — it is the same declarative path as everything else
+// and it survives a stratos restart mid-flight.
+func (s *Service) TriggerBackup(ctx context.Context, dbID, stamp string) error {
+	return s.PatchDatabaseValues(ctx, dbID, func(values map[string]any) error {
+		block, _ := values["backup"].(map[string]any)
+		if block == nil || block["enabled"] != true {
+			return fmt.Errorf("dbaas: backups are not enabled for this database")
+		}
+		block["runAt"] = stamp
+		values["backup"] = block
+		return nil
+	})
+}
+
+// ListBackups reports the backup objects the engine's operator has produced, newest first. Read
+// straight off the DB cluster rather than cached: a backup list is small, read rarely, and a
+// stale one is the kind of thing someone plans a restore around.
+func (s *Service) ListBackups(ctx context.Context, projectID, dbID, engine string) ([]map[string]any, error) {
+	plural, group, version := BackupCRFor(engine)
+	if plural == "" {
+		return nil, fmt.Errorf("dbaas: engine %q does not support backups", engine)
+	}
+	items, err := s.api.ListCRs(ctx, group, version, plural, NamespaceFor(projectID),
+		LabelManagedBy+"="+ManagedByValue)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		// Ownership is by name prefix as well as label: one namespace holds every database in
+		// the project, and a backup belonging to a sibling must never appear here.
+		name := digStr(it, "metadata", "name")
+		if !strings.HasPrefix(name, dbID+"-") {
+			continue
+		}
+		out = append(out, map[string]any{
+			"name":       name,
+			"phase":      backupPhase(it),
+			"createdAt":  digStr(it, "metadata", "creationTimestamp"),
+			"startedAt":  digStr(it, "status", "startedAt"),
+			"finishedAt": digStr(it, "status", "stoppedAt"),
+			"error":      digStr(it, "status", "error"),
+		})
+	}
+	return out, nil
+}
+
+// backupPhase normalises the per-operator status field into one word for the UI.
+func backupPhase(obj map[string]any) string {
+	for _, path := range [][]string{{"status", "phase"}, {"status", "state"}} {
+		if v := digStr(obj, path...); v != "" {
+			return v
+		}
+	}
+	return "UNKNOWN"
 }
 
 // SetCustomDomainTLS writes the stratos-owned BYO-certificate secret <id>-custom-tls (keys

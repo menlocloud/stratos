@@ -97,6 +97,11 @@ Admin UI → System → Cloud providers → Add provider → **Database (DBaaS)*
   OpenSearch API + Dashboards then serve a real certificate (`<id>-tls`) for the platform name
   instead of the operator's self-signed pair. Other engines are raw TCP — an A record is all
   they need.
+- `config.database.backup` (optional) — the object store every database on this location backs
+  up to: `{endpoint, bucket, prefix?, region?, pathStyle}` plus `secret.backupAccessKey` /
+  `secret.backupSecretKey`. Customers never see or choose it; they only turn backups on. Empty
+  bucket/endpoint = the whole backup surface stays hidden client-side rather than offering a
+  toggle that would write nowhere.
 - `config.services.database.<region> = true` — un-hides the client Databases surface.
 
 Seed example: `deploy/seed/external-service-dev.json` (`svc-dbaas-dev`).
@@ -284,6 +289,54 @@ same page:
 
 The access CRs carry `argocd.argoproj.io/sync-wave: "1"`: they reference the engine CR, whose
 webhooks reject a User/Database/Grant naming a cluster that does not exist yet.
+
+## Backups (BACKUP capability)
+
+`SET_BACKUP {enabled, schedule, retentionDays}` sets the posture; `CREATE_BACKUP` runs one now;
+`LIST_BACKUPS` reads the history live off the DB cluster (someone reading it is usually deciding
+what to restore, so a stale answer is worse than a slow one). The store is provider config —
+nothing in the request names a bucket.
+
+Credentials never travel through values: stratos writes one Secret per database
+(`<id>-backup-s3`) carrying every key alias the operators want — `ACCESS_KEY_ID` /
+`ACCESS_SECRET_KEY` for CNPG and `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` for Percona and
+mariadb — and the CRs reference it. Enabling writes the Secret BEFORE the values flip;
+disabling removes it AFTER, so no operator ever reconciles against a Secret that is not there.
+
+| Engine | Mechanism | PITR |
+|---|---|---|
+| `postgresql`, `ferretdb` | barman-cloud **plugin**: an `ObjectStore` CR plus `spec.plugins[].isWALArchiver` on the Cluster, with a `ScheduledBackup` and on-demand `Backup` CRs | Yes — WAL archiving is what `isWALArchiver` turns on |
+| `mariadb` | `PhysicalBackup` with `spec.schedule.{cron,immediate,onDemand}` | Only on the **replication** topology; 26.6.0 does not do it standalone or on Galera |
+| `mysql` | Percona in-CR `spec.backup.storages` + `spec.backup.schedule[]`, on-demand as its own `PerconaServerMySQLBackup` | Yes, via a binlog-server |
+
+**Why the plugin and not `spec.backup.barmanObjectStore`:** the in-core object store is
+deprecated as of CNPG 1.26 and **removed in 1.31**. Building on it would buy one minor version
+and then force a rewrite of every Cluster spec, ScheduledBackup and stored restore recipe.
+PREREQUISITE: the `plugin-barman-cloud` chart must be installed on the DB cluster (namespace
+`cnpg-system`) — without it the `barmancloud.cnpg.io` CRD does not exist and the Application
+fails to sync.
+
+Four format traps, each of which fails silently or not at all rather than loudly, all pinned by
+tests or by a live `apply --dry-run=server`:
+
+- **Cron arity.** CNPG's `ScheduledBackup` takes SIX fields (leading seconds); Percona and
+  mariadb take five. Stratos stores ONE canonical five-field cron and `_backup.tpl` converts —
+  a five-field string in a six-field parser runs at the wrong hour instead of erroring.
+- **`endpointUrl`, not `endpointURL`** on the Percona CR. The docs use the capitalised spelling;
+  a CRD PRUNES unknown fields, so the typo does not error — the endpoint simply vanishes and
+  xbcloud uploads to real AWS S3 with these credentials.
+- **mariadb's S3 endpoint is `host:port` with NO scheme**, and TLS comes from
+  `storage.s3.tls.enabled`. Passing a URL builds `https://https://…`.
+- **mariadb's `maxRetention` is a Go duration**, which has no day unit — `30d` is rejected with
+  `unknown unit "d"`. Days are converted to hours.
+
+Retention is days everywhere except Percona, which counts BACKUPS; at one run per day the two
+agree, and a sub-daily schedule keeps proportionally less wall-clock history.
+
+**Restore is not wired yet.** Three of the four engines can only restore into a NEW instance
+(CNPG always bootstraps a new Cluster; mariadb physical/PITR goes through `bootstrapFrom` on a
+new MariaDB), so restore belongs on the create path as "new database from a backup" rather than
+as an action on the existing one. The backups and the WAL/binlog archive are being taken today.
 
 ## Connection secrets (contract, pinned by TestConnectionSecretContract)
 

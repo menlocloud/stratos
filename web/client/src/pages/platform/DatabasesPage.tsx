@@ -72,6 +72,9 @@ const HIDDEN_ACTIONS: Record<string, Set<string>> = {
   // Only postgresql/mariadb/opensearch have a values-shaped user model in their pinned
   // operator; mysql's ps-operator has no user/database CRDs at all.
   MANAGE_ACCESS: new Set(["mysql", "valkey", "ferretdb", "kafka"]),
+  // Caches and streams are not what customers restore, and neither pinned operator has an
+  // object-store backup CR worth the surface.
+  BACKUP: new Set(["valkey", "opensearch", "kafka"]),
 }
 const supports = (engine: string, action: string) => !HIDDEN_ACTIONS[action]?.has(engine)
 
@@ -535,6 +538,7 @@ export function DatabaseClusterDetailPage() {
           engines={enginesFor(rowServiceId(resource))}
           limits={serviceFor(rowServiceId(resource))?.databaseLimits}
           platformVersion={platformVersionFor(rowServiceId(resource))}
+          backupConfigured={!!serviceFor(rowServiceId(resource))?.databaseBackupConfigured}
           onDeleted={() => setDeleteOpen(true)}
           onPatch={(patch) => patchDatabase(resource.id, patch)}
         />
@@ -967,7 +971,7 @@ type ConnectionInfo = {
 }
 
 function DatabaseDetail({
-  pid, scope, resource, engines, limits, platformVersion, onDeleted, onPatch,
+  pid, scope, resource, engines, limits, platformVersion, backupConfigured, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
@@ -975,6 +979,9 @@ function DatabaseDetail({
   engines: Record<string, DatabaseEngineOffer>
   limits?: DatabaseLimits
   platformVersion: string
+  // False when the location has no backup object store — the backup surface stays hidden
+  // rather than offering a toggle that would write nowhere.
+  backupConfigured: boolean
   onDeleted: () => void
   // Optimistically applies a partial data.database patch to the cached row — called after
   // every successful mutating action so the sheet reflects the request immediately.
@@ -999,6 +1006,7 @@ function DatabaseDetail({
   const [autoscaleOpen, setAutoscaleOpen] = useState(false)
   const [platformOpen, setPlatformOpen] = useState(false)
   const [accessOpen, setAccessOpen] = useState(false)
+  const [backupOpen, setBackupOpen] = useState(false)
   const [policiesOpen, setPoliciesOpen] = useState(false)
   // MANAGE_ACCESS returns a password per NEWLY declared user, exactly once.
   const [newCredentials, setNewCredentials] = useState<Record<string, string> | null>(null)
@@ -1164,6 +1172,9 @@ function DatabaseDetail({
           {engine === "opensearch" && (
             <Button size="sm" variant="outline" onClick={() => setPoliciesOpen(true)}>Index policies</Button>
           )}
+          {supports(engine, "BACKUP") && backupConfigured && (
+            <Button size="sm" variant="outline" onClick={() => setBackupOpen(true)}>Backups</Button>
+          )}
           {supports(engine, "MANAGE_ACCESS") && (
             <Button size="sm" variant="outline" onClick={() => setAccessOpen(true)}>
               {engine === "opensearch" ? "Users & roles" : "Databases & users"}
@@ -1306,6 +1317,27 @@ function DatabaseDetail({
             const r = res as { username?: string; password?: string }
             if (r.password) setNewCredentials({ [r.username ?? username]: r.password })
             toast.success(`Password rotated for ${username}`)
+          }}
+        />
+      )}
+
+      {backupOpen && (
+        <BackupDialog
+          pid={pid}
+          scope={scope}
+          resourceId={resource.id}
+          backup={(d.backup as BackupState) ?? {}}
+          onClose={() => setBackupOpen(false)}
+          onSubmit={async (body) => {
+            await act("SET_BACKUP", body)
+            onPatch({ backup: { ...(d.backup as BackupState), ...body }, sync_status: "OutOfSync" })
+            toast.success(body.enabled ? "Backups updated" : "Backups disabled")
+            setBackupOpen(false)
+          }}
+          onRunNow={async () => {
+            await act("CREATE_BACKUP")
+            onPatch({ sync_status: "OutOfSync" })
+            toast.success("Backup started")
           }}
         />
       )}
@@ -2166,6 +2198,166 @@ function NewCredentialsDialog({ creds, onClose }: { creds: Record<string, string
         </div>
         <DialogFooter>
           <Button onClick={onClose}>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+type BackupState = { enabled?: boolean; schedule?: string; retentionDays?: number }
+// One row of backup history, as ListBackups normalises it across the three operators.
+type BackupRun = {
+  name: string
+  phase?: string
+  createdAt?: string
+  startedAt?: string
+  finishedAt?: string
+  error?: string
+}
+
+// Common schedules, so nobody has to know cron. The value is the 5-FIELD form the server
+// stores; CNPG's six-field arity is the chart's problem, never the customer's.
+const BACKUP_SCHEDULES = [
+  { value: "", label: "On demand only" },
+  { value: "0 * * * *", label: "Hourly" },
+  { value: "0 2 * * *", label: "Daily at 02:00" },
+  { value: "0 2 * * 0", label: "Weekly (Sunday 02:00)" },
+]
+
+// Backups: posture + history. The object store is operator config — nothing here names a
+// bucket, and the customer cannot point backups anywhere else.
+function BackupDialog({
+  pid, scope, resourceId, backup, onClose, onSubmit, onRunNow,
+}: {
+  pid: string
+  scope: CloudScope | undefined
+  resourceId: string
+  backup: BackupState
+  onClose: () => void
+  onSubmit: (body: { enabled: boolean; schedule: string; retentionDays: number }) => Promise<void>
+  onRunNow: () => Promise<void>
+}) {
+  const [enabled, setEnabled] = useState(!!backup.enabled)
+  const [schedule, setSchedule] = useState(backup.schedule ?? "0 2 * * *")
+  const [retention, setRetention] = useState(String(backup.retentionDays ?? 30))
+  const [pending, setPending] = useState(false)
+
+  // The list is read live off the database cluster, not from the cache: someone reading it is
+  // usually deciding what to restore, and a stale answer there is worse than a slow one.
+  const list = useMutation({
+    mutationFn: () =>
+      apiFetch<{ result?: BackupRun[] }>(`/project/${pid}/cloud/${resourceId}/action`, {
+        method: "POST",
+        body: { action: "LIST_BACKUPS", data: {} },
+        cloud: scope,
+      }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+  const runs = (list.data?.result ?? []) as BackupRun[]
+  useEffect(() => {
+    if (backup.enabled) list.mutate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Backups</DialogTitle>
+          <DialogDescription>
+            Backups go to the platform object store for this location. Turning them on also starts
+            continuous archiving, which is what makes recovery to a point in time possible.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-4 py-2">
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <Label htmlFor="bk-enabled" className="text-sm font-medium">Back up this database</Label>
+              <div className="text-xs text-muted-foreground">
+                Turning it off stops new backups and removes the schedule. Backups already taken
+                are kept until their retention expires.
+              </div>
+            </div>
+            <Switch id="bk-enabled" checked={enabled} onCheckedChange={setEnabled} />
+          </div>
+
+          {enabled && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>Schedule</Label>
+                <Select value={schedule} onValueChange={setSchedule}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {BACKUP_SCHEDULES.map((s) => (
+                      <SelectItem key={s.value || "ondemand"} value={s.value}>{s.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="bk-ret">Keep for (days)</Label>
+                <Input id="bk-ret" value={retention} onChange={(e) => setRetention(e.target.value)} inputMode="numeric" placeholder="30" />
+                <p className="text-xs text-muted-foreground">0 keeps backups forever.</p>
+              </div>
+            </div>
+          )}
+
+          {backup.enabled && (
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between">
+                <Label>Recent backups</Label>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => list.mutate()} disabled={list.isPending}>
+                    {list.isPending ? "Loading…" : "Refresh"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onRunNow().then(() => list.mutate()).catch((e: Error) => toast.error(e.message))}
+                  >
+                    Back up now
+                  </Button>
+                </div>
+              </div>
+              {runs.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {list.isPending ? "Loading…" : "No backups yet — the first one runs on the next schedule, or start one now."}
+                </p>
+              ) : (
+                <div className="grid gap-1">
+                  {runs.slice(0, 10).map((b) => (
+                    <div key={b.name} className="flex items-center justify-between rounded-lg border p-2 text-xs">
+                      <span className="font-mono">{b.name}</span>
+                      <span className="flex items-center gap-3">
+                        <span className="text-muted-foreground">{timeAgo(b.finishedAt || b.startedAt || b.createdAt)}</span>
+                        <StatusBadge status={b.phase} />
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={pending}
+            onClick={() => {
+              const days = Number(retention)
+              if (!Number.isInteger(days) || days < 0 || days > 3650) {
+                return toast.error("Keep for must be 0–3650 days")
+              }
+              setPending(true)
+              onSubmit({ enabled, schedule: enabled ? schedule : "", retentionDays: days })
+                .catch((e: Error) => toast.error(e.message))
+                .finally(() => setPending(false))
+            }}
+          >
+            {pending ? "Applying…" : "Apply"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

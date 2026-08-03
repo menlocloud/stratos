@@ -55,6 +55,31 @@ func (e *ExternalService) DbaasRegion() string {
 	return ""
 }
 
+// dbaasBackupConfig assembles the operator-configured object store. The credentials come from
+// the provider SECRET, never from config: they are as sensitive as the kubeconfig and must be
+// stripped from admin reads by the same machinery.
+func dbaasBackupConfig(db map[string]any, secret map[string]any) dbaas.BackupConfig {
+	b, _ := db["backup"].(map[string]any)
+	if b == nil {
+		return dbaas.BackupConfig{}
+	}
+	// Path-style defaults ON (Ceph RGW); only an explicit false turns it off.
+	pathStyle := true
+	if v, ok := b["pathStyle"].(bool); ok {
+		pathStyle = v
+	}
+	return dbaas.BackupConfig{
+		Endpoint:     str(b["endpoint"]),
+		Bucket:       str(b["bucket"]),
+		Region:       str(b["region"]),
+		Prefix:       str(b["prefix"]),
+		PathStyle:    pathStyle,
+		CACertSecret: str(b["caCertSecret"]),
+		AccessKey:    str(secret["backupAccessKey"]),
+		SecretKey:    str(secret["backupSecretKey"]),
+	}
+}
+
 // DbaasConfig assembles the dbaas.Config for dbaas.New: the decrypted DB-cluster kubeconfig
 // (secret.kubeconfig) + the argocd/database config blocks with their defaults.
 func (e *ExternalService) DbaasConfig() dbaas.Config {
@@ -102,6 +127,7 @@ func (e *ExternalService) DbaasConfig() dbaas.Config {
 		MemberSubnetID: str(db["memberSubnetId"]),
 		DNSZone:        str(db["dnsZone"]),
 		CertIssuer:     str(db["certIssuer"]),
+		Backup:         dbaasBackupConfig(db, e.secretMap()),
 		StorageClasses: strList(db["storageClasses"]),
 		Limits: dbaas.Limits{
 			MaxCPU:        intOf(limits["maxCpu"]),

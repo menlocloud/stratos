@@ -74,6 +74,44 @@ func BuildValues(cfg Config, spec DatabaseSpec) map[string]any {
 	return values
 }
 
+// backupValues renders the chart's backup block. The object store comes from the PROVIDER, the
+// posture from the customer — they never pick a bucket. Credentials are absent by construction:
+// only the NAME of the Secret stratos wrote travels, because every operator takes them as a
+// SecretKeySelector and the Application is argocd-readable.
+//
+// The schedule stays the ONE canonical 5-field cron here. CNPG's ScheduledBackup wants six
+// fields (leading seconds) and the chart prepends it; keeping both formats in values would
+// eventually put a 5-field string in a 6-field parser, which runs at the wrong hour silently.
+func backupValues(cfg Config, dbID string, spec BackupSpec) map[string]any {
+	out := map[string]any{"enabled": spec.Enabled}
+	if !spec.Enabled {
+		return out
+	}
+	if spec.Schedule != "" {
+		out["schedule"] = spec.Schedule
+	}
+	if spec.RetentionDays > 0 {
+		out["retentionDays"] = spec.RetentionDays
+	}
+	s3 := map[string]any{
+		"endpoint":    cfg.Backup.Endpoint,
+		"bucket":      cfg.Backup.Bucket,
+		"pathStyle":   cfg.Backup.PathStyle,
+		"credsSecret": BackupSecretName(dbID),
+	}
+	for k, v := range map[string]string{
+		"region":       cfg.Backup.Region,
+		"prefix":       cfg.Backup.Prefix,
+		"caCertSecret": cfg.Backup.CACertSecret,
+	} {
+		if v != "" {
+			s3[k] = v
+		}
+	}
+	out["s3"] = s3
+	return out
+}
+
 // databasesValues / usersValues render the customer-managed access lists into the values
 // contract the chart's per-engine templates read (postgresql/mariadb databases + roles,
 // opensearch users + role bindings). NEVER a password — only the NAME of the Secret stratos

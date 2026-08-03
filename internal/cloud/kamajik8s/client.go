@@ -301,6 +301,15 @@ func (c *Client) DeleteApplication(ctx context.Context, ns, name string) error {
 	return c.delete(ctx, fmt.Sprintf(pathApplications, ns), name)
 }
 
+// ListCRs lists any namespaced custom resource by group/version/plural, filtered by
+// labelSelector. Read-only escape hatch for CRs that need no typed helper — the dbaas backup
+// list, where the kind differs per engine and a dedicated method each would be four copies of
+// the same line. A missing CRD 404s the same way an empty list does, which is the right
+// behaviour: an operator that is not installed simply has no backups.
+func (c *Client) ListCRs(ctx context.Context, group, version, plural, ns, labelSelector string) ([]map[string]any, error) {
+	return c.list(ctx, fmt.Sprintf("/apis/%s/%s/namespaces/%s/%s", group, version, ns, plural), labelSelector)
+}
+
 // GetService returns a core/v1 Service, or nil when absent. Read-only: the dbaas provider reads
 // the Octavia VIP back off .status.loadBalancer.ingress of chart-rendered LoadBalancer Services.
 func (c *Client) GetService(ctx context.Context, ns, name string) (map[string]any, error) {

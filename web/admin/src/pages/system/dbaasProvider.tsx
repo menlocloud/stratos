@@ -32,6 +32,16 @@ export type DbaasFormState = {
   dnsZone: string
   // cert-manager ClusterIssuer (DNS-01 for dnsZone) for real opensearch certs. Optional.
   certIssuer: string
+  // Object store every database's backups land in. Customers never choose it — they only turn
+  // backups on. Empty bucket/endpoint = the whole backup surface stays hidden.
+  backupEndpoint: string
+  backupBucket: string
+  backupRegion: string
+  backupPrefix: string
+  backupPathStyle: boolean
+  // Write-only, like the kubeconfig: blank on edit keeps the stored value.
+  backupAccessKey: string
+  backupSecretKey: string
   storageClasses: string // comma-separated
   engines: string // one "postgresql=16,17,18" line per engine
   valkeyEnabled: boolean // valkey is pre-GA — its line is rejected unless explicitly enabled
@@ -55,6 +65,13 @@ export const emptyDbaasForm: DbaasFormState = {
   memberSubnetId: "",
   dnsZone: "",
   certIssuer: "",
+  backupEndpoint: "",
+  backupBucket: "",
+  backupRegion: "",
+  backupPrefix: "",
+  backupPathStyle: true,
+  backupAccessKey: "",
+  backupSecretKey: "",
   storageClasses: "",
   engines: "",
   valkeyEnabled: false,
@@ -106,7 +123,7 @@ export const dbaasFormValid = (f: DbaasFormState, requireKubeconfig = true) => {
 
 // The database.* keys the form edits directly — everything else stored under config.database
 // (limits, future keys) passes through dbaasConfigBlocks untouched.
-const FORM_OWNED_DATABASE_KEYS = ["osServiceId", "osProjectId", "memberSubnetId", "dnsZone", "certIssuer", "storageClasses", "engines"]
+const FORM_OWNED_DATABASE_KEYS = ["osServiceId", "osProjectId", "memberSubnetId", "dnsZone", "certIssuer", "storageClasses", "engines", "backup"]
 
 // dbaasConfigBlocks are the two config sub-objects stratos reads. The admin update route
 // replaces top-level config keys wholesale, so each block must always be sent complete —
@@ -148,6 +165,13 @@ export function dbaasConfigBlocks(f: DbaasFormState) {
       memberSubnetId: f.memberSubnetId.trim(),
       dnsZone: f.dnsZone.trim(),
       certIssuer: f.certIssuer.trim(),
+      backup: {
+        endpoint: f.backupEndpoint.trim(),
+        bucket: f.backupBucket.trim(),
+        region: f.backupRegion.trim(),
+        prefix: f.backupPrefix.trim(),
+        pathStyle: f.backupPathStyle,
+      },
       storageClasses: splitCsv(f.storageClasses),
       engines,
     },
@@ -168,7 +192,13 @@ export function dbaasFormToBody(f: DbaasFormState) {
       services: { database: { [region]: true } },
       ...dbaasConfigBlocks(f),
     },
-    secret: { kubeconfig: f.kubeconfig.trim() },
+    secret: {
+      kubeconfig: f.kubeconfig.trim(),
+      // Backup credentials are provider secrets like the kubeconfig: encrypted at rest and
+      // stripped from admin reads. Absent keys simply mean "no object store yet".
+      ...(f.backupAccessKey.trim() ? { backupAccessKey: f.backupAccessKey.trim() } : {}),
+      ...(f.backupSecretKey.trim() ? { backupSecretKey: f.backupSecretKey.trim() } : {}),
+    },
   }
 }
 
@@ -182,6 +212,7 @@ export function dbaasFormFromService(svc: {
   const cfg = svc.config ?? {}
   const argo = (cfg.argocd as Record<string, any>) ?? {}
   const database = (cfg.database as Record<string, any>) ?? {}
+  const backup = (database.backup as Record<string, any>) ?? {}
   const regions = Object.keys((cfg.regions as Record<string, unknown>) ?? {})
   const engines = (database.engines as Record<string, { versions?: string[] }>) ?? {}
   const engineLines = Object.entries(engines).map(([e, o]) => `${e}=${(o?.versions ?? []).join(",")}`)
@@ -199,6 +230,11 @@ export function dbaasFormFromService(svc: {
     memberSubnetId: String(database.memberSubnetId ?? ""),
     dnsZone: String(database.dnsZone ?? ""),
     certIssuer: String(database.certIssuer ?? ""),
+    backupEndpoint: String(backup.endpoint ?? ""),
+    backupBucket: String(backup.bucket ?? ""),
+    backupRegion: String(backup.region ?? ""),
+    backupPrefix: String(backup.prefix ?? ""),
+    backupPathStyle: backup.pathStyle !== false,
     storageClasses: ((database.storageClasses as string[]) ?? []).join(","),
     engines: engineLines.join("\n"),
     valkeyEnabled: !!engines.valkey,
@@ -310,6 +346,51 @@ export function DbaasProviderForm({
           <p className="text-xs text-muted-foreground">
             The dbaas-side subnet the cluster nodes sit on — the LB's member-subnet-id.
           </p>
+        </div>
+      </div>
+      <div className="grid gap-3 rounded-lg border p-3">
+        <div>
+          <Label className="text-sm font-medium">Backup object store (optional)</Label>
+          <p className="text-xs text-muted-foreground">
+            Where every database on this location backs up to. Customers never see it — they only
+            turn backups on and pick a schedule. Leave the bucket empty to keep backups off.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid gap-2">
+            <Label htmlFor="db-bkendpoint">S3 endpoint</Label>
+            <Input id="db-bkendpoint" className="font-mono" value={form.backupEndpoint} onChange={(e) => setForm({ ...form, backupEndpoint: e.target.value })} placeholder="https://s3.menlo.ai" autoComplete="off" />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="db-bkbucket">Bucket</Label>
+            <Input id="db-bkbucket" className="font-mono" value={form.backupBucket} onChange={(e) => setForm({ ...form, backupBucket: e.target.value })} placeholder="stratos-db-backups" autoComplete="off" />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="db-bkprefix">Prefix (optional)</Label>
+            <Input id="db-bkprefix" className="font-mono" value={form.backupPrefix} onChange={(e) => setForm({ ...form, backupPrefix: e.target.value })} placeholder="az1" autoComplete="off" />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="db-bkregion">Region (optional)</Label>
+            <Input id="db-bkregion" className="font-mono" value={form.backupRegion} onChange={(e) => setForm({ ...form, backupRegion: e.target.value })} placeholder="us-east-1" autoComplete="off" />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="db-bkak">Access key</Label>
+            <Input id="db-bkak" type="password" className="font-mono" value={form.backupAccessKey} onChange={(e) => setForm({ ...form, backupAccessKey: e.target.value })} placeholder={mode === "edit" ? "unchanged" : ""} autoComplete="off" />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="db-bksk">Secret key</Label>
+            <Input id="db-bksk" type="password" className="font-mono" value={form.backupSecretKey} onChange={(e) => setForm({ ...form, backupSecretKey: e.target.value })} placeholder={mode === "edit" ? "unchanged" : ""} autoComplete="off" />
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <div>
+            <Label htmlFor="db-bkpath" className="text-sm font-medium">Path-style addressing</Label>
+            <div className="text-xs text-muted-foreground">
+              Keep on for Ceph RGW — a virtual-host request makes the gateway parse the bucket out
+              of the hostname.
+            </div>
+          </div>
+          <Switch id="db-bkpath" checked={form.backupPathStyle} onCheckedChange={(v) => setForm({ ...form, backupPathStyle: v })} />
         </div>
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

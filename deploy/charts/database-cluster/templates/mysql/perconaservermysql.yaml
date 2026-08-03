@@ -14,7 +14,7 @@ restart-annotation mechanism, so the RESTART capability stays off for this
 engine (internal/cloud/dbaas/engines.go Capabilities) until one is live-verified.
 */}}
 {{- $name := include "database-cluster.name" . }}
-apiVersion: ps.percona.com/v1alpha1
+apiVersion: ps.percona.com/v1
 kind: PerconaServerMySQL
 metadata:
   name: {{ $name }}
@@ -33,6 +33,58 @@ spec:
   # The stratos catalog only offers 1|3 (mysql GR risk note in the plan).
   unsafeFlags:
     mysqlSize: true
+  {{- end }}
+  {{- if include "database-cluster.backupEnabled" . }}
+  {{/*
+  Percona backups: xtrabackup/xbcloud driven by a sidecar in the mysql pod.
+  Unlike CNPG and mariadb there is no separate storage CR — the object store is
+  declared inline on this CR and referenced by NAME from the schedule and from
+  every PerconaServerMySQLBackup.
+
+  *** endpointUrl, NOT endpointURL. *** The CRD field is lower-case `url`;
+  docs.percona.com writes `endpointURL` on its PITR page. A CRD PRUNES unknown
+  fields silently, so the capital-U spelling does not error — the field simply
+  vanishes, no --s3-endpoint is passed, and xbcloud uploads to real AWS S3 with
+  these credentials. Do not "fix" the casing.
+
+  verifyTLS is a SIBLING of s3, not a member of it (the docs example nests it,
+  which would also be pruned).
+  */}}
+  backup:
+    enabled: true
+    storages:
+      stratos:
+        type: s3
+        verifyTLS: {{ include "database-cluster.backupTLS" . }}
+        s3:
+          bucket: {{ .Values.backup.s3.bucket | quote }}
+          prefix: {{ printf "%s/%s" (.Values.backup.s3.prefix | default "stratos") (include "database-cluster.name" .) | quote }}
+          endpointUrl: {{ .Values.backup.s3.endpoint | quote }}
+          {{- with .Values.backup.s3.region }}
+          region: {{ . | quote }}
+          {{- end }}
+          credentialsSecret: {{ .Values.backup.s3.credsSecret }}
+        {{- if .Values.backup.s3.pathStyle }}
+        containerOptions:
+          env:
+            # RGW is path-style; xbcloud defaults to bucket-lookup auto, which
+            # tries the virtual-host form first.
+            - name: XBCLOUD_EXTRA_ARGS
+              value: "--s3-bucket-lookup=path"
+        {{- end }}
+    {{- with .Values.backup.schedule }}
+    schedule:
+      - name: stratos-scheduled
+        schedule: {{ . | quote }}
+        storageName: stratos
+        {{- with $.Values.backup.retentionDays }}
+        {{/* Percona counts BACKUPS, not days: at one run per day the retention
+             window in days is the count. A sub-daily cron keeps proportionally
+             less wall-clock history — documented, not silently wrong. */}}
+        keep: {{ int . }}
+        {{- end }}
+        type: full
+    {{- end }}
   {{- end }}
   mysql:
     clusterType: group-replication
@@ -56,6 +108,17 @@ spec:
           requests:
             storage: {{ .Values.storage.sizeGi }}Gi
   proxy:
+    {{/*
+    router MUST be present, even disabled. The operator's CEL validation reads
+    spec.proxy.router unconditionally for group-replication clusters and the
+    admission webhook rejects the whole object with
+      "no such key: router evaluating rule: ... Router size must be 2 or greater"
+    when the key is absent — the cluster is never created. Declaring it disabled
+    satisfies the lookup and keeps HAProxy as the single proxy (the two are
+    mutually exclusive, and the LB selector targets haproxy pods).
+    */}}
+    router:
+      enabled: false
     # The LB Service selects these haproxy pods (write port 3306 routed to the
     # GR primary). 2 proxies when the DB itself is HA, else 1.
     haproxy:

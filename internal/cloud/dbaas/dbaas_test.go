@@ -26,6 +26,7 @@ type fakeAPI struct {
 	apps        map[string]map[string]any // key ns/name
 	services    map[string]map[string]any // key ns/name
 	vpas        map[string]map[string]any // key ns/name
+	crs         map[string]map[string]map[string]any // plural → ns/name → object
 	ops         []string
 	failApply   bool
 	failDelete  map[string]bool // secret names whose DeleteSecret fails
@@ -41,6 +42,7 @@ func newFakeAPI() *fakeAPI {
 		apps:        map[string]map[string]any{},
 		services:    map[string]map[string]any{},
 		vpas:        map[string]map[string]any{},
+		crs:         map[string]map[string]map[string]any{},
 		failDelete:  map[string]bool{},
 	}
 }
@@ -188,6 +190,18 @@ func (f *fakeAPI) GetService(_ context.Context, ns, name string) (map[string]any
 
 func (f *fakeAPI) GetVPA(_ context.Context, ns, name string) (map[string]any, error) {
 	return f.vpas[key(ns, name)], nil
+}
+
+// ListCRs serves the generic CR reads (backup lists). Keyed by plural so a test can seed
+// backups without modelling every operator's CRD.
+func (f *fakeAPI) ListCRs(_ context.Context, _, _, plural, ns, sel string) ([]map[string]any, error) {
+	var out []map[string]any
+	for k, obj := range f.crs[plural] {
+		if strings.HasPrefix(k, ns+"/") && matchesSelector(obj, sel) {
+			out = append(out, obj)
+		}
+	}
+	return out, nil
 }
 
 // matchesSelector honours the label selectors the Service actually uses (k=v comma lists).
@@ -1100,5 +1114,141 @@ func TestSetAccess(t *testing.T) {
 	}
 	if data, _ := api.GetSecretData(context.Background(), ns, UserSecretName(spec.ID, "bob")); data != nil {
 		t.Error("a rejected list must not create secrets")
+	}
+}
+
+// TestBackupSpecValidate pins the cron arity gate. This matters more than it looks: CNPG's
+// ScheduledBackup takes SIX fields and reads a five-field string as seconds-first, so it runs at
+// the wrong time instead of failing. One canonical arity is stored and the chart converts.
+func TestBackupSpecValidate(t *testing.T) {
+	for _, ok := range []string{"", "0 2 * * *", "*/15 * * * *", "0 2 * * 0", "0 0 1 1 *"} {
+		if err := (BackupSpec{Schedule: ok, RetentionDays: 30}).Validate(); err != nil {
+			t.Errorf("schedule %q rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"0 0 2 * * *", "0 2 * *", "@daily", "0 2 * * * *", "not a cron"} {
+		if err := (BackupSpec{Schedule: bad}).Validate(); err == nil {
+			t.Errorf("schedule %q must be rejected (arity/format)", bad)
+		}
+	}
+	if err := (BackupSpec{RetentionDays: -1}).Validate(); err == nil {
+		t.Error("negative retention must be rejected")
+	}
+	if err := (BackupSpec{RetentionDays: 4000}).Validate(); err == nil {
+		t.Error("absurd retention must be rejected")
+	}
+}
+
+// TestSetBackup covers the whole posture change: credentials land in a Secret (never values),
+// the values carry the provider's store, and disabling takes the credential away again.
+func TestSetBackup(t *testing.T) {
+	api := newFakeAPI()
+	cfg := testConfig()
+	cfg.Backup = BackupConfig{
+		Endpoint: "https://s3.example", Bucket: "backups", Prefix: "az1",
+		AccessKey: "AKIA-TEST", SecretKey: "s3cr3t-key", PathStyle: true,
+	}
+	svc := NewWithAPI(api, cfg, "svc-1")
+	spec := testSpec(EnginePostgreSQL, "17")
+	if _, err := svc.CreateDatabase(context.Background(), spec, NetShare{NetworkID: "net-1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	ns := NamespaceFor(spec.ProjectID)
+
+	if err := svc.SetBackup(context.Background(), spec.ProjectID, spec.ID,
+		BackupSpec{Enabled: true, Schedule: "0 2 * * *", RetentionDays: 30}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := api.GetSecretData(context.Background(), ns, BackupSecretName(spec.ID))
+	if string(data[BackupCredKeys.CNPGAccess]) != "AKIA-TEST" || string(data[BackupCredKeys.AWSSecret]) != "s3cr3t-key" {
+		t.Fatalf("credential secret missing an alias: %v", data)
+	}
+	app, _ := api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
+	values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	block, _ := values["backup"].(map[string]any)
+	if block["enabled"] != true || block["schedule"] != "0 2 * * *" || block["retentionDays"] != 30 {
+		t.Fatalf("backup values = %v", block)
+	}
+	s3, _ := block["s3"].(map[string]any)
+	if s3["bucket"] != "backups" || s3["credsSecret"] != BackupSecretName(spec.ID) {
+		t.Fatalf("s3 block = %v", s3)
+	}
+	// The whole point: no key material may reach the Application.
+	if strings.Contains(fmt.Sprint(values), "s3cr3t-key") || strings.Contains(fmt.Sprint(values), "AKIA-TEST") {
+		t.Fatal("backup credentials leaked into values")
+	}
+
+	// On-demand stamps a value the chart turns into one extra run.
+	if err := svc.TriggerBackup(context.Background(), spec.ID, "20260803-101500"); err != nil {
+		t.Fatal(err)
+	}
+	app, _ = api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
+	values, _ = dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	if got := dig(values, "backup", "runAt"); got != "20260803-101500" {
+		t.Errorf("runAt = %v", got)
+	}
+
+	// Disabling clears the values block AND reaps the credential.
+	if err := svc.SetBackup(context.Background(), spec.ProjectID, spec.ID, BackupSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := api.GetSecretData(context.Background(), ns, BackupSecretName(spec.ID)); data != nil {
+		t.Error("disabling backups must remove the credential secret")
+	}
+	app, _ = api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
+	values, _ = dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	if got := dig(values, "backup", "enabled"); got != false {
+		t.Errorf("backup.enabled = %v, want false", got)
+	}
+	// A database with backups off cannot be told to run one.
+	if err := svc.TriggerBackup(context.Background(), spec.ID, "x"); err == nil {
+		t.Error("on-demand backup must fail while backups are disabled")
+	}
+
+	// A provider with no object store cannot enable backups at all.
+	noStore := NewWithAPI(newFakeAPI(), testConfig(), "svc-2")
+	if err := noStore.SetBackup(context.Background(), spec.ProjectID, spec.ID, BackupSpec{Enabled: true}); err == nil {
+		t.Error("enabling backups without an object store must fail")
+	}
+}
+
+// TestListBackups pins the ownership filter: one namespace holds every database in a project,
+// so a sibling's backups must never show up in this database's history.
+func TestListBackups(t *testing.T) {
+	api := newFakeAPI()
+	cfg := testConfig()
+	svc := NewWithAPI(api, cfg, "svc-1")
+	ns := NamespaceFor("p1")
+	mine := map[string]any{
+		"metadata": map[string]any{
+			"name": "std-mine-ondemand-1", "namespace": ns,
+			"labels":            map[string]any{LabelManagedBy: ManagedByValue},
+			"creationTimestamp": "2026-08-03T10:00:00Z",
+		},
+		"status": map[string]any{"phase": "completed"},
+	}
+	sibling := map[string]any{
+		"metadata": map[string]any{
+			"name": "std-other-ondemand-1", "namespace": ns,
+			"labels": map[string]any{LabelManagedBy: ManagedByValue},
+		},
+		"status": map[string]any{"phase": "completed"},
+	}
+	api.crs["backups"] = map[string]map[string]any{
+		key(ns, "std-mine-ondemand-1"):  mine,
+		key(ns, "std-other-ondemand-1"): sibling,
+	}
+	got, err := svc.ListBackups(context.Background(), "p1", "std-mine", EnginePostgreSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0]["name"] != "std-mine-ondemand-1" {
+		t.Fatalf("list = %v, want only this database's backups", got)
+	}
+	if got[0]["phase"] != "completed" {
+		t.Errorf("phase = %v", got[0]["phase"])
+	}
+	if _, err := svc.ListBackups(context.Background(), "p1", "std-mine", EngineValkey); err == nil {
+		t.Error("an engine with no backup CR must report that, not an empty list")
 	}
 }

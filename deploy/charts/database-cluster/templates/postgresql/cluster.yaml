@@ -59,6 +59,16 @@ spec:
         {{- end }}
       {{- end }}
   {{- end }}
+  {{- if include "database-cluster.backupEnabled" . }}
+  {{/* barman-cloud plugin: isWALArchiver is what turns on continuous WAL
+       archiving, i.e. what makes point-in-time recovery possible at all.
+       The ObjectStore it names is rendered by templates/postgresql/backup.yaml. */}}
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ include "database-cluster.name" . }}-store
+  {{- end }}
   storage:
     size: {{ .Values.storage.sizeGi }}Gi
     {{- with .Values.storage.storageClassName }}

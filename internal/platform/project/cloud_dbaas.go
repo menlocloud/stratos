@@ -218,6 +218,17 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support %s", engine, action)))
 			return true
 		}
+	case "SET_BACKUP", "CREATE_BACKUP", "LIST_BACKUPS":
+		// Two gates, not one: the engine must have a backup mechanism AND the provider must
+		// actually have an object store. A toggle that writes nowhere is worse than no toggle.
+		if !known["BACKUP"] {
+			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support backups", engine)))
+			return true
+		}
+		if !ds.Config().Backup.Enabled() {
+			h.fail(w, httpx.BadRequest("this location has no backup object store configured"))
+			return true
+		}
 	case "RESET_USER_PASSWORD":
 		// Rotating a customer-created user's password is part of the same mechanism as
 		// declaring that user, so it rides MANAGE_ACCESS rather than owning a capability key.
@@ -487,6 +498,51 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 			return true
 		}
 		httpx.OK(w, map[string]any{"result": "UPDATING", "credentials": created})
+		return true
+
+	case "SET_BACKUP":
+		// Enabled/schedule/retention only — the object store itself is operator config, never a
+		// customer choice, so nothing here names a bucket.
+		spec := dbaas.BackupSpec{
+			Schedule:      strings.TrimSpace(strAny(data["schedule"])),
+			RetentionDays: intAny(data["retentionDays"]),
+		}
+		if raw, has := data["enabled"]; has && raw != nil {
+			b, ok := raw.(bool)
+			if !ok {
+				h.fail(w, httpx.BadRequest("enabled must be true or false"))
+				return true
+			}
+			spec.Enabled = b
+		}
+		if err := spec.Validate(); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		if err := ds.SetBackup(r.Context(), proj.ID, cr.ExternalID, spec); err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
+		return true
+
+	case "CREATE_BACKUP":
+		// Declarative "back up now": stamp a timestamp the chart turns into one extra run. Same
+		// path as every other change, so it survives a restart mid-flight.
+		if err := ds.TriggerBackup(r.Context(), cr.ExternalID, time.Now().UTC().Format("20060102-150405")); err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "BACKING_UP"})
+		return true
+
+	case "LIST_BACKUPS":
+		backups, err := ds.ListBackups(r.Context(), proj.ID, cr.ExternalID, engine)
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": backups})
 		return true
 
 	case "SET_INDEX_POLICIES":

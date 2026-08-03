@@ -124,15 +124,43 @@ stratos:
 monitoring:
   enabled: false
 
-# -- Backup contract. SCHEMA ONLY for now: reserved keys, read by nothing,
-# so BuildValues can stamp them without a chart release when backups land.
+# -- Object-store backup. The STORE is operator config (provider-level); the
+# POSTURE below is the customer's. postgresql/ferretdb use the barman-cloud
+# CNPG plugin (which must be installed on the cluster), mariadb a
+# PhysicalBackup, mysql the Percona in-CR storages. valkey/opensearch/kafka
+# ignore this block entirely.
 backup:
   enabled: false
+  # -- 5-FIELD cron (minute hour dom month dow). ONE canonical arity across the
+  # platform: CNPG's ScheduledBackup wants six fields and misreads a five-field
+  # string as seconds-first — it runs at the wrong time instead of failing — so
+  # _backup.tpl converts, and nothing else may. Empty = on-demand only.
+  schedule: ""
+  # -- Keep backups this many days. 0 = keep forever. Percona counts BACKUPS
+  # rather than days, so the chart passes this as its `keep` count.
+  retentionDays: 0
+  # -- Stamp written by the CREATE_BACKUP action. A CHANGED value produces one
+  # extra backup (new CR name, or mariadb's schedule.onDemand); unchanged is a
+  # no-op re-apply, so "back up now" stays declarative.
+  runAt: ""
   s3:
+    # -- Endpoint WITH scheme (https://rgw.example). mariadb wants host:port and
+    # a separate TLS flag — _backup.tpl strips and derives, do not pre-strip.
     endpoint: ""
     bucket: ""
+    # -- Folder inside the bucket; the chart always appends /<resourceId> so one
+    # database's retention can never reach a sibling's data.
+    prefix: ""
+    region: ""
+    # -- Path-style addressing. ON for Ceph RGW: a virtual-host request makes the
+    # gateway parse the bucket out of the Host header.
+    pathStyle: true
+    # -- Optional Secret (key ca.crt) holding the endpoint's CA.
+    caCertSecret: ""
     # -- Name of a pre-existing Secret holding the S3 credentials (never the
-    # credentials themselves — no secrets in values).
+    # credentials themselves — no secrets in values). Stratos writes it with all
+    # four key aliases the operators expect: ACCESS_KEY_ID/ACCESS_SECRET_KEY
+    # (CNPG) and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (Percona, mariadb).
     credsSecret: ""
 
 # -- RESTART lever: an RFC3339 timestamp stamped by stratos on the RESTART

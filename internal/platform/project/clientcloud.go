@@ -651,6 +651,9 @@ func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 		if len(dcfg.StorageClasses) > 0 {
 			dto["databaseStorageClasses"] = dcfg.StorageClasses
 		}
+		// Whether the LOCATION can back anything up. The client hides the whole backup surface
+		// when it cannot — a toggle that writes nowhere is worse than no toggle.
+		dto["databaseBackupConfigured"] = dcfg.Backup.Enabled()
 		dto["databaseLimits"] = map[string]any{
 			"maxCpu": dcfg.Limits.MaxCPU, "maxMemoryGiB": dcfg.Limits.MaxMemoryGiB, "maxStorageGiB": dcfg.Limits.MaxStorageGiB,
 		}

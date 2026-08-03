@@ -87,6 +87,8 @@ export type ProjectService = {
   databasePlatformVersion?: string
   databaseLimits?: DatabaseLimits
   databaseStorageClasses?: string[]
+  // False/absent = this location has no backup object store, so the backup surface is hidden.
+  databaseBackupConfigured?: boolean
   [k: string]: unknown
 }
 

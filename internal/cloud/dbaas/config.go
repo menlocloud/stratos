@@ -160,6 +160,9 @@ type Config struct {
 	// self-signed http/Dashboards certs for a real `<id>-tls` certificate — the VIP is private,
 	// so DNS-01 is the only viable challenge for platform names.
 	CertIssuer string
+	// Backup is the operator-supplied object store every database's backups land in. Empty
+	// Bucket = the whole backup surface is off (no capability, no UI, no CRs).
+	Backup BackupConfig
 	// StorageClasses is the storage-class allowlist offered to customers (empty = cluster
 	// default only).
 	StorageClasses []string
@@ -275,6 +278,76 @@ func (s DatabaseSpec) Validate(c Config) error {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("database: allowed CIDR %q: %w", cidr, err)
 		}
+	}
+	return nil
+}
+
+// BackupConfig is the platform's backup object store, configured once per provider. Customers
+// never see or choose it — they only turn backups on and pick a schedule. The credentials are
+// NOT here: they live in the provider secret and are written to a Secret on the DB cluster,
+// because every operator takes them as a SecretKeySelector and values must stay readable.
+type BackupConfig struct {
+	// Endpoint is the S3 endpoint. Stored WITH a scheme (https://rgw.example) — the
+	// engines disagree about the shape, so normalising is the chart's job (mariadb wants
+	// host:port with no scheme and derives TLS from a flag; CNPG and Percona want the URL).
+	Endpoint  string
+	Bucket    string
+	Region    string
+	Prefix    string
+	AccessKey string
+	SecretKey string
+	// PathStyle forces path-style addressing. Default ON: Ceph RGW is the target, and a
+	// virtual-host request against RGW is what makes it parse the bucket out of the Host
+	// header — the trap that already broke object storage once.
+	PathStyle bool
+	// CACertSecret optionally names a Secret (key ca.crt) holding the endpoint's CA, for an
+	// RGW behind a private CA.
+	CACertSecret string
+}
+
+// Enabled reports whether the provider can back anything up at all.
+func (b BackupConfig) Enabled() bool { return b.Bucket != "" && b.Endpoint != "" }
+
+// BackupSecretName is the stratos-owned Secret holding the object-store credentials for one
+// database. Per database rather than per namespace so a delete cascade takes its credential
+// with it, and so the key set can differ per engine without cross-talk.
+func BackupSecretName(dbID string) string { return dbID + "-backup-s3" }
+
+// BackupCredKeys are the key names written into that Secret. Every engine gets the aliases it
+// expects from the SAME secret, so there is one object to write, rotate and reap:
+//   - CNPG reads ACCESS_KEY_ID / ACCESS_SECRET_KEY (its own convention)
+//   - Percona reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (a whole-secret reference)
+//   - mariadb reads whichever keys its SecretKeyRefs name; the chart points it at the AWS pair
+var BackupCredKeys = struct{ CNPGAccess, CNPGSecret, AWSAccess, AWSSecret string }{
+	CNPGAccess: "ACCESS_KEY_ID",
+	CNPGSecret: "ACCESS_SECRET_KEY",
+	AWSAccess:  "AWS_ACCESS_KEY_ID",
+	AWSSecret:  "AWS_SECRET_ACCESS_KEY",
+}
+
+// cronRE is a plain 5-field cron (minute hour dom month dow). ONE canonical format crosses the
+// whole platform: CNPG's ScheduledBackup wants SIX fields (leading seconds) while Percona and
+// mariadb want five, and generating the wrong arity is the single most common misconfiguration
+// in this area — a 5-field string in a 6-field parser silently runs at the wrong time. Stratos
+// stores five; the CNPG template prepends the seconds field.
+var cronRE = regexp.MustCompile(`^[-0-9*/,]+ [-0-9*/,]+ [-0-9*/,?LW]+ [-0-9*/,]+ [-0-9*/,?L#]+$`)
+
+// BackupSpec is a database's desired backup posture.
+type BackupSpec struct {
+	Enabled bool
+	// Schedule is a 5-field cron, "" = on-demand only.
+	Schedule string
+	// RetentionDays bounds how long backups are kept. 0 = keep forever.
+	RetentionDays int
+}
+
+// Validate rejects a backup posture the operators would refuse (or, worse, silently misread).
+func (b BackupSpec) Validate() error {
+	if b.Schedule != "" && !cronRE.MatchString(b.Schedule) {
+		return fmt.Errorf("backup: schedule must be a 5-field cron expression, e.g. \"0 2 * * *\"")
+	}
+	if b.RetentionDays < 0 || b.RetentionDays > 3650 {
+		return fmt.Errorf("backup: retention must be 0..3650 days")
 	}
 	return nil
 }

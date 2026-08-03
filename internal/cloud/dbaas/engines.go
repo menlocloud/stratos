@@ -62,6 +62,13 @@ func (o EngineOffer) ReplicaChoices() []int {
 // off for opensearch until the operator's diskSize-change semantics are live-verified; RESTART
 // is off for opensearch/kafka (no values-shaped restart knob — Strimzi rolls via a per-podset
 // annotation, not the CR).
+// BACKUP (postgresql/mariadb/mysql/ferretdb) is object-store backup with a schedule and a
+// retention window, plus on-demand runs. Gated on the PROVIDER having an object store as well:
+// without one the capability is reported off, because a backup toggle that writes nowhere is
+// worse than no toggle. valkey/opensearch/kafka are out by nature — caches and streams are not
+// what customers ask to restore, and neither operator has an object-store backup CR worth the
+// surface.
+//
 // MANAGE_ACCESS (postgresql/mariadb/opensearch) is customer-managed logical databases, users
 // and grants, declared in values and rendered as the operators' own CRs (CNPG Database +
 // managed.roles; mariadb Database/User/Grant; OpensearchUser + OpensearchUserRoleBinding).
@@ -75,13 +82,30 @@ func (o EngineOffer) ReplicaChoices() []int {
 // (autoscale.go): CPU/RAM bounds work wherever RESIZE does; the disk leg additionally requires
 // RESIZE_STORAGE, so it self-disables for valkey/opensearch.
 var Capabilities = map[string]map[string]bool{
-	EnginePostgreSQL: {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
-	EngineMySQL:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
-	EngineMariaDB:    {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
+	EnginePostgreSQL: {"BACKUP": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
+	EngineMySQL:      {"BACKUP": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
+	EngineMariaDB:    {"BACKUP": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
 	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false, "SET_AUTOSCALE": true},
-	EngineFerretDB:   {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
+	EngineFerretDB:   {"BACKUP": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 	EngineOpenSearch: {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_CUSTOM_DOMAIN": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
 	EngineKafka:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
+}
+
+// BackupCRFor maps an engine to the custom resource its operator produces per backup run
+// (plural, group, version) — what ListBackups enumerates. Empty plural = the engine has no
+// object-store backup CR and BACKUP is not offered for it.
+func BackupCRFor(engine string) (plural, group, version string) {
+	switch engine {
+	case EnginePostgreSQL, EngineFerretDB:
+		return "backups", "postgresql.cnpg.io", "v1"
+	case EngineMySQL:
+		return "perconaservermysqlbackups", "ps.percona.com", "v1"
+	case EngineMariaDB:
+		// PhysicalBackup is the one that can seed a PITR; the logical Backup CR is only used
+		// for per-database dumps, which this platform does not offer.
+		return "physicalbackups", "k8s.mariadb.com", "v1alpha1"
+	}
+	return "", "", ""
 }
 
 // ValidateUpgradePath enforces the version-change policy: the target must be OFFERED for the

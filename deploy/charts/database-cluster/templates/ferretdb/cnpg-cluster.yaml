@@ -81,6 +81,16 @@ spec:
       postInitApplicationSQL:
         - CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;
         - GRANT documentdb_admin_role TO app;
+  {{- if include "database-cluster.backupEnabled" . }}
+  {{/* barman-cloud plugin: isWALArchiver is what turns on continuous WAL
+       archiving, i.e. what makes point-in-time recovery possible at all.
+       The ObjectStore it names is rendered by templates/postgresql/backup.yaml. */}}
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ include "database-cluster.name" . }}-store
+  {{- end }}
   storage:
     {{/* Sized from the SAME storage.sizeGi every other engine uses — one knob,
          so RESIZE_STORAGE (values.storage.sizeGi, grow-only) works uniformly. */}}

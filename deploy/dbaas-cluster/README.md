@@ -120,3 +120,18 @@ So for N databases the dbaas keystone project needs, minimum: `loadbalancer` quo
 amphora flavor, and `port` quota to match. Exhausted amphora quota surfaces as the LB Service
 parked `<pending>` — the Application stays Progressing and the database never goes READY, with
 nothing obviously wrong on the k8s side; check the Octavia quota first.
+
+## Backups (optional, per provider)
+
+Object-store backups need one more component on this cluster:
+
+| Chart | Namespace | Why |
+|---|---|---|
+| `plugin-barman-cloud` 0.7.1 | `cnpg-system` | CloudNativePG backup + PITR. Installs the `barmancloud.cnpg.io` **ObjectStore** CRD that postgresql and ferretdb databases reference. |
+
+Without it, a postgresql/ferretdb database with backups enabled fails to sync — the ObjectStore
+kind does not exist. mariadb and mysql need nothing extra; their operators back up on their own.
+
+The in-core `spec.backup.barmanObjectStore` is deliberately NOT used: deprecated in CNPG 1.26,
+**removed in 1.31**, so it would buy one minor version and then force a rewrite of every Cluster
+spec, ScheduledBackup and stored restore recipe.

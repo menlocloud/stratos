@@ -257,7 +257,14 @@ function DbaasConnectionTab({ id, provider }: TabProps) {
       body: {
         name: form.name.trim(),
         config: dbaasConfigBlocks(form),
-        ...(form.kubeconfig.trim() ? { secret: { kubeconfig: form.kubeconfig.trim() } } : {}),
+        // Blank fields keep the stored secret; only what was typed is sent.
+        ...(() => {
+          const secret: Record<string, string> = {}
+          if (form.kubeconfig.trim()) secret.kubeconfig = form.kubeconfig.trim()
+          if (form.backupAccessKey.trim()) secret.backupAccessKey = form.backupAccessKey.trim()
+          if (form.backupSecretKey.trim()) secret.backupSecretKey = form.backupSecretKey.trim()
+          return Object.keys(secret).length ? { secret } : {}
+        })(),
       },
     })
   }
