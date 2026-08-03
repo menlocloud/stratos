@@ -94,9 +94,9 @@ listener port, used by the NetworkPolicy).
 engineVersion -> image, per engine. Ops-updatable per chart release: bump a
 tag here -> bump Chart.yaml version -> re-pin providers. A version with no
 mapping fails the render — better a loud sync error than a silently wrong
-major. Tags below are pinned bests-known at chart authoring time;
-TODO-verify(drill): confirm each against the pinned operator versions in
-deploy/dbaas-cluster/README.md before first release.
+major. Every tag below was verified to exist against its registry's tags API
+on 2026-08-03 (Docker Hub / ghcr), and the mysql tags are exactly the builds
+Percona documents as tested with ps-operator 1.2.0.
 
 opensearch/kafka have NO map here BY DESIGN: both operators resolve images
 from the version field natively (OpenSearchCluster spec.general.version,
@@ -110,20 +110,26 @@ guard below turns an accidental future call into a loud render failure.
 {{- $v := .Values.engineVersion | toString -}}
 {{- $maps := dict
       "postgresql" (dict
-        "16" "ghcr.io/cloudnative-pg/postgresql:16.10"
-        "17" "ghcr.io/cloudnative-pg/postgresql:17.6"
-        "18" "ghcr.io/cloudnative-pg/postgresql:18.1")
+        "14" "ghcr.io/cloudnative-pg/postgresql:14.23"
+        "15" "ghcr.io/cloudnative-pg/postgresql:15.18"
+        "16" "ghcr.io/cloudnative-pg/postgresql:16.14"
+        "17" "ghcr.io/cloudnative-pg/postgresql:17.10"
+        "18" "ghcr.io/cloudnative-pg/postgresql:18.4")
       "mysql" (dict
-        "8.0" "docker.io/percona/percona-server:8.0.42-33"
-        "8.4" "docker.io/percona/percona-server:8.4.5-5")
+        "8.0" "docker.io/percona/percona-server:8.0.46-37"
+        "8.4" "docker.io/percona/percona-server:8.4.10-10")
       "mariadb" (dict
-        "10.11" "docker.io/library/mariadb:10.11.13"
-        "11.4" "docker.io/library/mariadb:11.4.7")
+        "10.6" "docker.io/library/mariadb:10.6.27"
+        "10.11" "docker.io/library/mariadb:10.11.18"
+        "11.4" "docker.io/library/mariadb:11.4.12"
+        "11.8" "docker.io/library/mariadb:11.8.8")
       "valkey" (dict
-        "8.0" "docker.io/valkey/valkey:8.0.2"
-        "8.1" "docker.io/valkey/valkey:8.1.1")
+        "7.2" "docker.io/valkey/valkey:7.2.14"
+        "8.0" "docker.io/valkey/valkey:8.0.10"
+        "8.1" "docker.io/valkey/valkey:8.1.9")
       "ferretdb" (dict
-        "2.5" "ghcr.io/ferretdb/ferretdb:2.5.0")
+        "2.5" "ghcr.io/ferretdb/ferretdb:2.5.0"
+        "2.7" "ghcr.io/ferretdb/ferretdb:2.7.0")
 -}}
 {{- $m := index $maps .Values.engine -}}
 {{- $img := index $m $v -}}
