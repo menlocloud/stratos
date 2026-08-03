@@ -23,4 +23,4 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
-version: 0.4.2
+version: 0.4.3
