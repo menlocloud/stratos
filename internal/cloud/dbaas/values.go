@@ -73,3 +73,75 @@ func BuildValues(cfg Config, spec DatabaseSpec) map[string]any {
 	}
 	return values
 }
+
+// databasesValues / usersValues render the customer-managed access lists into the values
+// contract the chart's per-engine templates read (postgresql/mariadb databases + roles,
+// opensearch users + role bindings). NEVER a password — only the NAME of the Secret stratos
+// wrote, which the engine CR references.
+func databasesValues(dbs []DBDatabase, users []DBUser) []any {
+	owners := effectiveOwners(dbs, users)
+	out := make([]any, 0, len(dbs))
+	for _, d := range dbs {
+		entry := map[string]any{"name": d.Name}
+		if o := owners[d.Name]; o != "" {
+			entry["owner"] = o
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// effectiveOwners fills in the owner of every database that did not name one: the FIRST user
+// that asked for it. Load-bearing for postgres, where "user may use database" is expressed as
+// membership of the database's owner role — leaving an owner blank would hand the database to
+// the engine's own app role and silently grant the customer's users nothing at all. A database
+// nobody listed keeps a blank owner and falls back to the app user in the chart.
+func effectiveOwners(dbs []DBDatabase, users []DBUser) map[string]string {
+	out := make(map[string]string, len(dbs))
+	for _, d := range dbs {
+		out[d.Name] = d.Owner
+	}
+	for _, u := range users {
+		for _, name := range u.Databases {
+			if cur, known := out[name]; known && cur == "" {
+				out[name] = u.Name
+			}
+		}
+	}
+	return out
+}
+
+func usersValues(dbs []DBDatabase, users []DBUser) []any {
+	// A postgres role reaches a database by being a member of that database's owner role, so
+	// each user's grants become inRoles on the owners of the databases it listed.
+	owner := effectiveOwners(dbs, users)
+	out := make([]any, 0, len(users))
+	for _, u := range users {
+		entry := map[string]any{"name": u.Name}
+		if len(u.Databases) > 0 {
+			names := make([]any, 0, len(u.Databases))
+			owners := make([]any, 0, len(u.Databases))
+			seen := map[string]bool{}
+			for _, d := range u.Databases {
+				names = append(names, d)
+				if o := owner[d]; o != "" && o != u.Name && !seen[o] {
+					seen[o] = true
+					owners = append(owners, o)
+				}
+			}
+			entry["databases"] = names
+			if len(owners) > 0 {
+				entry["inRoles"] = owners
+			}
+		}
+		if len(u.Roles) > 0 {
+			roles := make([]any, 0, len(u.Roles))
+			for _, r := range u.Roles {
+				roles = append(roles, r)
+			}
+			entry["roles"] = roles
+		}
+		out = append(out, entry)
+	}
+	return out
+}

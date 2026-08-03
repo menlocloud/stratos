@@ -213,8 +213,15 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 	}
 
 	switch action {
-	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO", "SET_CUSTOM_DOMAIN", "SET_AUTOSCALE":
+	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO", "SET_CUSTOM_DOMAIN", "SET_AUTOSCALE", "MANAGE_ACCESS":
 		if !known[action] {
+			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support %s", engine, action)))
+			return true
+		}
+	case "RESET_USER_PASSWORD":
+		// Rotating a customer-created user's password is part of the same mechanism as
+		// declaring that user, so it rides MANAGE_ACCESS rather than owning a capability key.
+		if !known["MANAGE_ACCESS"] {
 			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support %s", engine, action)))
 			return true
 		}
@@ -459,6 +466,43 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 		httpx.OK(w, map[string]any{"result": "UPDATING"})
 		return true
 
+	case "MANAGE_ACCESS":
+		// Declarative: the client sends the FULL desired list of logical databases and users,
+		// so a dropped entry is a removal. Passwords for newly declared users come back once,
+		// in this response only — nothing stores them.
+		dbs, users, err := dbaasAccessFromData(data)
+		if err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		// Validate before anything is written so a rejected list cannot leave half-created
+		// Secrets behind (SetAccess re-checks; this is what turns a bad list into a 400).
+		if err := dbaas.ValidateAccess(engine, dbs, users); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		created, err := ds.SetAccess(r.Context(), proj.ID, cr.ExternalID, engine, dbs, users)
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING", "credentials": created})
+		return true
+
+	case "RESET_USER_PASSWORD":
+		username := strAny(data["username"])
+		if !dbaas.ValidIdent(username) {
+			h.fail(w, httpx.BadRequest("username is required"))
+			return true
+		}
+		password, err := ds.ResetUserPassword(r.Context(), proj.ID, cr.ExternalID, username)
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING", "username": username, "password": password})
+		return true
+
 	case "SET_CUSTOM_DOMAIN":
 		// BYO domain + certificate (opensearch): the customer certifies their own name — no
 		// ACME anywhere. Their DNS points at the endpoint (CNAME to the platform name, or an A
@@ -627,6 +671,86 @@ func dbaasSpecFromData(projectID string, d map[string]any) (dbaas.DatabaseSpec, 
 		spec.SSO = sso
 	}
 	return spec, nil
+}
+
+// dbaasAccessFromData decodes a MANAGE_ACCESS body:
+//
+//	{databases: [{name, owner?}], users: [{name, databases?: [...], roles?: [...]}]}
+//
+// Shape only — dbaas.ValidateAccess owns the rules (identifier charset, reserved names,
+// cross-references, the OpenSearch role allowlist).
+func dbaasAccessFromData(d map[string]any) ([]dbaas.DBDatabase, []dbaas.DBUser, error) {
+	strList := func(v any, what string) ([]string, error) {
+		if v == nil {
+			return nil, nil
+		}
+		items, ok := v.([]any)
+		if !ok {
+			return nil, fmt.Errorf("%s must be an array of names", what)
+		}
+		out := make([]string, 0, len(items))
+		for _, raw := range items {
+			s, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s must be an array of names", what)
+			}
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out, nil
+	}
+	objList := func(v any, what string) ([]map[string]any, error) {
+		if v == nil {
+			return nil, nil
+		}
+		items, ok := v.([]any)
+		if !ok {
+			return nil, fmt.Errorf("%s must be an array of objects", what)
+		}
+		out := make([]map[string]any, 0, len(items))
+		for _, raw := range items {
+			obj, ok := raw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%s must be an array of objects", what)
+			}
+			out = append(out, obj)
+		}
+		return out, nil
+	}
+
+	rawDBs, err := objList(d["databases"], "databases")
+	if err != nil {
+		return nil, nil, err
+	}
+	dbs := make([]dbaas.DBDatabase, 0, len(rawDBs))
+	for _, obj := range rawDBs {
+		dbs = append(dbs, dbaas.DBDatabase{
+			Name:  strings.TrimSpace(strAny(obj["name"])),
+			Owner: strings.TrimSpace(strAny(obj["owner"])),
+		})
+	}
+	rawUsers, err := objList(d["users"], "users")
+	if err != nil {
+		return nil, nil, err
+	}
+	users := make([]dbaas.DBUser, 0, len(rawUsers))
+	for _, obj := range rawUsers {
+		grants, err := strList(obj["databases"], "user databases")
+		if err != nil {
+			return nil, nil, err
+		}
+		roles, err := strList(obj["roles"], "user roles")
+		if err != nil {
+			return nil, nil, err
+		}
+		users = append(users, dbaas.DBUser{
+			Name:      strings.TrimSpace(strAny(obj["name"])),
+			Databases: grants,
+			Roles:     roles,
+		})
+	}
+	return dbs, users, nil
 }
 
 // dbaasSSOFields pulls the Dashboards OIDC block out of a request body. Shared by create and

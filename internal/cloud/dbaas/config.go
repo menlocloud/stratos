@@ -12,6 +12,7 @@ package dbaas
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"slices"
 )
 
@@ -64,6 +65,29 @@ func (c Config) PublicHost(dbID, customDomain, vip string) string {
 // customer domain (SET_CUSTOM_DOMAIN writes it; the chart mounts it on the http layer and
 // Dashboards when values.opensearch.customDomain is set).
 func CustomTLSSecretName(dbID string) string { return dbID + "-custom-tls" }
+
+// UserSecretName is the stratos-owned password Secret for a customer-created database user.
+// Passwords NEVER travel through values (the Application CR is argocd-readable) — the chart
+// only references this Secret by name from the engine's User/role CR.
+func UserSecretName(dbID, username string) string { return dbID + "-u-" + username }
+
+// identRE is the ONLY shape a customer-supplied database or user name may take. This is a
+// security control, not cosmetics: mariadb-operator interpolates these strings straight into
+// SQL (upstream issue #1722, closed as not planned), so stratos is the escaping layer. Lower
+// case keeps postgres from folding identifiers and keeps the name usable as a Secret suffix.
+var identRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,30}$`)
+
+// ValidIdent reports whether a customer-typed database/user name is safe to pass to an operator.
+func ValidIdent(s string) bool { return identRE.MatchString(s) }
+
+// reservedIdents are names a customer must not claim: the engine's own accounts and the
+// stratos-provisioned app user. Taking one would either fail at the operator or, worse,
+// silently retarget the credential the connection panel hands out.
+var reservedIdents = map[string]bool{
+	"postgres": true, "app": true, "root": true, "mysql": true, "mariadb": true,
+	"admin": true, "kibanaserver": true, "template0": true, "template1": true,
+	"streaming_replica": true, "cnpg_metrics_exporter": true,
+}
 
 // NetShareSecretName is the per-database neutron-RBAC marker secret (DB-cluster side only): the
 // ONLY durable record that the customer network was shared with the dbaas keystone project.
@@ -249,6 +273,79 @@ func (s DatabaseSpec) Validate(c Config) error {
 	for _, cidr := range s.AllowedCIDRs {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("database: allowed CIDR %q: %w", cidr, err)
+		}
+	}
+	return nil
+}
+
+// DBDatabase is one logical database a customer asked for inside their instance.
+type DBDatabase struct {
+	Name string
+	// Owner is the user that owns it; "" = the engine's built-in app user.
+	Owner string
+}
+
+// DBUser is one customer-created login. Databases lists what it may reach (postgresql/mariadb);
+// Roles lists the OpenSearch roles bound to it. A user carries NO password here — the password
+// lives only in UserSecretName(dbID, name) on the DB cluster.
+type DBUser struct {
+	Name      string
+	Databases []string
+	Roles     []string
+}
+
+// openSearchRoles is the allowlist of built-in OpenSearch roles a customer may bind. Custom
+// roles (OpensearchRole CRs with index patterns) are a separate, later surface — this list is
+// what the security plugin ships and what cannot be typo'd into a privilege escalation.
+var openSearchRoles = map[string]bool{
+	"all_access": true, "readall": true, "readall_and_monitor": true,
+	"kibana_user": true, "kibana_read_only": true, "manage_snapshots": true,
+	"alerting_read_access": true, "alerting_full_access": true,
+	"index_management_full_access": true, "logstash": true,
+}
+
+// ValidateAccess checks a whole desired access list against the engine before anything is
+// written. Fail here, not at the operator: half-applied access (a Secret with no CR, or a Grant
+// naming a user that was rejected) is the state nobody can reason about.
+func ValidateAccess(engine string, dbs []DBDatabase, users []DBUser) error {
+	names := map[string]bool{}
+	for _, u := range users {
+		switch {
+		case !ValidIdent(u.Name):
+			return fmt.Errorf("user %q: names must be lower-case, start with a letter and use only letters, digits and underscores (max 31)", u.Name)
+		case reservedIdents[u.Name]:
+			return fmt.Errorf("user %q is reserved", u.Name)
+		case names[u.Name]:
+			return fmt.Errorf("user %q is listed twice", u.Name)
+		}
+		names[u.Name] = true
+		if engine == EngineOpenSearch {
+			for _, r := range u.Roles {
+				if !openSearchRoles[r] {
+					return fmt.Errorf("user %q: role %q is not offered", u.Name, r)
+				}
+			}
+		}
+	}
+	dbNames := map[string]bool{}
+	for _, d := range dbs {
+		switch {
+		case !ValidIdent(d.Name):
+			return fmt.Errorf("database %q: names must be lower-case, start with a letter and use only letters, digits and underscores (max 31)", d.Name)
+		case reservedIdents[d.Name]:
+			return fmt.Errorf("database %q is reserved", d.Name)
+		case dbNames[d.Name]:
+			return fmt.Errorf("database %q is listed twice", d.Name)
+		case d.Owner != "" && !names[d.Owner]:
+			return fmt.Errorf("database %q: owner %q is not one of the listed users", d.Name, d.Owner)
+		}
+		dbNames[d.Name] = true
+	}
+	for _, u := range users {
+		for _, d := range u.Databases {
+			if !dbNames[d] {
+				return fmt.Errorf("user %q: database %q is not in the list", u.Name, d)
+			}
 		}
 	}
 	return nil

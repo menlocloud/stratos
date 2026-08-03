@@ -62,16 +62,25 @@ func (o EngineOffer) ReplicaChoices() []int {
 // off for opensearch until the operator's diskSize-change semantics are live-verified; RESTART
 // is off for opensearch/kafka (no values-shaped restart knob — Strimzi rolls via a per-podset
 // annotation, not the CR).
+// MANAGE_ACCESS (postgresql/mariadb/opensearch) is customer-managed logical databases, users
+// and grants, declared in values and rendered as the operators' own CRs (CNPG Database +
+// managed.roles; mariadb Database/User/Grant; OpensearchUser + OpensearchUserRoleBinding).
+// mysql is deliberately OUT: the Percona ps-operator has no user/database CRDs, so there is
+// nothing to reconcile against and a SQL-over-exec implementation is not a values-shaped
+// mechanism. valkey/ferretdb/kafka are out by nature — valkey has no user model in the pinned
+// operator, ferretdb authenticates through its CNPG backend's app role, and kafka already ships
+// its KafkaUser.
+//
 // SET_AUTOSCALE (all engines) opts into the surcharge-priced vertical autoscale tick
 // (autoscale.go): CPU/RAM bounds work wherever RESIZE does; the disk leg additionally requires
 // RESIZE_STORAGE, so it self-disables for valkey/opensearch.
 var Capabilities = map[string]map[string]bool{
-	EnginePostgreSQL: {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
+	EnginePostgreSQL: {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
 	EngineMySQL:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
-	EngineMariaDB:    {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
+	EngineMariaDB:    {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
 	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false, "SET_AUTOSCALE": true},
 	EngineFerretDB:   {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
-	EngineOpenSearch: {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_CUSTOM_DOMAIN": true, "SET_AUTOSCALE": true},
+	EngineOpenSearch: {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_CUSTOM_DOMAIN": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
 	EngineKafka:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 }
 

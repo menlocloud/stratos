@@ -34,7 +34,20 @@ metadata:
   annotations:
     {{- include "database-cluster.annotations" . | nindent 4 }}
 spec:
-  nodes: {{ int .Values.instances }}
+  {{/*
+  `nodes` is SHARDS in this operator, not instance count: nodes: 3 builds a
+  3-shard cluster with no redundancy, which is the opposite of what
+  `instances: 3` means everywhere else in this chart. One shard, N-1 replicas
+  is the HA reading, and it is the only one a single endpoint can serve.
+  */}}
+  nodes: 1
+  replicas: {{ sub (int .Values.instances) 1 }}
+  {{/* Make the stratos-owned secret the ACTUAL auth password — engines.go
+       ConnectionSecret hands <id>-auth to customers, so the operator has to be
+       told to use it. */}}
+  servicePassword:
+    name: {{ $name }}-auth
+    key: password
   image: {{ include "database-cluster.image" . }}
   tls: false
   prometheus: {{ .Values.monitoring.enabled }}

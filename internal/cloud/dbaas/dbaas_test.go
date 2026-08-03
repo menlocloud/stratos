@@ -960,3 +960,145 @@ func TestSetChartVersionAndPins(t *testing.T) {
 		t.Fatal("patch dropped the resources-finalizer")
 	}
 }
+
+// TestValidateAccess pins the identifier gate. This is a SECURITY test, not a UX one:
+// mariadb-operator interpolates these names straight into SQL, so anything that gets past
+// ValidateAccess reaches a SQL parser unescaped.
+func TestValidateAccess(t *testing.T) {
+	ok := []DBUser{{Name: "alice", Databases: []string{"orders"}}}
+	okDBs := []DBDatabase{{Name: "orders", Owner: "alice"}}
+	if err := ValidateAccess(EnginePostgreSQL, okDBs, ok); err != nil {
+		t.Fatalf("valid access rejected: %v", err)
+	}
+	bad := map[string]struct {
+		dbs   []DBDatabase
+		users []DBUser
+	}{
+		"sql injection in user":     {nil, []DBUser{{Name: "alice; DROP TABLE x"}}},
+		"sql injection in database": {[]DBDatabase{{Name: "a`; DROP"}}, nil},
+		"quote in name":             {nil, []DBUser{{Name: "a'b"}}},
+		"backslash in name":         {nil, []DBUser{{Name: `a\b`}}},
+		"upper case":                {nil, []DBUser{{Name: "Alice"}}},
+		"leading digit":             {nil, []DBUser{{Name: "1alice"}}},
+		"empty":                     {nil, []DBUser{{Name: ""}}},
+		"too long":                  {nil, []DBUser{{Name: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}},
+		"reserved user":             {nil, []DBUser{{Name: "postgres"}}},
+		"reserved app user":         {nil, []DBUser{{Name: "app"}}},
+		"reserved database":         {[]DBDatabase{{Name: "postgres"}}, nil},
+		"duplicate user":            {nil, []DBUser{{Name: "alice"}, {Name: "alice"}}},
+		"duplicate database":        {[]DBDatabase{{Name: "orders"}, {Name: "orders"}}, nil},
+		"owner not a listed user":   {[]DBDatabase{{Name: "orders", Owner: "ghost"}}, nil},
+		"grant on unknown database": {nil, []DBUser{{Name: "alice", Databases: []string{"ghost"}}}},
+	}
+	for name, tc := range bad {
+		if err := ValidateAccess(EnginePostgreSQL, tc.dbs, tc.users); err == nil {
+			t.Errorf("%s: must be rejected", name)
+		}
+	}
+	// OpenSearch roles are an allowlist — an unknown role is a silent privilege grant otherwise.
+	if err := ValidateAccess(EngineOpenSearch, nil, []DBUser{{Name: "alice", Roles: []string{"readall"}}}); err != nil {
+		t.Errorf("built-in role rejected: %v", err)
+	}
+	if err := ValidateAccess(EngineOpenSearch, nil, []DBUser{{Name: "alice", Roles: []string{"superuser"}}}); err == nil {
+		t.Error("unknown opensearch role must be rejected")
+	}
+}
+
+// TestSetAccess drives the whole reconcile: new users get a Secret and a one-time password,
+// the values document carries names only, and a user dropped from the list loses its Secret.
+func TestSetAccess(t *testing.T) {
+	api := newFakeAPI()
+	cfg := testConfig()
+	svc := NewWithAPI(api, cfg, "svc-1")
+	spec := testSpec(EnginePostgreSQL, "17")
+	if _, err := svc.CreateDatabase(context.Background(), spec, NetShare{NetworkID: "net-1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	ns := NamespaceFor(spec.ProjectID)
+
+	created, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EnginePostgreSQL,
+		[]DBDatabase{{Name: "orders", Owner: "alice"}},
+		[]DBUser{{Name: "alice", Databases: []string{"orders"}}, {Name: "bob", Databases: []string{"orders"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 2 || created["alice"] == "" || created["bob"] == "" {
+		t.Fatalf("both new users must come back with a password once, got %d", len(created))
+	}
+	for _, u := range []string{"alice", "bob"} {
+		data, _ := api.GetSecretData(context.Background(), ns, UserSecretName(spec.ID, u))
+		if string(data["password"]) != created[u] {
+			t.Errorf("%s: secret does not hold the returned password", u)
+		}
+	}
+	app, _ := api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
+	values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	if len(values["users"].([]any)) != 2 || len(values["databases"].([]any)) != 1 {
+		t.Fatalf("values do not carry the access lists: %v", values["users"])
+	}
+	// Passwords must never reach the Application — it is argocd-readable.
+	if strings.Contains(fmt.Sprint(values), created["alice"]) {
+		t.Fatal("a password leaked into values")
+	}
+	// bob reaches orders through its owner alice: postgres has no per-database grant.
+	first, _ := values["users"].([]any)[0].(map[string]any)
+	second, _ := values["users"].([]any)[1].(map[string]any)
+	byName := map[string]map[string]any{first["name"].(string): first, second["name"].(string): second}
+	if _, has := byName["alice"]["inRoles"]; has {
+		t.Error("the owner must not be granted membership of itself")
+	}
+	if roles, _ := byName["bob"]["inRoles"].([]any); len(roles) != 1 || roles[0] != "alice" {
+		t.Errorf("bob.inRoles = %v, want [alice]", byName["bob"]["inRoles"])
+	}
+
+	// A database declared with NO owner must still be usable: the first user that asked for it
+	// becomes the owner, otherwise postgres hands it to the app role and the grant is a no-op.
+	if _, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EnginePostgreSQL,
+		[]DBDatabase{{Name: "logs"}},
+		[]DBUser{{Name: "alice", Databases: []string{"logs"}}, {Name: "bob", Databases: []string{"logs"}}}); err != nil {
+		t.Fatal(err)
+	}
+	app, _ = api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
+	values, _ = dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	logs, _ := values["databases"].([]any)[0].(map[string]any)
+	if logs["owner"] != "alice" {
+		t.Errorf("owner-less database must default to its first user, got %v", logs["owner"])
+	}
+
+	// Re-declaring without bob removes bob's Secret and keeps alice's password stable.
+	alicePassword := created["alice"]
+	created2, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EnginePostgreSQL,
+		[]DBDatabase{{Name: "orders", Owner: "alice"}}, []DBUser{{Name: "alice", Databases: []string{"orders"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created2) != 0 {
+		t.Errorf("an existing user must not be re-issued a password, got %v", created2)
+	}
+	if data, _ := api.GetSecretData(context.Background(), ns, UserSecretName(spec.ID, "alice")); string(data["password"]) != alicePassword {
+		t.Error("alice's password must survive an unrelated change")
+	}
+	if data, _ := api.GetSecretData(context.Background(), ns, UserSecretName(spec.ID, "bob")); data != nil {
+		t.Error("a removed user must lose its secret")
+	}
+
+	// Rotation is scoped to the named user and returns the new password once.
+	rotated, err := svc.ResetUserPassword(context.Background(), spec.ProjectID, spec.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated == alicePassword {
+		t.Error("rotation must change the password")
+	}
+	if _, err := svc.ResetUserPassword(context.Background(), spec.ProjectID, spec.ID, "bob"); err == nil {
+		t.Error("rotating a user that does not exist must fail")
+	}
+	// A rejected list must not write anything: bob stays gone.
+	if _, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EnginePostgreSQL, nil,
+		[]DBUser{{Name: "bob"}, {Name: "DROP TABLE"}}); err == nil {
+		t.Fatal("an invalid list must be rejected")
+	}
+	if data, _ := api.GetSecretData(context.Background(), ns, UserSecretName(spec.ID, "bob")); data != nil {
+		t.Error("a rejected list must not create secrets")
+	}
+}

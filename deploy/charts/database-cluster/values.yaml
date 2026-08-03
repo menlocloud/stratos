@@ -89,6 +89,23 @@ network:
   # HostnameFor is the derivation twin — change both together.
   dnsZone: ""
 
+# -- Customer-managed logical databases inside this instance (MANAGE_ACCESS).
+# postgresql -> one CNPG Database CR each; mariadb -> one mariadb Database CR
+# each. Ignored by every other engine. `owner` must be one of `users` below;
+# omitted = the engine's built-in app user.
+# [{name: orders, owner: alice}]
+databases: []
+
+# -- Customer-managed logins (MANAGE_ACCESS). NEVER carries a password: the
+# engine CR references Secret <resourceId>-u-<name>, which stratos writes
+# directly (values ride an argocd-readable Application).
+#   databases  postgresql/mariadb: the logical databases this user may use.
+#   inRoles    postgresql only, derived by stratos: membership of each listed
+#              database's owner role, which is how postgres grants access.
+#   roles      opensearch only: built-in role names, allowlisted server-side.
+# [{name: alice, databases: [orders], inRoles: [], roles: []}]
+users: []
+
 # -- Stratos identity of this database. projectId + resourceId REQUIRED.
 # resourceId (std-xxxxxxxx) is the base name of EVERY object this chart
 # renders — not the release name, which is an ArgoCD implementation detail.

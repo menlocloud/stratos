@@ -108,6 +108,10 @@ func databaseDataWithHost(cfg Config, app map[string]any, host string) map[strin
 		// Both are "" until Octavia programs the VIP — billing keys on endpoint being non-empty.
 		"endpoint":      cfg.PublicHost(digStr(app, "metadata", "name"), digStr(values, "opensearch", "customDomain"), host),
 		"endpoint_ip":   host,
+		// Customer-managed access, echoed from the values so the UI can list it without a
+		// second read. Names only — passwords live in per-user Secrets on the DB cluster.
+		"databases":     accessNames(values, "databases"),
+		"users":         accessNames(values, "users"),
 		"port":          Port(engine),
 	}
 	for key, path := range map[string][]string{
@@ -140,4 +144,37 @@ func databaseDataWithHost(cfg Config, app map[string]any, host string) map[strin
 		d["allowed_cidrs"] = cidrs
 	}
 	return map[string]any{"database": d}
+}
+
+// accessNames flattens a values access list (databases/users) to the display shape the client
+// renders: [{name, owner|databases|roles}]. Values are already bson-round-trip-stable strings.
+func accessNames(values map[string]any, key string) []any {
+	list, _ := dig(values, key).([]any)
+	out := make([]any, 0, len(list))
+	for _, raw := range list {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := digStr(item, "name")
+		entry := map[string]any{"name": name}
+		// OpenSearch has no username field on its user CR — the CR name IS the login, and it
+		// stays prefixed so two databases in one namespace cannot collide. Echo the effective
+		// login so the UI shows what to type (see templates/opensearch/users.yaml).
+		if key == "users" && digStr(values, "engine") == EngineOpenSearch {
+			entry["login"] = digStr(values, "stratos", "resourceId") + "-u-" + name
+		}
+		for _, f := range []string{"owner"} {
+			if v := digStr(item, f); v != "" {
+				entry[f] = v
+			}
+		}
+		for _, f := range []string{"databases", "roles"} {
+			if v, _ := item[f].([]any); len(v) > 0 {
+				entry[f] = v
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
 }

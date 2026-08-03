@@ -32,6 +32,33 @@ spec:
     parameters:
       {{- toYaml . | nindent 6 }}
   {{- end }}
+  {{- if .Values.users }}
+  {{/*
+  Customer-declared logins as CNPG managed roles. The password NEVER appears
+  here: passwordSecret names the Secret stratos wrote (<id>-u-<user>), which is
+  the whole reason values can stay argocd-readable.
+
+  inRoles is how a user reaches a database it does not own — postgres has no
+  "grant on database" CR, so stratos turns "user u may use database d" into
+  membership of d's owner role (internal/cloud/dbaas/values.go usersValues).
+  ensure: present + a role dropped from the list simply stops being managed;
+  CNPG does not DROP roles, which is the safe default for objects that may own
+  data.
+  */}}
+  managed:
+    roles:
+      {{- range .Values.users }}
+      - name: {{ .name }}
+        ensure: present
+        login: true
+        passwordSecret:
+          name: {{ include "database-cluster.name" $ }}-u-{{ .name }}
+        {{- with .inRoles }}
+        inRoles:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- end }}
+  {{- end }}
   storage:
     size: {{ .Values.storage.sizeGi }}Gi
     {{- with .Values.storage.storageClassName }}

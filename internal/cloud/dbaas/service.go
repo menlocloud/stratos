@@ -509,6 +509,106 @@ func (s *Service) ResetPassword(ctx context.Context, projectID, dbID, engine str
 	return password, nil
 }
 
+// SetAccess reconciles a database's customer-managed logical databases and users to the given
+// desired state. Declarative on purpose: the caller sends the whole list, so a dropped entry is
+// a removal and the values document is always the truth — the same posture as every other dbaas
+// mutation.
+//
+// Order is load-bearing. Secrets are written BEFORE the values patch (a User CR pointing at a
+// Secret that does not exist yet wedges the operator) and deleted AFTER it (an operator still
+// reconciling a removed user must not find its Secret gone mid-flight). Passwords for NEW users
+// are generated here and returned ONCE, exactly like ResetPassword — nothing stores them.
+func (s *Service) SetAccess(ctx context.Context, projectID, dbID, engine string, dbs []DBDatabase, users []DBUser) (map[string]string, error) {
+	if err := ValidateAccess(engine, dbs, users); err != nil {
+		return nil, err
+	}
+	existing, err := s.accessUsernames(ctx, dbID)
+	if err != nil {
+		return nil, err
+	}
+	ns := NamespaceFor(projectID)
+	created := map[string]string{}
+	wanted := map[string]bool{}
+	for _, u := range users {
+		wanted[u.Name] = true
+		if existing[u.Name] {
+			continue
+		}
+		password, err := generatePassword()
+		if err != nil {
+			return nil, err
+		}
+		if err := s.api.ApplySecret(ctx, ns, UserSecretName(dbID, u.Name),
+			map[string]string{"username": u.Name, "password": password},
+			map[string]string{LabelProject: projectID, LabelService: s.serviceID, LabelManagedBy: ManagedByValue},
+			nil); err != nil {
+			return nil, fmt.Errorf("dbaas: apply user secret: %w", err)
+		}
+		created[u.Name] = password
+	}
+	if err := s.PatchDatabaseValues(ctx, dbID, func(values map[string]any) error {
+		values["databases"] = databasesValues(dbs, users)
+		values["users"] = usersValues(dbs, users)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	// Best-effort: a leftover Secret is inert (nothing references it) and the namespace GC
+	// reaps it with the database, so a failure here must not fail an applied change.
+	for name := range existing {
+		if !wanted[name] {
+			_ = s.api.DeleteSecret(ctx, ns, UserSecretName(dbID, name))
+		}
+	}
+	return created, nil
+}
+
+// ResetUserPassword rotates a customer-created user's password. Stratos owns that Secret, so
+// this is a plain re-apply — unlike the engine's own account (ResetPassword), whose Secret the
+// operator mints and must be merge-patched.
+func (s *Service) ResetUserPassword(ctx context.Context, projectID, dbID, username string) (string, error) {
+	existing, err := s.accessUsernames(ctx, dbID)
+	if err != nil {
+		return "", err
+	}
+	if !existing[username] {
+		return "", fmt.Errorf("user %q does not exist on this database", username)
+	}
+	password, err := generatePassword()
+	if err != nil {
+		return "", err
+	}
+	if err := s.api.ApplySecret(ctx, NamespaceFor(projectID), UserSecretName(dbID, username),
+		map[string]string{"username": username, "password": password},
+		map[string]string{LabelProject: projectID, LabelService: s.serviceID, LabelManagedBy: ManagedByValue},
+		nil); err != nil {
+		return "", fmt.Errorf("dbaas: rotate user password: %w", err)
+	}
+	return password, nil
+}
+
+// accessUsernames reads the users currently declared in the LIVE values — the same source the
+// operator reconciles from, so "does this user exist" can never disagree with what is deployed.
+func (s *Service) accessUsernames(ctx context.Context, dbID string) (map[string]bool, error) {
+	app, err := s.api.GetApplication(ctx, s.cfg.ArgoNamespace, dbID)
+	if err != nil {
+		return nil, err
+	}
+	if app == nil {
+		return nil, fmt.Errorf("dbaas: database %s not found", dbID)
+	}
+	out := map[string]bool{}
+	list, _ := dig(app, "spec", "source", "helm", "valuesObject", "users").([]any)
+	for _, raw := range list {
+		if u, ok := raw.(map[string]any); ok {
+			if name, _ := u["name"].(string); name != "" {
+				out[name] = true
+			}
+		}
+	}
+	return out, nil
+}
+
 // SetCustomDomainTLS writes the stratos-owned BYO-certificate secret <id>-custom-tls (keys
 // tls.crt/tls.key, plus ca.crt when a chain is supplied) that the chart mounts on opensearch's
 // http layer and Dashboards. PEM material goes straight to the cluster — never into stratos

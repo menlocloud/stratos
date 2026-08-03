@@ -37,7 +37,7 @@ Engines (all five ship in the chart; valkey is beta-gated):
 | `postgresql` | CloudNativePG ≥ 1.29.1 | `instances` 1/2/3, operator failover | 5432 |
 | `mysql` | Percona Operator for MySQL (PS) | group replication, size 1 or 3 | 3306 |
 | `mariadb` | mariadb-operator 26.x | replication + chart-owned HAProxy | 3306 |
-| `valkey` | valkey-operator (pre-GA, **beta**) | primary + replicas | 6379 |
+| `valkey` | valkey-operator (pre-GA, **beta**) | 1 shard, `instances`-1 replicas | 6379 |
 | `ferretdb` | FerretDB v2 over a CNPG backend | CNPG instances + stateless frontends | 27017 |
 | `opensearch` | opensearch-k8s-operator 3.0.2 | N same-size nodes (all roles), 1 or 3 | 9200 (HTTPS) |
 | `kafka` | Strimzi 1.1.0 (KRaft, Kafka 4.2.0–4.3.0) | dual-role KRaft pool, 3 brokers | 9094 (SASL/SCRAM) |
@@ -162,7 +162,7 @@ sequenceDiagram
   written straight to the cluster secret `<id>-custom-tls` and mounted on the http layer +
   Dashboards; **no ACME** — the customer certifies their own name and points DNS at the
   endpoint themselves (CNAME to the platform name or an A record to the VIP); empty domain
-  removes it). Engine-gated via `dbaas.Capabilities` — verify each mechanism live before
+  removes it), `MANAGE_ACCESS` and `RESET_USER_PASSWORD` (see below). Engine-gated via `dbaas.Capabilities` — verify each mechanism live before
   widening the map.
 - **Delete** — Application delete only; the ArgoCD resources-finalizer cascades the chart, the
   LB Service delete tears the Octavia LB (and its tenant-subnet port) down. The periodic sweep
@@ -244,6 +244,31 @@ behind a customer's back. Two ways to move one:
 
 Engine-version upgrades are a different action (`UPGRADE`) and are catalog-gated and
 upward-only. Available for every engine except **valkey**, whose operator is pre-GA.
+
+## Customer-managed databases and users (MANAGE_ACCESS)
+
+`MANAGE_ACCESS` takes the WHOLE desired state — `{databases: [{name, owner?}], users: [{name,
+databases?: [...], roles?: [...]}]}` — so an entry dropped from the list is removed on the
+database. Newly declared users come back with a generated password in the response **once**;
+`RESET_USER_PASSWORD {username}` issues a new one. Nothing is stored stratos-side: each
+password lives only in Secret `<id>-u-<user>` on the DB cluster, which the engine CR
+references, so values stay safe to read.
+
+| Engine | Mechanism | Notes |
+|---|---|---|
+| `postgresql` | CNPG `Database` CR + `spec.managed.roles` | Postgres has no per-database grant CR, so "user may use database" becomes membership of that database's OWNER role. A database declared without an owner is owned by the first user that lists it — leaving it blank would hand it to the engine's `app` role and grant the customer nothing. |
+| `mariadb` | `Database` + `User` + `Grant` CRs | One Grant per (user, database), `ALL PRIVILEGES` on that database only, no `GRANT OPTION`. |
+| `opensearch` | `OpensearchUser` + `OpensearchUserRoleBinding` | Roles are BUILT-IN names from a server-side allowlist. **The CR name is the login name** — the CRD has no username field and one namespace holds every database in the project — so the customer signs in as `<id>-u-<name>`; the sync echoes that back as the user's `login`. |
+| `mysql` | — | Not offered. The Percona ps-operator ships no user/database CRDs, so there is nothing values-shaped to reconcile. |
+
+**Identifier validation is a security control, not a nicety.** mariadb-operator interpolates
+these names straight into SQL with no escaping (upstream issue k8s.mariadb.com#1722, closed as
+not planned), so `dbaas.ValidIdent` (`^[a-z][a-z0-9_]{0,30}$`) plus a reserved-name list is the
+escaping layer. `TestValidateAccess` pins it. Never relax that regex without replacing the
+mechanism.
+
+The access CRs carry `argocd.argoproj.io/sync-wave: "1"`: they reference the engine CR, whose
+webhooks reject a User/Database/Grant naming a cluster that does not exist yet.
 
 ## Connection secrets (contract, pinned by TestConnectionSecretContract)
 

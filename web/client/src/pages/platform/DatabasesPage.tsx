@@ -69,6 +69,9 @@ const HIDDEN_ACTIONS: Record<string, Set<string>> = {
   RESTART: new Set(["mysql", "valkey", "opensearch", "kafka"]),
   RESIZE_STORAGE: new Set(["valkey", "opensearch"]),
   RESET_PASSWORD: new Set(["valkey", "opensearch"]),
+  // Only postgresql/mariadb/opensearch have a values-shaped user model in their pinned
+  // operator; mysql's ps-operator has no user/database CRDs at all.
+  MANAGE_ACCESS: new Set(["mysql", "valkey", "ferretdb", "kafka"]),
 }
 const supports = (engine: string, action: string) => !HIDDEN_ACTIONS[action]?.has(engine)
 
@@ -977,6 +980,9 @@ function DatabaseDetail({
   const [domainOpen, setDomainOpen] = useState(false)
   const [autoscaleOpen, setAutoscaleOpen] = useState(false)
   const [platformOpen, setPlatformOpen] = useState(false)
+  const [accessOpen, setAccessOpen] = useState(false)
+  // MANAGE_ACCESS returns a password per NEWLY declared user, exactly once.
+  const [newCredentials, setNewCredentials] = useState<Record<string, string> | null>(null)
   // RESET_PASSWORD's result is shown exactly once and never stored anywhere else.
   const [newPassword, setNewPassword] = useState<string | null>(null)
 
@@ -1136,6 +1142,11 @@ function DatabaseDetail({
           {engine === "opensearch" && (
             <Button size="sm" variant="outline" onClick={() => setDomainOpen(true)}>Custom domain</Button>
           )}
+          {supports(engine, "MANAGE_ACCESS") && (
+            <Button size="sm" variant="outline" onClick={() => setAccessOpen(true)}>
+              {engine === "opensearch" ? "Users & roles" : "Databases & users"}
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => setCidrsOpen(true)}>Allowed CIDRs</Button>
           <Button size="sm" variant="destructive" onClick={onDeleted}>
             <Trash2 className="size-4" /> Delete
@@ -1251,6 +1262,33 @@ function DatabaseDetail({
             setAutoscaleOpen(false)
           }}
         />
+      )}
+
+      {accessOpen && (
+        <AccessDialog
+          engine={engine}
+          databases={((d.databases as AccessDatabase[]) ?? [])}
+          users={((d.users as AccessUser[]) ?? [])}
+          onClose={() => setAccessOpen(false)}
+          onSubmit={async (body) => {
+            const res = await act("MANAGE_ACCESS", body)
+            onPatch({ databases: body.databases, users: body.users, sync_status: "OutOfSync" })
+            const creds = (res as { credentials?: Record<string, string> }).credentials
+            if (creds && Object.keys(creds).length > 0) setNewCredentials(creds)
+            toast.success("Databases and users updated")
+            setAccessOpen(false)
+          }}
+          onRotate={async (username) => {
+            const res = await act("RESET_USER_PASSWORD", { username })
+            const r = res as { username?: string; password?: string }
+            if (r.password) setNewCredentials({ [r.username ?? username]: r.password })
+            toast.success(`Password rotated for ${username}`)
+          }}
+        />
+      )}
+
+      {newCredentials && (
+        <NewCredentialsDialog creds={newCredentials} onClose={() => setNewCredentials(null)} />
       )}
 
       {/* Platform update — opt-in re-pin onto the provider's chart version */}
@@ -1793,6 +1831,223 @@ function AutoscaleDialog({
           >
             {pending ? "Applying…" : "Apply"}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+type AccessDatabase = { name: string; owner?: string }
+type AccessUser = { name: string; login?: string; databases?: string[]; roles?: string[] }
+
+// Built-in OpenSearch roles a customer may bind — mirrors the server-side allowlist in
+// internal/cloud/dbaas/config.go openSearchRoles. Kept short: these are the ones that mean
+// something without a custom role definition.
+const OPENSEARCH_ROLES = [
+  "all_access", "readall", "readall_and_monitor", "kibana_user", "kibana_read_only",
+  "alerting_read_access", "alerting_full_access", "index_management_full_access",
+]
+
+// AccessDialog edits the WHOLE desired access list — the request is declarative, so anything
+// removed here is removed on the database. Names are validated client-side with the same rule
+// the server enforces (it is a SQL-safety gate there, not a nicety, so the message matches).
+const IDENT_RE = /^[a-z][a-z0-9_]{0,30}$/
+
+function AccessDialog({
+  engine, databases, users, onClose, onSubmit, onRotate,
+}: {
+  engine: string
+  databases: AccessDatabase[]
+  users: AccessUser[]
+  onClose: () => void
+  onSubmit: (body: { databases: AccessDatabase[]; users: AccessUser[] }) => Promise<void>
+  onRotate: (username: string) => Promise<void>
+}) {
+  const isSearch = engine === "opensearch"
+  const [dbs, setDbs] = useState<AccessDatabase[]>(databases)
+  const [us, setUs] = useState<AccessUser[]>(users)
+  const [newDb, setNewDb] = useState("")
+  const [newUser, setNewUser] = useState("")
+  const [pending, setPending] = useState(false)
+
+  const existing = new Set(users.map((u) => u.name))
+  const addDb = () => {
+    const name = newDb.trim()
+    if (!IDENT_RE.test(name)) return toast.error("Use lower-case letters, digits and underscores; start with a letter")
+    if (dbs.some((d) => d.name === name)) return toast.error(`${name} already exists`)
+    setDbs([...dbs, { name }])
+    setNewDb("")
+  }
+  const addUser = () => {
+    const name = newUser.trim()
+    if (!IDENT_RE.test(name)) return toast.error("Use lower-case letters, digits and underscores; start with a letter")
+    if (us.some((u) => u.name === name)) return toast.error(`${name} already exists`)
+    setUs([...us, { name, databases: [], roles: [] }])
+    setNewUser("")
+  }
+  const toggle = (user: AccessUser, key: "databases" | "roles", value: string) => {
+    const list = user[key] ?? []
+    const next = list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
+    setUs(us.map((u) => (u.name === user.name ? { ...u, [key]: next } : u)))
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{isSearch ? "Users & roles" : "Databases & users"}</DialogTitle>
+          <DialogDescription>
+            {isSearch
+              ? "Logins on this OpenSearch cluster and the built-in roles bound to them. New users get a password once, shown after you apply."
+              : "Logical databases inside this instance and the logins that may use them. New users get a password once, shown after you apply."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-5 py-2">
+          {!isSearch && (
+            <div className="grid gap-2">
+              <Label>Databases</Label>
+              {dbs.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No databases yet.</p>
+              ) : (
+                dbs.map((db) => (
+                  <div key={db.name} className="flex items-center justify-between rounded-lg border p-2">
+                    <div className="font-mono text-sm">{db.name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        owner {db.owner || "app"}
+                      </span>
+                      <Button size="sm" variant="ghost" onClick={() => setDbs(dbs.filter((d) => d.name !== db.name))}>
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+              <div className="flex gap-2">
+                <Input value={newDb} onChange={(e) => setNewDb(e.target.value)} placeholder="orders" className="font-mono" />
+                <Button variant="outline" onClick={addDb}>Add database</Button>
+              </div>
+            </div>
+          )}
+
+          <div className="grid gap-2">
+            <Label>Users</Label>
+            {us.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No users yet.</p>
+            ) : (
+              us.map((u) => (
+                <div key={u.name} className="grid gap-2 rounded-lg border p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-mono text-sm">{u.name}</div>
+                      {u.login && u.login !== u.name ? (
+                        <div className="text-xs text-muted-foreground">
+                          logs in as <span className="font-mono">{u.login}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {existing.has(u.name) ? (
+                        <Button size="sm" variant="outline" onClick={() => onRotate(u.name).catch((e: Error) => toast.error(e.message))}>
+                          Rotate password
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">new</span>
+                      )}
+                      <Button size="sm" variant="ghost" onClick={() => setUs(us.filter((x) => x.name !== u.name))}>
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(isSearch ? OPENSEARCH_ROLES : dbs.map((d) => d.name)).map((value) => {
+                      const key = isSearch ? "roles" : "databases"
+                      const on = (u[key] ?? []).includes(value)
+                      return (
+                        <Button
+                          key={value}
+                          size="sm"
+                          variant={on ? "default" : "outline"}
+                          onClick={() => toggle(u, key, value)}
+                        >
+                          {value}
+                        </Button>
+                      )
+                    })}
+                    {!isSearch && dbs.length === 0 ? (
+                      <span className="text-xs text-muted-foreground">Add a database to grant access.</span>
+                    ) : null}
+                  </div>
+                </div>
+              ))
+            )}
+            <div className="flex gap-2">
+              <Input value={newUser} onChange={(e) => setNewUser(e.target.value)} placeholder="alice" className="font-mono" />
+              <Button variant="outline" onClick={addUser}>Add user</Button>
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Removing an entry here removes it on the database — for a database that also drops its
+            data. Passwords are stored only on the database cluster; rotate to get a new one.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={pending}
+            onClick={() => {
+              setPending(true)
+              const payload = {
+                databases: isSearch ? [] : dbs,
+                users: us.map((u) => ({
+                  name: u.name,
+                  ...(isSearch ? { roles: u.roles ?? [] } : { databases: u.databases ?? [] }),
+                })),
+              }
+              onSubmit(payload)
+                .catch((e: Error) => toast.error(e.message))
+                .finally(() => setPending(false))
+            }}
+          >
+            {pending ? "Applying…" : "Apply"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Shown once per newly created (or rotated) user — the only time these passwords exist
+// outside the database cluster. Never written to the query cache.
+function NewCredentialsDialog({ creds, onClose }: { creds: Record<string, string>; onClose: () => void }) {
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New credentials</DialogTitle>
+          <DialogDescription>
+            Copy these now — they are shown once and are not stored anywhere you can read them
+            back. Rotating a user issues a new password.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2 py-2">
+          {Object.entries(creds).map(([user, password]) => (
+            <div key={user} className="grid gap-1 rounded-lg border p-3">
+              <div className="text-xs text-muted-foreground">{user}</div>
+              <div className="flex gap-2">
+                <Input readOnly className="font-mono text-xs" value={password} onFocus={(e) => e.currentTarget.select()} />
+                <Button variant="outline" size="icon" aria-label={`Copy password for ${user}`} onClick={() => void copyText(password)}>
+                  <Copy className="size-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button onClick={onClose}>Done</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

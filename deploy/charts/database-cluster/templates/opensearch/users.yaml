@@ -1,0 +1,66 @@
+{{- if and (eq .Values.engine "opensearch") .Values.users }}
+{{/*
+Customer-declared OpenSearch logins: one OpensearchUser per entry plus one
+OpensearchUserRoleBinding carrying its roles. The operator reconciles both
+through the security API, so no securityconfig Secret is involved and the
+operator's own generated admin credential (which opensearchcluster.yaml relies
+on) is untouched.
+
+THE CR NAME *IS* THE LOGIN NAME. OpensearchUser has no username field — the
+operator uses metadata.name — and every database in a project shares one
+namespace, so the name must stay prefixed with the database id to keep two
+databases from fighting over `alice`. That means the customer logs in as
+`<id>-u-alice`; the sync echoes that string back as the user's `login` so the
+UI shows what to type instead of what was typed.
+
+Roles are BUILT-IN role names only, allowlisted server-side
+(internal/cloud/dbaas/config.go openSearchRoles) — a typo there would otherwise
+be a silent privilege grant. Custom roles (OpensearchRole with index patterns)
+are a separate surface; nothing here creates one.
+
+passwordFrom points at the Secret stratos wrote; values never carry it.
+*/}}
+{{- $name := include "database-cluster.name" . }}
+{{- range .Values.users }}
+{{- $login := printf "%s-u-%s" $name .name }}
+---
+apiVersion: opensearch.org/v1
+kind: OpensearchUser
+metadata:
+  name: {{ $login }}
+  labels:
+    {{- include "database-cluster.labels" $ | nindent 4 }}
+  annotations:
+    # Wave 1: these reference the engine CR, and the operators' webhooks reject
+    # a User/Database/Grant whose cluster does not exist yet. ArgoCD would retry
+    # into convergence anyway, but only after surfacing a sync error per object.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  opensearchCluster:
+    name: {{ $name }}
+  passwordFrom:
+    name: {{ $login }}
+    key: password
+{{- with .roles }}
+---
+apiVersion: opensearch.org/v1
+kind: OpensearchUserRoleBinding
+metadata:
+  name: {{ $login }}-roles
+  labels:
+    {{- include "database-cluster.labels" $ | nindent 4 }}
+  annotations:
+    # Wave 1: these reference the engine CR, and the operators' webhooks reject
+    # a User/Database/Grant whose cluster does not exist yet. ArgoCD would retry
+    # into convergence anyway, but only after surfacing a sync error per object.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  opensearchCluster:
+    name: {{ $name }}
+  users:
+    - {{ $login }}
+  roles:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}
