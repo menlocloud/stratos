@@ -55,7 +55,7 @@ export const emptyDbaasForm: DbaasFormState = {
   storedDatabase: {},
 }
 
-export const DBAAS_ENGINES = ["postgresql", "mysql", "mariadb", "valkey", "ferretdb"] as const
+export const DBAAS_ENGINES = ["postgresql", "mysql", "mariadb", "valkey", "ferretdb", "opensearch", "kafka"] as const
 
 const splitCsv = (s: string) => s.split(",").map((v) => v.trim()).filter(Boolean)
 
@@ -304,7 +304,7 @@ export function DbaasProviderForm({
           className="min-h-20 font-mono text-xs"
           value={form.engines}
           onChange={(e) => setForm({ ...form, engines: e.target.value })}
-          placeholder={"postgresql=16,17,18\nmysql=8.4\nmariadb=11.4\nferretdb=2"}
+          placeholder={"postgresql=14,15,16,17,18\nmysql=8.0,8.4\nmariadb=10.11,11.4\nferretdb=2.7\nkafka=4.3.0"}
         />
         <p className="text-xs text-muted-foreground">
           One line per engine, versions comma-separated. Known engines:{" "}

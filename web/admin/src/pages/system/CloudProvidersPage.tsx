@@ -451,7 +451,7 @@ export default function CloudProvidersPage() {
                     : 'Connect an OpenStack cloud with its Keystone admin credentials. You will enable per-region services and run "Test connection" on the provider page after it is created.'}
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant={kind === "openstack" ? "default" : "outline"} onClick={() => setKind("openstack")}>
               OpenStack
             </Button>
