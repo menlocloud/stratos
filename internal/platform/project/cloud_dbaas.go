@@ -231,7 +231,7 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 	}
 
 	switch action {
-	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO", "SET_CUSTOM_DOMAIN", "SET_AUTOSCALE", "MANAGE_ACCESS", "SET_INDEX_POLICIES":
+	case "RESIZE", "RESIZE_STORAGE", "SCALE_REPLICAS", "RESTART", "RESET_PASSWORD", "UPGRADE", "SET_SSO", "SET_CUSTOM_DOMAIN", "SET_AUTOSCALE", "MANAGE_ACCESS", "SET_INDEX_POLICIES", "SET_READ_ENDPOINT", "SET_PARAMETERS":
 		if !known[action] {
 			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s does not support %s", engine, action)))
 			return true
@@ -535,6 +535,81 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 		httpx.OK(w, map[string]any{"result": "UPDATING", "credentials": created, "backupStarted": backedUp})
 		return true
 
+	case "GET_LOGS":
+		// Read-only and bounded; nothing is stored. Not capability-gated: every engine logs to
+		// stdout, and a database whose values are unreadable is exactly the one someone needs
+		// the log for.
+		logs, err := ds.Logs(r.Context(), proj.ID, cr.ExternalID, engine, intAny(data["lines"]))
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": logs})
+		return true
+
+	case "SET_PARAMETERS":
+		// The WHOLE desired set: a parameter dropped here returns to the engine default.
+		raw, _ := data["parameters"].(map[string]any)
+		params := make(map[string]string, len(raw))
+		for k, v := range raw {
+			s, ok := v.(string)
+			if !ok {
+				h.fail(w, httpx.BadRequest(fmt.Sprintf("parameter %q must be a string", k)))
+				return true
+			}
+			params[k] = strings.TrimSpace(s)
+		}
+		if err := dbaas.ValidateParameters(engine, params); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		if err := ds.SetParameters(r.Context(), cr.ExternalID, engine, params); err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{
+			"result": "UPDATING",
+			// The operators decide this, not stratos — the flag is so the UI can say what will
+			// happen rather than the customer discovering it when connections drop.
+			"restarts": dbaas.ParametersNeedRestart(engine, params),
+		})
+		return true
+
+	case "SET_READ_ENDPOINT":
+		// Toggling after create: same rules as the create path, checked against the LIVE values
+		// so a stale cache cannot let a single-instance database claim a reader.
+		on, ok := data["enabled"].(bool)
+		if !ok {
+			h.fail(w, httpx.BadRequest("enabled must be true or false"))
+			return true
+		}
+		if on && !dbaas.ReadEndpointEngines[engine] {
+			h.fail(w, httpx.BadRequest(fmt.Sprintf("engine %s has no separate read endpoint", engine)))
+			return true
+		}
+		err := ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+			if on && intAny(values["instances"]) < 2 {
+				return httpx.BadRequest("a read-only endpoint needs more than one instance")
+			}
+			net, _ := values["network"].(map[string]any)
+			if net == nil {
+				return fmt.Errorf("dbaas: database %s: values carry no network block", cr.ExternalID)
+			}
+			if on {
+				net["readEndpoint"] = true
+			} else {
+				delete(net, "readEndpoint")
+			}
+			values["network"] = net
+			return nil
+		})
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
+		return true
+
 	case "SET_BACKUP":
 		// Enabled/schedule/retention only — the object store itself is operator config, never a
 		// customer choice, so nothing here names a bucket.
@@ -761,6 +836,13 @@ func dbaasSpecFromData(projectID string, d map[string]any) (dbaas.DatabaseSpec, 
 			return spec, fmt.Errorf("beta must be true or false")
 		}
 		spec.BetaAck = b
+	}
+	if raw, has := d["readEndpoint"]; has && raw != nil {
+		b, ok := raw.(bool)
+		if !ok {
+			return spec, fmt.Errorf("readEndpoint must be true or false")
+		}
+		spec.ReadEndpoint = b
 	}
 	if raw, has := d["dashboards"]; has && raw != nil {
 		b, ok := raw.(bool)

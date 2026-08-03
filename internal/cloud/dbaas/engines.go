@@ -69,6 +69,10 @@ func (o EngineOffer) ReplicaChoices() []int {
 // what customers ask to restore, and neither operator has an object-store backup CR worth the
 // surface.
 //
+// SET_PARAMETERS is the runtime-configuration surface (parameters.go). ferretdb is the one
+// engine with a backing store but NO tunables: its CNPG cluster carries a fixed DocumentDB
+// parameter block that customer settings must never be able to disturb.
+//
 // RESTORE always produces a NEW database, but the mechanism differs. postgresql/ferretdb/mariadb
 // BOOTSTRAP from an object-store folder. mysql cannot bootstrap: its PerconaServerMySQLRestore
 // targets a RUNNING cluster — so the chart brings the new cluster up empty and then applies a
@@ -88,13 +92,36 @@ func (o EngineOffer) ReplicaChoices() []int {
 // (autoscale.go): CPU/RAM bounds work wherever RESIZE does; the disk leg additionally requires
 // RESIZE_STORAGE, so it self-disables for valkey/opensearch.
 var Capabilities = map[string]map[string]bool{
-	EnginePostgreSQL: {"BACKUP": true, "RESTORE": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
-	EngineMySQL:      {"BACKUP": true, "RESTORE": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
-	EngineMariaDB:    {"BACKUP": true, "RESTORE": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
-	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false, "SET_AUTOSCALE": true},
+	EnginePostgreSQL: {"SET_PARAMETERS": true, "BACKUP": true, "RESTORE": true, "SET_READ_ENDPOINT": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
+	EngineMySQL:      {"SET_PARAMETERS": true, "BACKUP": true, "RESTORE": true, "SET_READ_ENDPOINT": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
+	EngineMariaDB:    {"SET_PARAMETERS": true, "BACKUP": true, "RESTORE": true, "SET_READ_ENDPOINT": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
+	EngineValkey:     {"SET_PARAMETERS": true, "RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false, "SET_AUTOSCALE": true},
 	EngineFerretDB:   {"BACKUP": true, "RESTORE": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
-	EngineOpenSearch: {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_CUSTOM_DOMAIN": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
-	EngineKafka:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
+	EngineOpenSearch: {"SET_PARAMETERS": true, "RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_CUSTOM_DOMAIN": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
+	EngineKafka:      {"SET_PARAMETERS": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
+}
+
+// LogContainerFor is the container whose stdout carries the engine's own log. Every pinned
+// engine logs to stdout — none of them needs a sidecar — but they disagree about the container
+// name, and reading the wrong one returns an operator's chatter instead of the database's.
+func LogContainerFor(engine string) string {
+	switch engine {
+	case EnginePostgreSQL, EngineFerretDB:
+		// CNPG's instance manager runs postgres in `postgres` and logs JSON. For ferretdb this
+		// is the BACKEND's log; the stateless frontend has little to say.
+		return "postgres"
+	case EngineMySQL:
+		return "mysql"
+	case EngineMariaDB:
+		return "mariadb"
+	case EngineValkey:
+		return "valkey"
+	case EngineOpenSearch:
+		return "opensearch"
+	case EngineKafka:
+		return "kafka"
+	}
+	return ""
 }
 
 // BackupCRFor maps an engine to the custom resource its operator produces per backup run

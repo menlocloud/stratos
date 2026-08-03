@@ -51,6 +51,16 @@ spec:
       - pg_documentdb_core
       - pg_documentdb
     parameters:
+      {{/*
+      Customer settings FIRST so the DocumentDB block below always wins: these
+      keys are what make the extension work at all, and a customer who set
+      cron.database_name would break their own database. Before this merge the
+      customer's parameters were dropped entirely — accepted by the API,
+      applied nowhere.
+      */}}
+      {{- with .Values.postgresql.parameters }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
       cron.database_name: app
       documentdb.enableCompact: "true"
       documentdb.enableLetAndCollationForQueryMatch: "true"

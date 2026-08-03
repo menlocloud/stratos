@@ -23,10 +23,11 @@ type fakeAPI struct {
 	secretData  map[string]map[string][]byte
 	secretTypes map[string]string // key ns/name → Secret.type
 	netpols     map[string]map[string]any
-	apps        map[string]map[string]any // key ns/name
-	services    map[string]map[string]any // key ns/name
-	vpas        map[string]map[string]any // key ns/name
+	apps        map[string]map[string]any            // key ns/name
+	services    map[string]map[string]any            // key ns/name
+	vpas        map[string]map[string]any            // key ns/name
 	crs         map[string]map[string]map[string]any // plural → ns/name → object
+	pods        map[string]map[string]any            // key ns/name
 	ops         []string
 	failApply   bool
 	failDelete  map[string]bool // secret names whose DeleteSecret fails
@@ -43,6 +44,7 @@ func newFakeAPI() *fakeAPI {
 		services:    map[string]map[string]any{},
 		vpas:        map[string]map[string]any{},
 		crs:         map[string]map[string]map[string]any{},
+		pods:        map[string]map[string]any{},
 		failDelete:  map[string]bool{},
 	}
 }
@@ -202,6 +204,25 @@ func (f *fakeAPI) ListCRs(_ context.Context, _, _, plural, ns, sel string) ([]ma
 		}
 	}
 	return out, nil
+}
+
+// ListPods / PodLogs back the log reads. Pods are seeded per test; a name in failDelete
+// doubles as "this pod's log read fails", which is how the partial-failure path is covered.
+func (f *fakeAPI) ListPods(_ context.Context, ns, sel string) ([]map[string]any, error) {
+	var out []map[string]any
+	for k, obj := range f.pods {
+		if strings.HasPrefix(k, ns+"/") && matchesSelector(obj, sel) {
+			out = append(out, obj)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeAPI) PodLogs(_ context.Context, ns, pod, container string, tail int) (string, error) {
+	if f.failDelete[pod] {
+		return "", errors.New("container is not running")
+	}
+	return fmt.Sprintf("log of %s/%s container=%s tail=%d", ns, pod, container, tail), nil
 }
 
 // matchesSelector honours the label selectors the Service actually uses (k=v comma lists).
@@ -594,7 +615,7 @@ func TestFinalizeOrphans(t *testing.T) {
 			"annotations": map[string]any{
 				AnnotationNetworkID: "net-1", AnnotationSubnetID: "sub-1",
 				AnnotationOSService: "svc-os", AnnotationOSProject: "dbaas-tenant",
-				AnnotationOSRegion:  "RegionOne",
+				AnnotationOSRegion: "RegionOne",
 			},
 		}}
 		api.secretData[k] = map[string][]byte{"network-id": []byte("net-1")}

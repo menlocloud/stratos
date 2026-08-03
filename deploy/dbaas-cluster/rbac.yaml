@@ -61,6 +61,16 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "create", "patch", "delete"]
+  # Database log reading (GET_LOGS): list the engine's pods in a project namespace, then read
+  # their stdout. Every engine here logs to stdout, so this is the whole mechanism — no sidecar
+  # and no log shipper. READ-ONLY and deliberately narrow: `pods` carries get/list only and
+  # there is NO pods/exec, so this grant can read a database's log and nothing else.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
   # LB Service VIP read-back (<id>-lb status.loadBalancer.ingress) — read-only; the chart
   # (via ArgoCD) owns the Service itself.
   - apiGroups: [""]

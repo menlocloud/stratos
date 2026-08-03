@@ -223,6 +223,12 @@ type DatabaseSpec struct {
 	// BetaAck acknowledges a beta engine (valkey): required true when the engine's offer is
 	// flagged Beta, so nobody lands on a pre-GA operator by accident.
 	BetaAck bool
+	// ReadEndpoint adds a second, read-only endpoint. Only meaningful above one instance —
+	// on a single node it would be the primary under another name, which is a lie the customer
+	// would pay for. What it COSTS depends on the engine and that is not cosmetic:
+	// postgresql's readers are different pods so it needs a second Octavia LB, while mysql and
+	// mariadb route reads through the same proxy on port 3307 and get it for free.
+	ReadEndpoint bool
 	// DashboardsEnabled deploys OpenSearch Dashboards (opensearch only) with its own
 	// tenant-facing LB (<id>-dash-lb). SET_SSO also flips this on — SSO rides Dashboards.
 	DashboardsEnabled bool
@@ -264,6 +270,14 @@ func (s DatabaseSpec) Validate(c Config) error {
 	}
 	if s.DashboardsEnabled && s.Engine != EngineOpenSearch {
 		return fmt.Errorf("database: dashboards are an opensearch feature")
+	}
+	if s.ReadEndpoint {
+		if !ReadEndpointEngines[s.Engine] {
+			return fmt.Errorf("database: engine %s has no separate read endpoint", s.Engine)
+		}
+		if s.Replicas < 2 {
+			return fmt.Errorf("database: a read-only endpoint needs more than one instance")
+		}
 	}
 	if len(s.SSO) > 0 && s.Engine != EngineOpenSearch {
 		return fmt.Errorf("database: sso is an opensearch feature")
@@ -413,6 +427,21 @@ func (b BackupSpec) Validate() error {
 	}
 	return nil
 }
+
+// ReadEndpointEngines are the engines that expose a reader separate from the writer.
+// valkey/opensearch/kafka have no such split, and ferretdb would need a second set of
+// frontends rather than a second endpoint on the same ones.
+var ReadEndpointEngines = map[string]bool{
+	EnginePostgreSQL: true,
+	EngineMySQL:      true,
+	EngineMariaDB:    true,
+}
+
+// ReadEndpointCostsLB reports whether offering the read endpoint provisions a SECOND Octavia
+// load balancer. Only postgresql does: its readers are a different set of pods, so no port on
+// the existing proxy reaches them. This is what billing keys on — charging mysql and mariadb
+// for an endpoint that costs nothing would not be defensible.
+func ReadEndpointCostsLB(engine string) bool { return engine == EnginePostgreSQL }
 
 // DBDatabase is one logical database a customer asked for inside their instance.
 type DBDatabase struct {

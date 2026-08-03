@@ -222,6 +222,18 @@ Per-engine pod selector for the LB Service: the WRITE endpoint of each engine.
               the external bootstrap + per-broker LB Services (see
               LBServiceNameFor in internal/cloud/dbaas/engines.go).
 */}}
+{{/*
+Read-only port on the SHARED proxy. mysql (Percona haproxy) and mariadb (the
+chart-owned haproxy) both route reads on 3307, so their read endpoint is a
+second PORT on the existing load balancer rather than a second load balancer —
+no extra Octavia amphorae, no extra cost. postgresql cannot do this: its
+readers are different pods, so it gets its own LB (postgresql/service-ro-lb.yaml).
+Empty = this engine has no shared-proxy read port.
+*/}}
+{{- define "database-cluster.readPort" -}}
+{{- if has .Values.engine (list "mysql" "mariadb") -}}3307{{- end -}}
+{{- end }}
+
 {{- define "database-cluster.serviceSelector" -}}
 {{- $name := include "database-cluster.name" . -}}
 {{- if eq .Values.engine "postgresql" -}}

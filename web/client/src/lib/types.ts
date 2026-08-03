@@ -89,6 +89,8 @@ export type ProjectService = {
   databaseStorageClasses?: string[]
   // False/absent = this location has no backup object store, so the backup surface is hidden.
   databaseBackupConfigured?: boolean
+  // Per-engine runtime-configuration catalog (name/kind/min/max/enum/restart/help).
+  databaseParameters?: Record<string, unknown[]>
   [k: string]: unknown
 }
 

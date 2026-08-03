@@ -108,6 +108,12 @@ func databaseDataWithHost(cfg Config, app map[string]any, host string) map[strin
 		// Both are "" until Octavia programs the VIP — billing keys on endpoint being non-empty.
 		"endpoint":    cfg.PublicHost(digStr(app, "metadata", "name"), digStr(values, "opensearch", "customDomain"), host),
 		"endpoint_ip": host,
+		// Read-only endpoint. read_endpoint_lb records whether offering it provisioned a
+		// SECOND Octavia LB (postgresql only) — billing charges that, not the feature, because
+		// mysql and mariadb serve reads on another port of the proxy they already have.
+		"parameters":       paramValues(values, engine),
+		"read_endpoint":    dig(values, "network", "readEndpoint") == true,
+		"read_endpoint_lb": dig(values, "network", "readEndpoint") == true && ReadEndpointCostsLB(engine),
 		// Customer-managed access, echoed from the values so the UI can list it without a
 		// second read. Names only — passwords live in per-user Secrets on the DB cluster.
 		"databases": accessNames(values, "databases"),
@@ -192,6 +198,21 @@ func osList(values map[string]any, key string) []any {
 		if item, ok := raw.(map[string]any); ok {
 			out = append(out, item)
 		}
+	}
+	return out
+}
+
+// paramValues echoes a database's applied runtime settings from the values document, so the
+// configuration form shows what is deployed rather than what someone last typed.
+func paramValues(values map[string]any, engine string) map[string]any {
+	block := ParamBlockFor(engine)
+	if block == "" {
+		return map[string]any{}
+	}
+	cur, _ := dig(values, block, "parameters").(map[string]any)
+	out := make(map[string]any, len(cur))
+	for k, v := range cur {
+		out[k] = v
 	}
 	return out
 }

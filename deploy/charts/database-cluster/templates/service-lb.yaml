@@ -63,6 +63,16 @@ spec:
       port: {{ $port }}
       targetPort: {{ $port }}
       protocol: TCP
+    {{- if .Values.network.readEndpoint }}
+    {{- with include "database-cluster.readPort" . }}
+    {{/* Reads on the same proxy, so the read endpoint is host:3307 — one LB,
+         two ports. Only rendered when the customer asked for it. */}}
+    - name: {{ $.Values.engine }}-ro
+      port: {{ . }}
+      targetPort: {{ . }}
+      protocol: TCP
+    {{- end }}
+    {{- end }}
   selector:
     {{- include "database-cluster.serviceSelector" . | nindent 4 }}
 {{- end }}

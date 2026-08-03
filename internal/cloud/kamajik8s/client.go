@@ -62,6 +62,33 @@ func (e *APIError) Error() string { return fmt.Sprintf("kubernetes api: %d: %s",
 // application/json (server-side apply needs application/apply-patch+yaml — JSON is valid YAML,
 // so the payload stays JSON). 2xx with a body decodes into map[string]any; 404 on GET/DELETE
 // returns (nil, *APIError{404}).
+// raw performs a request whose response is NOT JSON — the pods/log subresource returns plain
+// text. Same auth and transport as do(), and the same 8 MiB read cap, which doubles as the
+// bound on how much log one call can pull through stratos.
+func (c *Client) raw(ctx context.Context, method, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.rc.server, "/")+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/plain")
+	if c.rc.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.rc.token)
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode >= 300 {
+		return nil, &APIError{Status: res.StatusCode, Message: strings.TrimSpace(string(body))}
+	}
+	return body, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, contentType string) (map[string]any, error) {
 	u := strings.TrimRight(c.rc.server, "/") + path
 	if len(query) > 0 {
@@ -299,6 +326,27 @@ func (c *Client) ListApplications(ctx context.Context, ns, labelSelector string)
 // (set at create), so ArgoCD cascades the delete to everything the chart rendered.
 func (c *Client) DeleteApplication(ctx context.Context, ns, name string) error {
 	return c.delete(ctx, fmt.Sprintf(pathApplications, ns), name)
+}
+
+// ListPods lists pods in ns filtered by labelSelector.
+func (c *Client) ListPods(ctx context.Context, ns, labelSelector string) ([]map[string]any, error) {
+	return c.list(ctx, fmt.Sprintf("/api/v1/namespaces/%s/pods", ns), labelSelector)
+}
+
+// PodLogs returns the tail of one container's stdout. Bounded by design: tailLines caps what
+// the apiserver sends, so a chatty database cannot stream unbounded output through stratos into
+// a browser. Returns raw text, not JSON — this subresource does not speak it.
+func (c *Client) PodLogs(ctx context.Context, ns, pod, container string, tailLines int) (string, error) {
+	if tailLines <= 0 || tailLines > 5000 {
+		tailLines = 500
+	}
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/log?container=%s&tailLines=%d×tamps=true",
+		ns, pod, container, tailLines)
+	body, err := c.raw(ctx, http.MethodGet, path)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 // ListCRs lists any namespaced custom resource by group/version/plural, filtered by

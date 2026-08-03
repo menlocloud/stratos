@@ -14,6 +14,7 @@ import (
 
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
+	"github.com/menlocloud/stratos/internal/cloud/dbaas"
 	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/platform/billing"
 	"github.com/menlocloud/stratos/internal/platform/externalservice"
@@ -654,6 +655,37 @@ func externalServiceDto(es *externalservice.ExternalService) map[string]any {
 		// Whether the LOCATION can back anything up. The client hides the whole backup surface
 		// when it cannot — a toggle that writes nowhere is worse than no toggle.
 		dto["databaseBackupConfigured"] = dcfg.Backup.Enabled()
+		// The tunable catalog per engine — the client renders the form from this rather than
+		// carrying its own copy that would drift from the server's allowlist.
+		paramCatalog := map[string]any{}
+		for engine := range dcfg.Engines {
+			list := dbaas.ParamsFor(engine)
+			if len(list) == 0 {
+				continue
+			}
+			out := make([]any, 0, len(list))
+			for _, p := range list {
+				entry := map[string]any{"name": p.Name, "kind": p.Kind, "help": p.Help}
+				for k, v := range map[string]string{"min": p.Min, "max": p.Max} {
+					if v != "" {
+						entry[k] = v
+					}
+				}
+				if len(p.Enum) > 0 {
+					vals := make([]any, 0, len(p.Enum))
+					for _, e := range p.Enum {
+						vals = append(vals, e)
+					}
+					entry["enum"] = vals
+				}
+				if p.Restart {
+					entry["restart"] = true
+				}
+				out = append(out, entry)
+			}
+			paramCatalog[engine] = out
+		}
+		dto["databaseParameters"] = paramCatalog
 		dto["databaseLimits"] = map[string]any{
 			"maxCpu": dcfg.Limits.MaxCPU, "maxMemoryGiB": dcfg.Limits.MaxMemoryGiB, "maxStorageGiB": dcfg.Limits.MaxStorageGiB,
 		}

@@ -379,6 +379,64 @@ default nobody notices until a restore window or an object-store bill shows up. 
 runs `target: PreferReplica` — the CRD default is `Replica`, and a single-instance database has
 no replica, so backups would quietly never be taken.
 
+## Read-only endpoint
+
+`SET_READ_ENDPOINT {enabled}` (or `readEndpoint` at create) adds a second endpoint that serves
+replicas only. Offered for postgresql, mysql and mariadb, and only above one instance — on a
+single node it would be the primary under another name.
+
+What it costs is engine-dependent and that is what billing keys on:
+
+| Engine | Mechanism | Cost |
+|---|---|---|
+| `postgresql` | a SECOND Octavia LB selecting `cnpg.io/instanceRole: replica`, `<id>-ro.<zone>` | one more load balancer |
+| `mysql` | port **3307** on the existing LB — Percona's HAProxy already routes reads there | free |
+| `mariadb` | port **3307** on the existing LB — the chart's own HAProxy gains a `mariadb_read` frontend over `<id>-secondary` | free |
+
+The sync sets `read_endpoint_lb` only in the first case, and the price rule
+(`read_endpoint_lb`, $0.024/h) charges that. Charging for a port that costs nothing would not
+be defensible; the first LB stays inside the engine rates, the way DigitalOcean folds the
+endpoint into its node price.
+
+## Runtime configuration (SET_PARAMETERS)
+
+`SET_PARAMETERS {parameters}` takes the WHOLE desired set — a setting dropped from the map
+returns to the engine default. The offered settings are an **allowlist** per engine
+(`internal/cloud/dbaas/parameters.go`), surfaced to the client through the service DTO so the
+form cannot offer something the server would reject. Two reasons it is an allowlist, both
+load-bearing:
+
+- CloudNativePG **blocks** a long list of GUCs at its validating webhook and rejects the whole
+  Cluster if one appears — under ArgoCD that means SyncFailed, which blocks every LATER change
+  to the database. Percona and mariadb do not validate at all: a setting that breaks group
+  replication or binlog shipping is accepted and silently destroys replication.
+- The value reaches a config file verbatim, so it is charset-checked. `1
+[mysqld]
+log_bin=OFF`
+  would otherwise inject a whole section.
+
+**Stratos never restarts anything here.** Each operator applies the change and decides: CNPG
+reloads a sighup GUC in place and performs a rolling restart for a postmaster-level one;
+Percona and mariadb hash the config and roll the StatefulSet; Strimzi diffs the broker config
+and applies dynamically-updatable keys through the Admin API with no restart at all. The
+`restart` flag on a parameter exists only so the UI can say what will happen BEFORE the
+customer commits, rather than after their connections drop.
+
+ferretdb has no tunables on purpose: its CNPG cluster carries a fixed DocumentDB parameter
+block that customer settings must never disturb. (Its template merges `postgresql.parameters`
+underneath those fixed keys anyway — before that merge they were accepted by the API and
+applied nowhere.)
+
+## Logs (GET_LOGS)
+
+`GET_LOGS {lines}` returns the tail of each instance's stdout, read on demand and stored
+nowhere — the same posture as connection info. Every pinned engine logs to stdout, so this is a
+plain `pods/log` read with no sidecar and no shipper; only the container name differs per engine
+(`LogContainerFor`). It needs `pods` get/list and `pods/log` get on the DB cluster —
+deliberately narrow, and with **no `pods/exec`**, so the grant can read a database's log and
+nothing else. The pod filter is the ownership boundary: one namespace holds every database in a
+project.
+
 ## Connection secrets (contract, pinned by TestConnectionSecretContract)
 
 | Engine | Secret | Exposed account |

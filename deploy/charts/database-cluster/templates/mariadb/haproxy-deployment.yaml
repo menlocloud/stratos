@@ -46,6 +46,11 @@ spec:
             - name: mariadb
               containerPort: 3306
               protocol: TCP
+            {{- if and .Values.network.readEndpoint (gt (int .Values.instances) 1) }}
+            - name: mariadb-ro
+              containerPort: 3307
+              protocol: TCP
+            {{- end }}
           readinessProbe:
             tcpSocket:
               port: 3306

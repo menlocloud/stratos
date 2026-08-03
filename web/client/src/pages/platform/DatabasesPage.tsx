@@ -561,6 +561,7 @@ export function DatabaseClusterDetailPage() {
           limits={serviceFor(rowServiceId(resource))?.databaseLimits}
           platformVersion={platformVersionFor(rowServiceId(resource))}
           backupConfigured={!!serviceFor(rowServiceId(resource))?.databaseBackupConfigured}
+          paramCatalog={serviceFor(rowServiceId(resource))?.databaseParameters as Record<string, unknown[]> | undefined}
           onDeleted={() => setDeleteOpen(true)}
           onPatch={(patch) => patchDatabase(resource.id, patch)}
         />
@@ -1088,7 +1089,7 @@ type ConnectionInfo = {
 }
 
 function DatabaseDetail({
-  pid, scope, resource, engines, limits, platformVersion, backupConfigured, onDeleted, onPatch,
+  pid, scope, resource, engines, limits, platformVersion, backupConfigured, paramCatalog, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
@@ -1099,6 +1100,9 @@ function DatabaseDetail({
   // False when the location has no backup object store — the backup surface stays hidden
   // rather than offering a toggle that would write nowhere.
   backupConfigured: boolean
+  // Per-engine tunable catalog from the service DTO — the configuration form renders from
+  // this, so it can never offer a setting the server allowlist would reject.
+  paramCatalog?: Record<string, unknown[]>
   onDeleted: () => void
   // Optimistically applies a partial data.database patch to the cached row — called after
   // every successful mutating action so the sheet reflects the request immediately.
@@ -1124,7 +1128,14 @@ function DatabaseDetail({
   const [platformOpen, setPlatformOpen] = useState(false)
   const [accessOpen, setAccessOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
+  const [paramsOpen, setParamsOpen] = useState(false)
+  const [logsOpen, setLogsOpen] = useState(false)
   const backupsOn = (d.backup as BackupState | undefined)?.enabled === true
+  const readEndpointOn = d.read_endpoint === true
+  const [readOpen, setReadOpen] = useState(false)
+  // The tunable catalog comes from the SERVER so the form can never offer a setting the
+  // allowlist would reject.
+  const paramDefs = (paramCatalog?.[engine] ?? []) as ParamDef[]
   const [policiesOpen, setPoliciesOpen] = useState(false)
   // MANAGE_ACCESS returns a password per NEWLY declared user, exactly once.
   const [newCredentials, setNewCredentials] = useState<Record<string, string> | null>(null)
@@ -1311,6 +1322,15 @@ function DatabaseDetail({
               {engine === "opensearch" ? "Users & roles" : "Databases & users"}
             </Button>
           )}
+          <Button size="sm" variant="outline" onClick={() => setLogsOpen(true)}>Logs</Button>
+          {paramDefs.length > 0 && (
+            <Button size="sm" variant="outline" onClick={() => setParamsOpen(true)}>Configuration</Button>
+          )}
+          {supports(engine, "SET_READ_ENDPOINT") && Number(d.replicas) > 1 && (
+            <Button size="sm" variant="outline" onClick={() => setReadOpen(true)}>
+              {readEndpointOn ? "Disable read endpoint" : "Add read endpoint"}
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => setCidrsOpen(true)}>Allowed CIDRs</Button>
           <Button size="sm" variant="destructive" onClick={onDeleted}>
             <Trash2 className="size-4" /> Delete
@@ -1473,6 +1493,62 @@ function DatabaseDetail({
             toast.success("Backup started")
           }}
         />
+      )}
+
+      {logsOpen && (
+        <LogsDialog pid={pid} scope={scope} resourceId={resource.id} onClose={() => setLogsOpen(false)} />
+      )}
+
+      {paramsOpen && (
+        <ParametersDialog
+          defs={paramDefs}
+          current={(d.parameters as Record<string, string>) ?? {}}
+          onClose={() => setParamsOpen(false)}
+          onSubmit={async (params) => {
+            const res = await act("SET_PARAMETERS", { parameters: params })
+            onPatch({ parameters: params, sync_status: "OutOfSync" })
+            toast.success(
+              (res as { restarts?: boolean }).restarts
+                ? "Configuration applied — the database will restart"
+                : "Configuration applied",
+            )
+            setParamsOpen(false)
+          }}
+        />
+      )}
+
+      {readOpen && (
+        <Dialog open onOpenChange={(o) => !o && setReadOpen(false)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{readEndpointOn ? "Disable read endpoint" : "Add read endpoint"}</DialogTitle>
+              <DialogDescription>
+                {readEndpointOn
+                  ? "Removes the read-only endpoint. Anything still pointed at it loses its connection."
+                  : engine === "postgresql"
+                    ? "Adds a second endpoint that serves replicas only, so reads keep off the primary. It runs on its own load balancer, which is billed separately."
+                    : "Adds a read-only endpoint on port 3307 of the address you already have. It reuses the same load balancer, so it costs nothing extra."}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setReadOpen(false)}>Cancel</Button>
+              <Button
+                variant={readEndpointOn ? "destructive" : "default"}
+                onClick={() =>
+                  act("SET_READ_ENDPOINT", { enabled: !readEndpointOn })
+                    .then(() => {
+                      onPatch({ read_endpoint: !readEndpointOn, sync_status: "OutOfSync" })
+                      toast.success(readEndpointOn ? "Read endpoint removed" : "Read endpoint added")
+                      setReadOpen(false)
+                    })
+                    .catch((e: Error) => toast.error(e.message))
+                }
+              >
+                {readEndpointOn ? "Remove" : "Add"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {policiesOpen && (
@@ -2353,6 +2429,17 @@ function NewCredentialsDialog({ creds, onClose }: { creds: Record<string, string
   )
 }
 
+type ParamDef = {
+  name: string
+  kind: string
+  help?: string
+  min?: string
+  max?: string
+  enum?: string[]
+  restart?: boolean
+}
+type LogEntry = { pod: string; container?: string; log?: string; error?: string }
+
 type BackupState = { enabled?: boolean; schedule?: string; retentionDays?: number }
 
 // The opt-in safety backup offered before the two actions that can lose data. Deliberately NOT
@@ -2527,6 +2614,159 @@ function BackupDialog({
               }
               setPending(true)
               onSubmit({ enabled, schedule: enabled ? schedule : "", retentionDays: days })
+                .catch((e: Error) => toast.error(e.message))
+                .finally(() => setPending(false))
+            }}
+          >
+            {pending ? "Applying…" : "Apply"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// The database's own log. Read on demand from the engine pods' stdout and never stored —
+// the same posture as connection info.
+function LogsDialog({
+  pid, scope, resourceId, onClose,
+}: {
+  pid: string
+  scope: CloudScope | undefined
+  resourceId: string
+  onClose: () => void
+}) {
+  const [lines, setLines] = useState("200")
+  const logs = useMutation({
+    mutationFn: (n: number) =>
+      apiFetch<{ result?: LogEntry[] }>(`/project/${pid}/cloud/${resourceId}/action`, {
+        method: "POST",
+        body: { action: "GET_LOGS", data: { lines: n } },
+        cloud: scope,
+      }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+  const entries = logs.data?.result ?? []
+  useEffect(() => {
+    logs.mutate(200)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>Logs</DialogTitle>
+          <DialogDescription>
+            The database engine's own log, newest lines last. One block per instance.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 py-2">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="lg-lines" className="text-xs">Lines</Label>
+            <Input id="lg-lines" className="w-28" value={lines} onChange={(e) => setLines(e.target.value)} inputMode="numeric" />
+            <Button size="sm" variant="outline" onClick={() => logs.mutate(Number(lines) || 200)} disabled={logs.isPending}>
+              {logs.isPending ? "Loading…" : "Refresh"}
+            </Button>
+          </div>
+          {entries.length === 0 && !logs.isPending ? (
+            <p className="text-xs text-muted-foreground">No log output yet.</p>
+          ) : null}
+          {entries.map((e) => (
+            <div key={e.pod} className="grid gap-1">
+              <div className="font-mono text-xs text-muted-foreground">{e.pod}</div>
+              <pre className="max-h-80 overflow-auto rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed whitespace-pre-wrap">
+                {e.error ? `— ${e.error}` : e.log || "(empty)"}
+              </pre>
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Runtime configuration — the managed-database equivalent of an RDS parameter group. The
+// catalog comes from the server, so the form can never offer a setting the allowlist rejects,
+// and each row says up front whether changing it restarts the database.
+function ParametersDialog({
+  defs, current, onClose, onSubmit,
+}: {
+  defs: ParamDef[]
+  current: Record<string, string>
+  onClose: () => void
+  onSubmit: (params: Record<string, string>) => Promise<void>
+}) {
+  const [vals, setVals] = useState<Record<string, string>>(current)
+  const [pending, setPending] = useState(false)
+  const set = (name: string, v: string) => setVals({ ...vals, [name]: v })
+  const clear = (name: string) => {
+    const next = { ...vals }
+    delete next[name]
+    setVals(next)
+  }
+  const willRestart = defs.some((d) => d.restart && (vals[d.name] ?? "") !== (current[d.name] ?? ""))
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Configuration</DialogTitle>
+          <DialogDescription>
+            Engine settings for this database. Anything left empty uses the engine default.
+            Settings marked <span className="font-medium">restart</span> roll the instances when
+            they change; the rest apply in place.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 py-2">
+          {defs.map((d) => (
+            <div key={d.name} className="grid gap-1 rounded-lg border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor={`p-${d.name}`} className="font-mono text-sm">{d.name}</Label>
+                <div className="flex items-center gap-2">
+                  {d.restart ? <Badge variant="outline">restart</Badge> : null}
+                  {vals[d.name] !== undefined ? (
+                    <Button size="sm" variant="ghost" onClick={() => clear(d.name)}>Reset</Button>
+                  ) : null}
+                </div>
+              </div>
+              {d.enum ? (
+                <Select value={vals[d.name] ?? ""} onValueChange={(v) => set(d.name, v)}>
+                  <SelectTrigger id={`p-${d.name}`}><SelectValue placeholder="engine default" /></SelectTrigger>
+                  <SelectContent>
+                    {d.enum.map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  id={`p-${d.name}`}
+                  className="font-mono"
+                  value={vals[d.name] ?? ""}
+                  onChange={(e) => set(d.name, e.target.value)}
+                  placeholder={d.min && d.max ? `engine default · ${d.min}–${d.max}` : "engine default"}
+                />
+              )}
+              {d.help ? <p className="text-xs text-muted-foreground">{d.help}</p> : null}
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          {willRestart ? (
+            <span className="mr-auto text-xs text-muted-foreground">
+              These changes restart the database.
+            </span>
+          ) : null}
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={pending}
+            onClick={() => {
+              setPending(true)
+              const clean: Record<string, string> = {}
+              for (const [k, v] of Object.entries(vals)) if (v.trim() !== "") clean[k] = v.trim()
+              onSubmit(clean)
                 .catch((e: Error) => toast.error(e.message))
                 .finally(() => setPending(false))
             }}

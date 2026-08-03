@@ -32,6 +32,9 @@ func BuildValues(cfg Config, spec DatabaseSpec) map[string]any {
 	if cfg.DNSZone != "" {
 		network["dnsZone"] = cfg.DNSZone
 	}
+	if spec.ReadEndpoint {
+		network["readEndpoint"] = true
+	}
 	values := map[string]any{
 		"engine":        spec.Engine,
 		"engineVersion": spec.Version,

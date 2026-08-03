@@ -32,6 +32,8 @@ type K8sAPI interface {
 	GetService(ctx context.Context, ns, name string) (map[string]any, error)
 	GetVPA(ctx context.Context, ns, name string) (map[string]any, error)
 	ListCRs(ctx context.Context, group, version, plural, ns, labelSelector string) ([]map[string]any, error)
+	ListPods(ctx context.Context, ns, labelSelector string) ([]map[string]any, error)
+	PodLogs(ctx context.Context, ns, pod, container string, tailLines int) (string, error)
 }
 
 // defaultFinalizeGrace: a net-share marker secret younger than this is never treated as an
@@ -651,6 +653,78 @@ func (s *Service) accessUsernames(ctx context.Context, dbID string) (map[string]
 		}
 	}
 	return out, nil
+}
+
+// Logs returns the tail of the database's own log, newest pod last. Every pinned engine writes
+// its log to stdout, so this is a plain pods/log read — no sidecar, no shipper, and nothing
+// stratos stores.
+//
+// The pod filter is the ownership boundary: one namespace holds every database in a project, so
+// a selector that leaked would hand one customer another's log. It is the chart's own
+// app.kubernetes.io/instance label, which is the resource id.
+func (s *Service) Logs(ctx context.Context, projectID, dbID, engine string, tailLines int) ([]map[string]any, error) {
+	container := LogContainerFor(engine)
+	if container == "" {
+		return nil, fmt.Errorf("dbaas: engine %q has no readable log", engine)
+	}
+	ns := NamespaceFor(projectID)
+	pods, err := s.api.ListPods(ctx, ns, "app.kubernetes.io/instance="+dbID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(pods))
+	for _, pod := range pods {
+		name := digStr(pod, "metadata", "name")
+		if name == "" || !strings.HasPrefix(name, dbID) {
+			continue
+		}
+		// A pod that has not started yet has no log; report it rather than failing the batch,
+		// because during a rolling change that is the normal state of one of them.
+		text, err := s.api.PodLogs(ctx, ns, name, container, tailLines)
+		entry := map[string]any{"pod": name, "container": container}
+		if err != nil {
+			entry["error"] = err.Error()
+		} else {
+			entry["log"] = text
+		}
+		out = append(out, entry)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("dbaas: database %s has no running pods yet", dbID)
+	}
+	return out, nil
+}
+
+// SetParameters writes a database's runtime configuration. Declarative like every other
+// mutation: the caller sends the WHOLE desired set, so a parameter dropped from the map returns
+// to the engine default rather than lingering.
+//
+// Stratos does not restart anything here. Each operator decides for itself whether a change is
+// a reload or a roll (CNPG reloads a sighup GUC and rolls a postmaster one; Percona and mariadb
+// hash the config and roll the StatefulSet; Strimzi applies dynamically-updatable broker keys
+// through the Admin API with no restart at all). ParametersNeedRestart only exists so the UI can
+// warn first.
+func (s *Service) SetParameters(ctx context.Context, dbID, engine string, params map[string]string) error {
+	if err := ValidateParameters(engine, params); err != nil {
+		return err
+	}
+	block := ParamBlockFor(engine)
+	if block == "" {
+		return fmt.Errorf("dbaas: engine %q has no tunable settings", engine)
+	}
+	return s.PatchDatabaseValues(ctx, dbID, func(values map[string]any) error {
+		cur, _ := values[block].(map[string]any)
+		if cur == nil {
+			cur = map[string]any{}
+		}
+		next := map[string]any{}
+		for k, v := range params {
+			next[k] = v
+		}
+		cur["parameters"] = next
+		values[block] = cur
+		return nil
+	})
 }
 
 // SetBackup turns object-store backups on or off for one database and sets its schedule and
