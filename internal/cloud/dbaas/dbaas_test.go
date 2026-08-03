@@ -1209,27 +1209,50 @@ func TestSetBackup(t *testing.T) {
 		t.Errorf("runAt = %v", got)
 	}
 
-	// Disabling clears the values block AND reaps the credential.
+	// Clearing the SCHEDULE must not unwire the object store: doing that would pull the barman
+	// sidecar out of every instance pod and roll the whole cluster, and it would end continuous
+	// archiving. On-demand backups and PITR keep working with no schedule.
 	if err := svc.SetBackup(context.Background(), spec.ProjectID, spec.ID, BackupSpec{}); err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := api.GetSecretData(context.Background(), ns, BackupSecretName(spec.ID)); data != nil {
-		t.Error("disabling backups must remove the credential secret")
+	if data, _ := api.GetSecretData(context.Background(), ns, BackupSecretName(spec.ID)); data == nil {
+		t.Error("the credential secret must survive a schedule change")
 	}
 	app, _ = api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
 	values, _ = dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
-	if got := dig(values, "backup", "enabled"); got != false {
-		t.Errorf("backup.enabled = %v, want false", got)
+	if got := dig(values, "backup", "enabled"); got != true {
+		t.Errorf("backup.enabled = %v, want it to stay true", got)
 	}
-	// A database with backups off cannot be told to run one.
-	if err := svc.TriggerBackup(context.Background(), spec.ID, "x"); err == nil {
-		t.Error("on-demand backup must fail while backups are disabled")
+	if got := dig(values, "backup", "schedule"); got != nil {
+		t.Errorf("no schedule must mean no schedule key, got %v", got)
+	}
+	// On-demand still works without a schedule — that is the whole point of the split.
+	if err := svc.TriggerBackup(context.Background(), spec.ID, "20260804-120000"); err != nil {
+		t.Errorf("on-demand backup must work without a schedule: %v", err)
+	}
+	// And a pending on-demand run survives a later schedule change.
+	if err := svc.SetBackup(context.Background(), spec.ProjectID, spec.ID,
+		BackupSpec{Schedule: "0 3 * * *", RetentionDays: 7}); err != nil {
+		t.Fatal(err)
+	}
+	app, _ = api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
+	values, _ = dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	if got := dig(values, "backup", "runAt"); got != "20260804-120000" {
+		t.Errorf("a schedule change must not cancel a backup already started, runAt = %v", got)
 	}
 
-	// A provider with no object store cannot enable backups at all.
+	// A provider with no object store has no backup surface at all.
 	noStore := NewWithAPI(newFakeAPI(), testConfig(), "svc-2")
 	if err := noStore.SetBackup(context.Background(), spec.ProjectID, spec.ID, BackupSpec{Enabled: true}); err == nil {
-		t.Error("enabling backups without an object store must fail")
+		t.Error("a location without an object store must refuse backup settings")
+	}
+	// Creating with a store wires backups from the start, so nothing has to be turned on later.
+	atCreate := BuildValues(cfg, testSpec(EnginePostgreSQL, "17"))
+	if got := dig(atCreate, "backup", "enabled"); got != true {
+		t.Errorf("a new database must have its object store wired at create, got %v", got)
+	}
+	if got := dig(BuildValues(testConfig(), testSpec(EnginePostgreSQL, "17")), "backup"); got != nil {
+		t.Errorf("without a provider store there must be no backup block, got %v", got)
 	}
 }
 

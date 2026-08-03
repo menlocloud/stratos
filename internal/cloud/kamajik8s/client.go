@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -343,8 +344,11 @@ func (c *Client) PodLogs(ctx context.Context, ns, pod, container string, tailLin
 	if tailLines <= 0 || tailLines > 5000 {
 		tailLines = 500
 	}
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/log?container=%s&tailLines=%d×tamps=true",
-		ns, pod, container, tailLines)
+	q := url.Values{}
+	q.Set("container", container)
+	q.Set("tailLines", strconv.Itoa(tailLines))
+	q.Set("timestamps", "true")
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/log?%s", ns, pod, q.Encode())
 	body, err := c.raw(ctx, http.MethodGet, path)
 	if err != nil {
 		return "", err

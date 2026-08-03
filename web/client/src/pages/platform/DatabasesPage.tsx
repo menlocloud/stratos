@@ -1453,27 +1453,28 @@ function DatabaseDetail({
                 <CardHeader><CardTitle className="text-base">Backups</CardTitle></CardHeader>
                 <CardContent className="grid gap-3">
                   <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
-                    <DbRow k="Status" v={backupsOn ? "On" : "Off"} />
-                    <DbRow k="Schedule" v={backupScheduleLabel((d.backup as BackupState) ?? {})} />
-                    <DbRow k="Retention" v={(d.backup as BackupState)?.retentionDays ? `${(d.backup as BackupState).retentionDays} days` : "forever"} />
+                    <DbRow k="Scheduled backups" v={backupScheduleLabel((d.backup as BackupState) ?? {})} />
+                    <DbRow k="Retention" v={(d.backup as BackupState)?.retentionDays ? `${(d.backup as BackupState).retentionDays} days` : "kept forever"} />
                   </dl>
+                  <p className="text-xs text-muted-foreground">
+                    This database archives continuously to the platform object store, so you can
+                    back up at any time and recover to a point in time. The schedule only adds
+                    unattended full backups on top.
+                  </p>
                   <div className="flex flex-wrap gap-2">
-                    <Button size="sm" onClick={() => setBackupOpen(true)}>
-                      {backupsOn ? "Backup settings and history" : "Turn on backups"}
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        act("CREATE_BACKUP")
+                          .then(() => toast.success("Backup started"))
+                          .catch((e: Error) => toast.error(e.message))
+                      }
+                    >
+                      Back up now
                     </Button>
-                    {backupsOn && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          act("CREATE_BACKUP")
-                            .then(() => toast.success("Backup started"))
-                            .catch((e: Error) => toast.error(e.message))
-                        }
-                      >
-                        Back up now
-                      </Button>
-                    )}
+                    <Button size="sm" variant="outline" onClick={() => setBackupOpen(true)}>
+                      Schedule and history
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -2634,8 +2635,9 @@ function BackupDialog({
   onSubmit: (body: { enabled: boolean; schedule: string; retentionDays: number }) => Promise<void>
   onRunNow: () => Promise<void>
 }) {
-  const [enabled, setEnabled] = useState(!!backup.enabled)
-  const [schedule, setSchedule] = useState(backup.schedule ?? "0 2 * * *")
+  // The store is always wired; this switch is the SCHEDULE, so it starts from whether one exists.
+  const [enabled, setEnabled] = useState(!!backup.schedule)
+  const [schedule, setSchedule] = useState(backup.schedule || "0 2 * * *")
   const [retention, setRetention] = useState(String(backup.retentionDays ?? 30))
   const [pending, setPending] = useState(false)
 
@@ -2652,7 +2654,7 @@ function BackupDialog({
   })
   const runs = (list.data?.result ?? []) as BackupRun[]
   useEffect(() => {
-    if (backup.enabled) list.mutate()
+    list.mutate()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -2662,18 +2664,19 @@ function BackupDialog({
         <DialogHeader>
           <DialogTitle>Backups</DialogTitle>
           <DialogDescription>
-            Backups go to the platform object store for this location. Turning them on also starts
-            continuous archiving, which is what makes recovery to a point in time possible.
+            This database already archives continuously to the platform object store — on-demand
+            backups and point-in-time recovery work without any of this. What you set here is the
+            unattended schedule and how long backups are kept.
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
           <div className="flex items-center justify-between rounded-lg border p-3">
             <div>
-              <Label htmlFor="bk-enabled" className="text-sm font-medium">Back up this database</Label>
+              <Label htmlFor="bk-enabled" className="text-sm font-medium">Scheduled backups</Label>
               <div className="text-xs text-muted-foreground">
-                Turning it off stops new backups and removes the schedule. Backups already taken
-                are kept until their retention expires.
+                Turning this off only stops the unattended runs. Continuous archiving keeps going,
+                so you can still back up on demand and recover to a point in time.
               </div>
             </div>
             <Switch id="bk-enabled" checked={enabled} onCheckedChange={setEnabled} />
@@ -2700,7 +2703,7 @@ function BackupDialog({
             </div>
           )}
 
-          {backup.enabled && (
+          {(
             <div className="grid gap-2">
               <div className="flex items-center justify-between">
                 <Label>Recent backups</Label>
@@ -2748,7 +2751,7 @@ function BackupDialog({
                 return toast.error("Keep for must be 0–3650 days")
               }
               setPending(true)
-              onSubmit({ enabled, schedule: enabled ? schedule : "", retentionDays: days })
+              onSubmit({ enabled: true, schedule: enabled ? schedule : "", retentionDays: days })
                 .catch((e: Error) => toast.error(e.message))
                 .finally(() => setPending(false))
             }}
@@ -2774,9 +2777,9 @@ function DbRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
 // Human wording for the stored 5-field cron, so the summary does not make the customer read
 // cron to find out when their backups run.
 function backupScheduleLabel(b: BackupState): string {
-  if (!b.enabled) return "—"
-  const found = BACKUP_SCHEDULES.find((s) => s.value === (b.schedule ?? ""))
-  return found ? found.label : (b.schedule || "On demand only")
+  if (!b.schedule) return "On demand only"
+  const found = BACKUP_SCHEDULES.find((s) => s.value === b.schedule)
+  return found ? found.label : b.schedule
 }
 
 // The database's own log, read on demand from the engine pods' stdout and stored nowhere —

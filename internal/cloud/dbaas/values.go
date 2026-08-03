@@ -77,6 +77,18 @@ func BuildValues(cfg Config, spec DatabaseSpec) map[string]any {
 	if spec.RestoreFrom != nil {
 		values["restore"] = restoreValues(cfg, spec.ID, *spec.RestoreFrom)
 	}
+	// Backups are wired at CREATE whenever the location has an object store, the way every
+	// managed-database service does it. This is not a preference — it is what stops "turn on
+	// backups" from being a destructive act later: on CloudNativePG the barman plugin runs as a
+	// SIDECAR, so wiring it injects a container into every instance pod and the operator must
+	// roll the whole cluster. Doing that at create costs nothing; doing it to a live database
+	// restarts it. Continuous archiving from day one is also what makes recovery to a point in
+	// time possible at all.
+	//
+	// What the customer toggles later is the SCHEDULE, not this.
+	if cfg.Backup.Enabled() && Capabilities[spec.Engine]["BACKUP"] {
+		values["backup"] = backupValues(cfg, spec.ID, BackupSpec{Enabled: true})
+	}
 	return values
 }
 

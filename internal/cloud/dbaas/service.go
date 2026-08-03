@@ -736,33 +736,34 @@ func (s *Service) SetBackup(ctx context.Context, projectID, dbID string, spec Ba
 	if err := spec.Validate(); err != nil {
 		return err
 	}
-	if spec.Enabled && !s.cfg.Backup.Enabled() {
+	if !s.cfg.Backup.Enabled() {
 		return fmt.Errorf("dbaas: this location has no backup object store configured")
 	}
-	ns := NamespaceFor(projectID)
-	if spec.Enabled {
-		if err := s.api.ApplySecret(ctx, ns, BackupSecretName(dbID), map[string]string{
-			BackupCredKeys.CNPGAccess: s.cfg.Backup.AccessKey,
-			BackupCredKeys.CNPGSecret: s.cfg.Backup.SecretKey,
-			BackupCredKeys.AWSAccess:  s.cfg.Backup.AccessKey,
-			BackupCredKeys.AWSSecret:  s.cfg.Backup.SecretKey,
-		}, map[string]string{LabelProject: projectID, LabelService: s.serviceID, LabelManagedBy: ManagedByValue},
-			nil); err != nil {
-			return fmt.Errorf("dbaas: apply backup credentials: %w", err)
-		}
+	// The object store stays wired either way. Unwiring it would remove the barman sidecar and
+	// ROLL the whole cluster, and it would end continuous archiving — so "no schedule" means
+	// exactly that: on-demand backups still work and point-in-time recovery still reaches back
+	// as far as the archive goes.
+	spec.Enabled = true
+	if err := s.api.ApplySecret(ctx, NamespaceFor(projectID), BackupSecretName(dbID), map[string]string{
+		BackupCredKeys.CNPGAccess: s.cfg.Backup.AccessKey,
+		BackupCredKeys.CNPGSecret: s.cfg.Backup.SecretKey,
+		BackupCredKeys.AWSAccess:  s.cfg.Backup.AccessKey,
+		BackupCredKeys.AWSSecret:  s.cfg.Backup.SecretKey,
+	}, map[string]string{LabelProject: projectID, LabelService: s.serviceID, LabelManagedBy: ManagedByValue},
+		nil); err != nil {
+		return fmt.Errorf("dbaas: apply backup credentials: %w", err)
 	}
-	if err := s.PatchDatabaseValues(ctx, dbID, func(values map[string]any) error {
-		values["backup"] = backupValues(s.cfg, dbID, spec)
+	return s.PatchDatabaseValues(ctx, dbID, func(values map[string]any) error {
+		// Preserve any pending on-demand stamp: a schedule change must not cancel a backup the
+		// customer started seconds earlier.
+		prev, _ := values["backup"].(map[string]any)
+		next := backupValues(s.cfg, dbID, spec)
+		if runAt, _ := prev["runAt"].(string); runAt != "" {
+			next["runAt"] = runAt
+		}
+		values["backup"] = next
 		return nil
-	}); err != nil {
-		return err
-	}
-	if !spec.Enabled {
-		if err := s.api.DeleteSecret(ctx, ns, BackupSecretName(dbID)); err != nil && !kamajik8s.NotFound(err) {
-			return err
-		}
-	}
-	return nil
+	})
 }
 
 // StampBackupRun adds an out-of-schedule backup to a values document a caller is ALREADY
