@@ -136,7 +136,7 @@ enough to lose.
 | `mariadb-operator` (+ `-crds`) | `k8s.mariadb.com` MariaDB, Database, User, Grant, PhysicalBackup, PointInTimeRecovery | `mariadb-operator` | mariadb |
 | `opensearch-operator` | `opensearch.org` OpenSearchCluster, OpensearchUser, OpensearchRole, OpensearchUserRoleBinding, OpenSearchISMPolicy | `opensearch-operator-system` | opensearch |
 | `strimzi-kafka-operator` | `kafka.strimzi.io` Kafka, KafkaNodePool, KafkaUser | `strimzi-system` | kafka |
-| **valkey-operator** (no chart — see below) | `hyperspike.io` Valkey | `valkey-operator-system` | valkey (beta) |
+| `valkey-operator` 0.4.1 | `valkey.io` ValkeyCluster | `valkey-operator-system` | valkey (beta) |
 | `cert-manager` | `cert-manager.io` Certificate | cluster-wide | opensearch with a platform TLS certificate |
 | `vpa` (recommender only) | `autoscaling.k8s.io` VerticalPodAutoscaler | `vpa` | the opt-in vertical autoscale tick |
 
@@ -144,12 +144,13 @@ Everything except valkey-operator is in the internal helm mirror (`charts-mirror
 umbrella chart and an ArgoCD Application in infra-ops under
 `kubernetes/clusters/<cluster>/charts/` and `.../manifests/argo-apps/`.
 
-**valkey-operator is the exception**: upstream publishes only an `install.yaml` per GitHub
-release, with no helm chart at all, so it is vendored as plain manifests in infra-ops
-(`manifests/valkey-operator/install.yaml`, pinned to a release tag) and synced by a plain
-directory Application. Bumping it means re-downloading that file from the new tag. **Until it is
-installed, any valkey database fails to sync** — so either install it or drop `valkey` from the
-provider's engine catalog rather than leaving a beta engine on offer that cannot provision.
+**valkey**: use the OFFICIAL `valkey-io/valkey-operator` (CRD `valkey.io/ValkeyCluster`), which
+publishes a helm chart at `https://valkey.io/valkey-helm` and is what the chart targets. The
+third-party `hyperspike` operator (`hyperspike.io/Valkey`) is a different CRD entirely and ships
+no chart at all — do not mix them up. Its chart keeps its CRDs in the helm `crds/` directory,
+which ArgoCD picks up because it templates with `--include-crds`. **Until it is installed, any
+valkey database fails to sync** — so either install it or drop `valkey` from the provider's
+engine catalog rather than leaving a beta engine on offer that cannot provision.
 
 **Why the barman PLUGIN and not in-core `spec.backup.barmanObjectStore`:** the in-core object
 store is deprecated in CNPG 1.26 and **removed in 1.31**, so it would buy one minor version and

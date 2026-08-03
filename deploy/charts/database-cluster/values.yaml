@@ -257,8 +257,9 @@ mariadb:
     memoryGi: 1
 
 valkey:
-  # -- SCHEMA ONLY until the valkey operator CRD is pinned (beta gate) — read
-  # by nothing yet. See templates/valkey/valkey.yaml.
+  # -- Customer-tunable valkey.conf settings, rendered into ValkeyCluster
+  # spec.config (a free-form string map on the CR). maxmemory-policy, timeout,
+  # and friends; stratos allowlists which keys may land here.
   parameters: {}
 
 ferretdb:

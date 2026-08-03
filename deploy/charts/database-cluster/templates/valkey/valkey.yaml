@@ -1,32 +1,31 @@
 {{- if eq .Values.engine "valkey" }}
 {{/*
-=============================================================================
-TODO-VERIFY — UNVERIFIED CRD, BETA-GATED ENGINE (plan: valkey last, behind
-the provider beta flag). This template picks the hyperspike valkey-operator
-(apiVersion hyperspike.io/v1, kind Valkey) as the best-known candidate; the
-group/kind/spec below are UNPINNED best-effort and MUST be verified against
-the actually-installed operator before the beta gate opens:
+Valkey via the OFFICIAL valkey-io/valkey-operator (chart valkey-operator,
+CRD group valkey.io). An earlier revision of this file targeted the
+third-party hyperspike operator, which has no helm chart at all — only a
+raw install.yaml per release — and a different CRD shape.
 
-  kubectl api-resources | grep -i valkey
-  kubectl explain valkey.spec
+TOPOLOGY. `shards` is the number of shard groups and `replicas` the copies
+WITHIN each shard, so an HA valkey is 1 shard with N-1 replicas, NOT N shards:
+sharding splits the keyspace, it does not make it redundant. The platform
+exposes only `instances` (1 or 3) and maps it that way. The operator is
+CLUSTER-MODE ONLY — upstream states plainly that standalone and sentinel are
+not supported — so there is no mode to offer and nothing to pretend about.
 
-Things to pin at verification time (all flagged in the plan's verify list):
-  * apiVersion/kind (hyperspike.io/v1 Valkey vs a valkey-io operator CRD)
-  * replica/node field name and semantics (nodes vs shards vs replicas)
-  * pod labels (the LB selector in _helpers.tpl guesses
-    app.kubernetes.io/name=valkey + instance=<id>)
-  * auth secret name + key (engines.go pins <id>-auth — chart-provisioned?
-    operator-provisioned? adjust the ConnectionSecret tuple to match)
-  * whether valkey.parameters can be passed through (schema-only until then)
-  * restartedAt mechanism (none wired — RESTART capability stays off)
-
-Also update: rbac.yaml CRD read grant + argocd-health.yaml Lua placeholder in
-deploy/dbaas-cluster/.
-=============================================================================
+STILL BETA. What remains unverified against a live operator, and why the
+provider keeps this engine behind its beta flag:
+  * the pod labels the operator stamps (the LB selector in _helpers.tpl and
+    the NetworkPolicy podSelector both guess them)
+  * whether one Octavia VIP in front of a multi-shard cluster is usable at
+    all — a client that lands on the wrong node gets a MOVED redirect to a
+    DB-cluster pod IP that is unroutable from the tenant VPC. Safe at
+    instances 1 (one shard, one keyspace owner); shards > 1 is not offered.
+  * whether the ACL user below is actually the credential
+    engines.go ConnectionSecret hands customers.
 */}}
 {{- $name := include "database-cluster.name" . }}
-apiVersion: hyperspike.io/v1
-kind: Valkey
+apiVersion: valkey.io/v1alpha1
+kind: ValkeyCluster
 metadata:
   name: {{ $name }}
   labels:
@@ -34,32 +33,35 @@ metadata:
   annotations:
     {{- include "database-cluster.annotations" . | nindent 4 }}
 spec:
-  {{/*
-  `nodes` is SHARDS in this operator, not instance count: nodes: 3 builds a
-  3-shard cluster with no redundancy, which is the opposite of what
-  `instances: 3` means everywhere else in this chart. One shard, N-1 replicas
-  is the HA reading, and it is the only one a single endpoint can serve.
-  */}}
-  nodes: 1
+  {{/* One keyspace, instances-1 copies of it — see the topology note. */}}
+  shards: 1
   replicas: {{ sub (int .Values.instances) 1 }}
-  {{/* Make the stratos-owned secret the ACTUAL auth password — engines.go
-       ConnectionSecret hands <id>-auth to customers, so the operator has to be
-       told to use it. */}}
-  servicePassword:
-    name: {{ $name }}-auth
-    key: password
   image: {{ include "database-cluster.image" . }}
-  tls: false
-  prometheus: {{ .Values.monitoring.enabled }}
+  {{/* The exposed account, authenticated from the STRATOS-owned <id>-auth
+       secret (engines.go ConnectionSecret) rather than a chart-generated
+       password, which would re-roll on every ArgoCD render. */}}
+  users:
+    - name: default
+      enabled: true
+      passwordSecret:
+        name: {{ $name }}-auth
+        key: password
   resources:
     {{- include "database-cluster.resources" . | nindent 4 }}
-  storage:
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      {{- with .Values.storage.storageClassName }}
-      storageClassName: {{ . }}
-      {{- end }}
-      resources:
-        requests:
-          storage: {{ .Values.storage.sizeGi }}Gi
+  persistence:
+    size: {{ .Values.storage.sizeGi }}Gi
+    {{- with .Values.storage.storageClassName }}
+    storageClassName: {{ . }}
+    {{- end }}
+    reclaimPolicy: Delete
+  {{- if .Values.monitoring.enabled }}
+  exporter:
+    enabled: true
+  {{- end }}
+  {{- with .Values.valkey.parameters }}
+  {{/* Customer-tunable valkey.conf settings (maxmemory-policy, timeout, ...).
+       Free-form string map on the CR; stratos allowlists what may land here. */}}
+  config:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}
