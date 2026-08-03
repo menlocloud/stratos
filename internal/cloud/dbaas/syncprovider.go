@@ -57,7 +57,7 @@ func (p *DatabaseSyncProvider) List(ctx context.Context) ([]cloud.CloudResource,
 			ExternalID: id,
 			Region:     p.region,
 			ProjectID:  p.projectID,
-			Data:       databaseDataWithHost(s.cfg, app, host),
+			Data:       databaseDataWithHost(s.cfg, app, host, s.readHost(ctx, ns, id, engine, host)),
 		})
 	}
 	return out, nil
@@ -67,10 +67,10 @@ func (p *DatabaseSyncProvider) List(ctx context.Context) ([]cloud.CloudResource,
 // create path's initial row). bson-round-trip-stable by construction: strings, bools and JSON
 // numbers only, timestamps as the RFC3339 strings Kubernetes already serializes.
 func databaseData(cfg Config, app map[string]any, _ []map[string]any) map[string]any {
-	return databaseDataWithHost(cfg, app, "")
+	return databaseDataWithHost(cfg, app, "", "")
 }
 
-func databaseDataWithHost(cfg Config, app map[string]any, host string) map[string]any {
+func databaseDataWithHost(cfg Config, app map[string]any, host, readHost string) map[string]any {
 	values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
 
 	status := "PENDING"
@@ -111,9 +111,14 @@ func databaseDataWithHost(cfg Config, app map[string]any, host string) map[strin
 		// Read-only endpoint. read_endpoint_lb records whether offering it provisioned a
 		// SECOND Octavia LB (postgresql only) — billing charges that, not the feature, because
 		// mysql and mariadb serve reads on another port of the proxy they already have.
-		"parameters":       paramValues(values, engine),
-		"read_endpoint":    dig(values, "network", "readEndpoint") == true,
-		"read_endpoint_lb": dig(values, "network", "readEndpoint") == true && ReadEndpointCostsLB(engine),
+		"parameters":    paramValues(values, engine),
+		"read_endpoint": dig(values, "network", "readEndpoint") == true,
+		// The address customers point readers at. Read from the live Service rather than
+		// derived client-side: postgresql's is a different LB with its own name, while mysql
+		// and mariadb reuse this one on another port — a UI guess would be wrong for one of
+		// the two shapes, and always wrong when the provider runs no DNS zone.
+		"read_endpoint_host": readHost,
+		"read_endpoint_lb":   dig(values, "network", "readEndpoint") == true && ReadEndpointCostsLB(engine),
 		// Customer-managed access, echoed from the values so the UI can list it without a
 		// second read. Names only — passwords live in per-user Secrets on the DB cluster.
 		"databases": accessNames(values, "databases"),
@@ -215,4 +220,25 @@ func paramValues(values map[string]any, engine string) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// readHost resolves the address of a database's read-only endpoint, or "" when it has none.
+// postgresql serves reads from a SECOND load balancer with its own VIP and DNS name; mysql and
+// mariadb serve them on another port of the writer's, so the host is the same and only the port
+// differs.
+func (s *Service) readHost(ctx context.Context, ns, dbID, engine, writeHost string) string {
+	if writeHost == "" {
+		return ""
+	}
+	if !ReadEndpointCostsLB(engine) {
+		return writeHost
+	}
+	vip, err := s.lbHost(ctx, ns, dbID+"-ro-lb")
+	if err != nil || vip == "" {
+		return ""
+	}
+	if name := s.cfg.HostnameFor(dbID); name != "" {
+		return dbID + "-ro." + s.cfg.DNSZone
+	}
+	return vip
 }

@@ -18,6 +18,8 @@ import { DataTable, sortableHeader } from "@/components/data-table"
 import { EmptyState } from "@/components/empty-state"
 import { StatusBadge } from "@/components/status-badge"
 import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -78,6 +80,9 @@ const HIDDEN_ACTIONS: Record<string, Set<string>> = {
   // mysql backs up but cannot be recovered into a NEW instance — its restore CR targets a
   // running cluster. Mirrors the RESTORE capability server-side.
   RESTORE: new Set(["mysql", "valkey", "opensearch", "kafka"]),
+  // Only these three have a reader separate from the writer. Mirrors
+  // dbaas.ReadEndpointEngines — without it the button offered an action the server refuses.
+  SET_READ_ENDPOINT: new Set(["valkey", "ferretdb", "opensearch", "kafka"]),
 }
 const supports = (engine: string, action: string) => !HIDDEN_ACTIONS[action]?.has(engine)
 
@@ -1129,7 +1134,6 @@ function DatabaseDetail({
   const [accessOpen, setAccessOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
   const [paramsOpen, setParamsOpen] = useState(false)
-  const [logsOpen, setLogsOpen] = useState(false)
   const backupsOn = (d.backup as BackupState | undefined)?.enabled === true
   const readEndpointOn = d.read_endpoint === true
   const [readOpen, setReadOpen] = useState(false)
@@ -1217,124 +1221,24 @@ function DatabaseDetail({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-lg border bg-card p-3">
             <div className="text-xs text-muted-foreground">Status</div>
-            <div className="flex items-center gap-1.5">
+            <div className="mt-1">
               <StatusBadge status={(d.status as string) || undefined} />
-              {Number(d.autoscale_enabled) === 1 && <Badge variant="outline">Autoscale</Badge>}
             </div>
           </div>
           <div className="rounded-lg border bg-card p-3">
             <div className="text-xs text-muted-foreground">Engine</div>
             <div className="text-sm">
-              {engineLabel(engine) || "—"} <span className="font-mono text-xs">{String(d.version ?? "")}</span>
+              {engineLabel(engine)} <span className="text-muted-foreground">{String(d.version ?? "")}</span>
             </div>
           </div>
           <div className="rounded-lg border bg-card p-3">
             <div className="text-xs text-muted-foreground">Size</div>
-            <div className="text-sm">{sizeOf(d) || "—"}</div>
+            <div className="text-sm">{sizeOf(d) || "\u2014"}</div>
           </div>
           <div className="rounded-lg border bg-card p-3">
             <div className="text-xs text-muted-foreground">Sync</div>
-            <div className="text-sm">{(d.sync_status as string) || "—"}</div>
+            <div className="text-sm">{(d.sync_status as string) || "\u2014"}</div>
           </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Endpoint:</span>
-          {endpoint ? (
-            <>
-              <span className="font-mono text-xs">{endpoint}</span>
-              <Button variant="ghost" size="icon-sm" aria-label="Copy endpoint" onClick={() => void copyText(endpoint)}>
-                <Copy className="size-3.5" />
-              </Button>
-            </>
-          ) : (
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" /> Endpoint pending — appears once the load balancer is programmed
-            </span>
-          )}
-        </div>
-
-        <p className="text-xs text-muted-foreground">
-          {resource.region ? (
-            <>Location: <span className="font-medium">{resource.region}</span></>
-          ) : null}
-          {(d.network_id as string) ? (
-            <>
-              {resource.region ? " · " : ""}Network: <span className="font-mono">{d.network_id as string}</span>
-              {(d.subnet_id as string) ? <> · subnet <span className="font-mono">{d.subnet_id as string}</span></> : null}
-            </>
-          ) : null}
-          {(d.storage_class as string) ? <> · storage class <span className="font-mono">{d.storage_class as string}</span></> : null}
-          {(d.chart_version as string) ? (
-            <>
-              {" "}· platform <span className="font-mono">{d.chart_version as string}</span>
-              {platformVersion && platformVersion !== d.chart_version ? <> (provider pin {platformVersion})</> : null}
-            </>
-          ) : null}
-        </p>
-
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => conn.mutate()} disabled={conn.isPending || !!connInfo}>
-            {conn.isPending ? "Fetching…" : "Show connection info"}
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setResizeOpen(true)}>Resize</Button>
-          {supports(engine, "RESIZE_STORAGE") && (
-            <Button size="sm" variant="outline" onClick={() => setStorageOpen(true)}>Resize storage</Button>
-          )}
-          <Button size="sm" variant="outline" onClick={() => setReplicasOpen(true)}>Scale replicas</Button>
-          <Button size="sm" variant="outline" onClick={() => setAutoscaleOpen(true)}>Autoscale</Button>
-          {supports(engine, "UPGRADE") && (
-            <Button size="sm" variant="outline" onClick={() => setUpgradeOpen(true)}>Upgrade version</Button>
-          )}
-          {supports(engine, "RESTART") && (
-            <Button size="sm" variant="outline" onClick={() => setRestartOpen(true)}>Restart</Button>
-          )}
-          {supports(engine, "RESET_PASSWORD") && (
-            <Button size="sm" variant="outline" onClick={() => setResetOpen(true)}>Reset password</Button>
-          )}
-          {engine === "opensearch" && (
-            <Button size="sm" variant="outline" onClick={() => setSsoOpen(true)}>Configure SSO</Button>
-          )}
-          {engine === "opensearch" && (
-            <Button size="sm" variant="outline" onClick={() => setDomainOpen(true)}>Custom domain</Button>
-          )}
-          {engine === "opensearch" && (
-            <Button size="sm" variant="outline" onClick={() => setPoliciesOpen(true)}>Index policies</Button>
-          )}
-          {supports(engine, "BACKUP") && backupConfigured && (
-            <Button size="sm" variant="outline" onClick={() => setBackupOpen(true)}>Backups</Button>
-          )}
-          {supports(engine, "BACKUP") && backupsOn && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                act("CREATE_BACKUP")
-                  .then(() => toast.success("Backup started"))
-                  .catch((e: Error) => toast.error(e.message))
-              }
-            >
-              Back up now
-            </Button>
-          )}
-          {supports(engine, "MANAGE_ACCESS") && (
-            <Button size="sm" variant="outline" onClick={() => setAccessOpen(true)}>
-              {engine === "opensearch" ? "Users & roles" : "Databases & users"}
-            </Button>
-          )}
-          <Button size="sm" variant="outline" onClick={() => setLogsOpen(true)}>Logs</Button>
-          {paramDefs.length > 0 && (
-            <Button size="sm" variant="outline" onClick={() => setParamsOpen(true)}>Configuration</Button>
-          )}
-          {supports(engine, "SET_READ_ENDPOINT") && Number(d.replicas) > 1 && (
-            <Button size="sm" variant="outline" onClick={() => setReadOpen(true)}>
-              {readEndpointOn ? "Disable read endpoint" : "Add read endpoint"}
-            </Button>
-          )}
-          <Button size="sm" variant="outline" onClick={() => setCidrsOpen(true)}>Allowed CIDRs</Button>
-          <Button size="sm" variant="destructive" onClick={onDeleted}>
-            <Trash2 className="size-4" /> Delete
-          </Button>
         </div>
 
         {updateAvailable && (
@@ -1355,7 +1259,7 @@ function DatabaseDetail({
           <div className="flex items-center gap-2 rounded-xl border bg-card p-4">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
             <span className="text-sm">
-              Working on it — this page refreshes itself. The endpoint appears once the internal
+              Working on it \u2014 this page refreshes itself. The endpoint appears once the internal
               load balancer is programmed (a few minutes on first create).
             </span>
           </div>
@@ -1363,12 +1267,247 @@ function DatabaseDetail({
 
         {connInfo && <ConnectionInfoCard info={connInfo} onClose={() => conn.reset()} />}
 
-        {((d.allowed_cidrs as string[]) ?? []).length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            Allowed CIDRs:{" "}
-            <span className="font-mono">{((d.allowed_cidrs as string[]) ?? []).join(", ")}</span>
-          </p>
-        )}
+        {/* One tab per concern, each carrying BOTH the current state and the controls that
+            change it. The flat button row this replaces made every action look equally likely
+            and told the customer nothing about what was already configured. */}
+        <Tabs defaultValue="overview">
+          <div className="-mx-1 overflow-x-auto px-1 pb-1">
+            <TabsList className="w-max">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="connect">Connection</TabsTrigger>
+              {supports(engine, "MANAGE_ACCESS") && (
+                <TabsTrigger value="access">{engine === "opensearch" ? "Users & roles" : "Databases & users"}</TabsTrigger>
+              )}
+              {supports(engine, "BACKUP") && backupConfigured && <TabsTrigger value="backups">Backups</TabsTrigger>}
+              {paramDefs.length > 0 && <TabsTrigger value="config">Configuration</TabsTrigger>}
+              <TabsTrigger value="logs">Logs</TabsTrigger>
+            </TabsList>
+          </div>
+
+          <TabsContent value="overview" className="mt-4 space-y-4">
+            <Card>
+              <CardHeader><CardTitle className="text-base">Details</CardTitle></CardHeader>
+              <CardContent>
+                <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
+                  <DbRow k="Instances" v={String(d.replicas ?? 1)} />
+                  <DbRow k="Compute" v={computeOf(d) || "\u2014"} />
+                  <DbRow k="Storage" v={diskOf(d) || "\u2014"} />
+                  <DbRow k="Storage class" v={(d.storage_class as string) || "cluster default"} mono />
+                  <DbRow k="Location" v={resource.region || "\u2014"} />
+                  <DbRow k="Platform" v={`${(d.chart_version as string) || "\u2014"}${platformVersion && platformVersion !== d.chart_version ? ` (pin ${platformVersion})` : ""}`} mono />
+                </dl>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle className="text-base">Size and lifecycle</CardTitle></CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={() => setResizeOpen(true)}>Resize</Button>
+                {supports(engine, "RESIZE_STORAGE") && (
+                  <Button size="sm" variant="outline" onClick={() => setStorageOpen(true)}>Resize storage</Button>
+                )}
+                <Button size="sm" variant="outline" onClick={() => setReplicasOpen(true)}>Scale replicas</Button>
+                <Button size="sm" variant="outline" onClick={() => setAutoscaleOpen(true)}>Autoscale</Button>
+                {supports(engine, "UPGRADE") && (
+                  <Button size="sm" variant="outline" onClick={() => setUpgradeOpen(true)}>Upgrade version</Button>
+                )}
+                {supports(engine, "RESTART") && (
+                  <Button size="sm" variant="outline" onClick={() => setRestartOpen(true)}>Restart</Button>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle className="text-base">Danger zone</CardTitle></CardHeader>
+              <CardContent className="flex flex-wrap items-center gap-3">
+                <Button size="sm" variant="destructive" onClick={onDeleted}>
+                  <Trash2 className="size-4" /> Delete database
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Deletes the instance and its storage. Backups already taken are kept until their
+                  retention expires.
+                </span>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="connect" className="mt-4 space-y-4">
+            <Card>
+              <CardHeader><CardTitle className="text-base">Endpoint</CardTitle></CardHeader>
+              <CardContent className="grid gap-3">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">Read/write:</span>
+                  {endpoint ? (
+                    <>
+                      <span className="font-mono text-xs">{endpoint}</span>
+                      <Button variant="ghost" size="icon-sm" aria-label="Copy endpoint" onClick={() => void copyText(endpoint)}>
+                        <Copy className="size-3.5" />
+                      </Button>
+                    </>
+                  ) : (
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="size-3 animate-spin" /> Pending \u2014 appears once the load balancer is programmed
+                    </span>
+                  )}
+                </div>
+                {supports(engine, "SET_READ_ENDPOINT") && (
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="text-muted-foreground">Read-only:</span>
+                    {readEndpointOn ? (
+                      <>
+                        <span className="font-mono text-xs">
+                          {(d.read_endpoint_host as string)
+                            ? `${d.read_endpoint_host}:${engine === "postgresql" ? d.port : 3307}`
+                            : "pending"}
+                        </span>
+                        {(d.read_endpoint_host as string) ? (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label="Copy read endpoint"
+                            onClick={() => void copyText(`${d.read_endpoint_host}:${engine === "postgresql" ? d.port : 3307}`)}
+                          >
+                            <Copy className="size-3.5" />
+                          </Button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Not enabled</span>
+                    )}
+                    {Number(d.replicas) > 1 ? (
+                      <Button size="sm" variant="outline" onClick={() => setReadOpen(true)}>
+                        {readEndpointOn ? "Remove" : "Add"}
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">(needs more than one instance)</span>
+                    )}
+                  </div>
+                )}
+                <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
+                  <DbRow k="Network" v={(d.network_id as string) || "\u2014"} mono />
+                  <DbRow k="Subnet" v={(d.subnet_id as string) || "\u2014"} mono />
+                  <DbRow k="Allowed CIDRs" v={((d.allowed_cidrs as string[]) ?? []).join(", ") || "the whole network"} mono />
+                </dl>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" onClick={() => conn.mutate()} disabled={conn.isPending || !!connInfo}>
+                    {conn.isPending ? "Fetching\u2026" : "Show connection info"}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setCidrsOpen(true)}>Allowed CIDRs</Button>
+                  {supports(engine, "RESET_PASSWORD") && (
+                    <Button size="sm" variant="outline" onClick={() => setResetOpen(true)}>Reset password</Button>
+                  )}
+                  {engine === "opensearch" && (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => setSsoOpen(true)}>Configure SSO</Button>
+                      <Button size="sm" variant="outline" onClick={() => setDomainOpen(true)}>Custom domain</Button>
+                      <Button size="sm" variant="outline" onClick={() => setPoliciesOpen(true)}>Index policies</Button>
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {supports(engine, "MANAGE_ACCESS") && (
+            <TabsContent value="access" className="mt-4">
+              <Card>
+                <CardHeader><CardTitle className="text-base">{engine === "opensearch" ? "Users and roles" : "Databases and users"}</CardTitle></CardHeader>
+                <CardContent className="grid gap-3">
+                  {engine !== "opensearch" && (
+                    <div className="grid gap-1">
+                      <div className="text-xs text-muted-foreground">Databases</div>
+                      {((d.databases as AccessDatabase[]) ?? []).length === 0 ? (
+                        <p className="text-sm text-muted-foreground">None yet.</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {((d.databases as AccessDatabase[]) ?? []).map((x) => (
+                            <Badge key={x.name} variant="outline" className="font-mono">{x.name}</Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="grid gap-1">
+                    <div className="text-xs text-muted-foreground">Users</div>
+                    {((d.users as AccessUser[]) ?? []).length === 0 ? (
+                      <p className="text-sm text-muted-foreground">None yet.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {((d.users as AccessUser[]) ?? []).map((u) => (
+                          <Badge key={u.name} variant="outline" className="font-mono">{u.login || u.name}</Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <Button size="sm" onClick={() => setAccessOpen(true)}>Manage</Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          {supports(engine, "BACKUP") && backupConfigured && (
+            <TabsContent value="backups" className="mt-4">
+              <Card>
+                <CardHeader><CardTitle className="text-base">Backups</CardTitle></CardHeader>
+                <CardContent className="grid gap-3">
+                  <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
+                    <DbRow k="Status" v={backupsOn ? "On" : "Off"} />
+                    <DbRow k="Schedule" v={backupScheduleLabel((d.backup as BackupState) ?? {})} />
+                    <DbRow k="Retention" v={(d.backup as BackupState)?.retentionDays ? `${(d.backup as BackupState).retentionDays} days` : "forever"} />
+                  </dl>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => setBackupOpen(true)}>
+                      {backupsOn ? "Backup settings and history" : "Turn on backups"}
+                    </Button>
+                    {backupsOn && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          act("CREATE_BACKUP")
+                            .then(() => toast.success("Backup started"))
+                            .catch((e: Error) => toast.error(e.message))
+                        }
+                      >
+                        Back up now
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          {paramDefs.length > 0 && (
+            <TabsContent value="config" className="mt-4">
+              <Card>
+                <CardHeader><CardTitle className="text-base">Runtime configuration</CardTitle></CardHeader>
+                <CardContent className="grid gap-3">
+                  {Object.keys((d.parameters as Record<string, string>) ?? {}).length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Everything is on the engine defaults.
+                    </p>
+                  ) : (
+                    <dl className="grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
+                      {Object.entries((d.parameters as Record<string, string>) ?? {}).map(([k, v]) => (
+                        <DbRow key={k} k={k} v={String(v)} mono />
+                      ))}
+                    </dl>
+                  )}
+                  <div>
+                    <Button size="sm" onClick={() => setParamsOpen(true)}>Edit configuration</Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          <TabsContent value="logs" className="mt-4">
+            <LogsPanel pid={pid} scope={scope} resourceId={resource.id} />
+          </TabsContent>
+        </Tabs>
       </div>
 
       {resizeOpen && (
@@ -1493,10 +1632,6 @@ function DatabaseDetail({
             toast.success("Backup started")
           }}
         />
-      )}
-
-      {logsOpen && (
-        <LogsDialog pid={pid} scope={scope} resourceId={resource.id} onClose={() => setLogsOpen(false)} />
       )}
 
       {paramsOpen && (
@@ -2626,15 +2761,33 @@ function BackupDialog({
   )
 }
 
-// The database's own log. Read on demand from the engine pods' stdout and never stored —
-// the same posture as connection info.
-function LogsDialog({
-  pid, scope, resourceId, onClose,
+// One definition row, matching the server detail page's layout.
+function DbRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
+  return (
+    <div className="grid gap-0.5">
+      <dt className="text-xs text-muted-foreground">{k}</dt>
+      <dd className={mono ? "font-mono text-xs break-all" : "text-sm"}>{v}</dd>
+    </div>
+  )
+}
+
+// Human wording for the stored 5-field cron, so the summary does not make the customer read
+// cron to find out when their backups run.
+function backupScheduleLabel(b: BackupState): string {
+  if (!b.enabled) return "—"
+  const found = BACKUP_SCHEDULES.find((s) => s.value === (b.schedule ?? ""))
+  return found ? found.label : (b.schedule || "On demand only")
+}
+
+// The database's own log, read on demand from the engine pods' stdout and stored nowhere —
+// the same posture as connection info. A PANEL rather than a dialog: reading a log is what
+// someone does while looking at everything else, not a modal errand.
+function LogsPanel({
+  pid, scope, resourceId,
 }: {
   pid: string
   scope: CloudScope | undefined
   resourceId: string
-  onClose: () => void
 }) {
   const [lines, setLines] = useState("200")
   const logs = useMutation({
@@ -2653,15 +2806,13 @@ function LogsDialog({
   }, [])
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle>Logs</DialogTitle>
-          <DialogDescription>
+    <Card>
+      <CardHeader><CardTitle className="text-base">Logs</CardTitle></CardHeader>
+      <CardContent>
+        <div className="grid gap-3">
+          <p className="text-xs text-muted-foreground">
             The database engine's own log, newest lines last. One block per instance.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3 py-2">
+          </p>
           <div className="flex items-center gap-2">
             <Label htmlFor="lg-lines" className="text-xs">Lines</Label>
             <Input id="lg-lines" className="w-28" value={lines} onChange={(e) => setLines(e.target.value)} inputMode="numeric" />
@@ -2675,17 +2826,14 @@ function LogsDialog({
           {entries.map((e) => (
             <div key={e.pod} className="grid gap-1">
               <div className="font-mono text-xs text-muted-foreground">{e.pod}</div>
-              <pre className="max-h-80 overflow-auto rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed whitespace-pre-wrap">
+              <pre className="max-h-96 overflow-auto rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed whitespace-pre-wrap">
                 {e.error ? `— ${e.error}` : e.log || "(empty)"}
               </pre>
             </div>
           ))}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Close</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </CardContent>
+    </Card>
   )
 }
 

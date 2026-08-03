@@ -70,7 +70,10 @@ func (c *Client) raw(ctx context.Context, method, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "text/plain")
+	// NO Accept header. The apiserver content-negotiates even on pods/log and answers
+	// `Accept: text/plain` with 406 "only the following media types are accepted:
+	// application/json, application/yaml, application/vnd.kubernetes.protobuf" — the log body
+	// itself is plain text regardless, so asking for it is what breaks the read.
 	if c.rc.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.rc.token)
 	}
