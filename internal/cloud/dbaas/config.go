@@ -40,6 +40,26 @@ func (c Config) HostnameFor(dbID string) string {
 	return dbID + "." + c.DNSZone
 }
 
+// PublicHost is how a database's endpoint is SPELLED for the customer: their own domain beats
+// the platform DNS name, which beats the raw VIP. Empty vip in = empty out — the Octavia VIP
+// stays the readiness signal AND the billing eligibility gate
+// (internal/cloud/billingresource/databasecluster.go keys on a non-empty endpoint), so a name
+// must never appear before the load balancer is actually programmed. Both the cache
+// (syncprovider) and the live read (ConnectionInfo) go through here; splitting them is how the
+// list ends up showing an IP while the connection panel shows a name.
+func (c Config) PublicHost(dbID, customDomain, vip string) string {
+	switch {
+	case vip == "":
+		return ""
+	case customDomain != "":
+		return customDomain
+	}
+	if name := c.HostnameFor(dbID); name != "" {
+		return name
+	}
+	return vip
+}
+
 // CustomTLSSecretName is the stratos-owned BYO-certificate secret for an opensearch database's
 // customer domain (SET_CUSTOM_DOMAIN writes it; the chart mounts it on the http layer and
 // Dashboards when values.opensearch.customDomain is set).
@@ -177,6 +197,10 @@ type DatabaseSpec struct {
 	// DashboardsEnabled deploys OpenSearch Dashboards (opensearch only) with its own
 	// tenant-facing LB (<id>-dash-lb). SET_SSO also flips this on — SSO rides Dashboards.
 	DashboardsEnabled bool
+	// SSO is the Dashboards OIDC block, accepted at create so a customer does not have to
+	// create the database and then immediately reconfigure it. Same shape SET_SSO patches
+	// later (values.opensearch.sso); empty = off. Setting it implies DashboardsEnabled.
+	SSO map[string]any
 }
 
 // Validate rejects an unbuildable spec against the provider catalog/limits.
@@ -206,6 +230,9 @@ func (s DatabaseSpec) Validate(c Config) error {
 	}
 	if s.DashboardsEnabled && s.Engine != EngineOpenSearch {
 		return fmt.Errorf("database: dashboards are an opensearch feature")
+	}
+	if len(s.SSO) > 0 && s.Engine != EngineOpenSearch {
+		return fmt.Errorf("database: sso is an opensearch feature")
 	}
 	if s.CPU < 1 || (c.Limits.MaxCPU > 0 && s.CPU > c.Limits.MaxCPU) {
 		return fmt.Errorf("database: cpu must be 1..%d", max(c.Limits.MaxCPU, 1))

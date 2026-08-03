@@ -57,7 +57,7 @@ func (p *DatabaseSyncProvider) List(ctx context.Context) ([]cloud.CloudResource,
 			ExternalID: id,
 			Region:     p.region,
 			ProjectID:  p.projectID,
-			Data:       databaseDataWithHost(app, host),
+			Data:       databaseDataWithHost(s.cfg, app, host),
 		})
 	}
 	return out, nil
@@ -66,11 +66,11 @@ func (p *DatabaseSyncProvider) List(ctx context.Context) ([]cloud.CloudResource,
 // databaseData maps an Application → the cached `data` payload (no endpoint enrichment — the
 // create path's initial row). bson-round-trip-stable by construction: strings, bools and JSON
 // numbers only, timestamps as the RFC3339 strings Kubernetes already serializes.
-func databaseData(app map[string]any, _ []map[string]any) map[string]any {
-	return databaseDataWithHost(app, "")
+func databaseData(cfg Config, app map[string]any, _ []map[string]any) map[string]any {
+	return databaseDataWithHost(cfg, app, "")
 }
 
-func databaseDataWithHost(app map[string]any, host string) map[string]any {
+func databaseDataWithHost(cfg Config, app map[string]any, host string) map[string]any {
 	values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
 
 	status := "PENDING"
@@ -103,7 +103,11 @@ func databaseDataWithHost(app map[string]any, host string) map[string]any {
 		"created_at":    digStr(app, "metadata", "creationTimestamp"),
 		"network_id":    digStr(values, "network", "networkId"),
 		"subnet_id":     digStr(values, "network", "subnetId"),
-		"endpoint":      host, // "" until Octavia programs the VIP — billing keys on this
+		// endpoint is what the customer connects to (their domain > platform DNS name > VIP);
+		// endpoint_ip keeps the raw VIP, which is what a BYO domain's A record must target.
+		// Both are "" until Octavia programs the VIP — billing keys on endpoint being non-empty.
+		"endpoint":      cfg.PublicHost(digStr(app, "metadata", "name"), digStr(values, "opensearch", "customDomain"), host),
+		"endpoint_ip":   host,
 		"port":          Port(engine),
 	}
 	for key, path := range map[string][]string{

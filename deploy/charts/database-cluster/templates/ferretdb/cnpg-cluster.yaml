@@ -25,7 +25,7 @@ metadata:
     {{- end }}
 spec:
   instances: {{ int .Values.instances }}
-  imageName: {{ .Values.ferretdb.postgresImage }}
+  imageName: {{ include "database-cluster.ferretdbPostgresImage" . }}
   # The postgres user in the FerretDB image is uid/gid 999 (it is built on the
   # official postgres image), NOT the 26/26 CNPG assumes for its OWN images.
   # Without this, initdb dies at bootstrap with

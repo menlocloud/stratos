@@ -50,8 +50,17 @@ func BuildValues(cfg Config, spec DatabaseSpec) map[string]any {
 	// would fight those patches.
 	if spec.Engine == EngineOpenSearch {
 		osBlock := map[string]any{}
-		if spec.DashboardsEnabled {
+		// SSO rides Dashboards (the chart reads the sso block only under dashboards.enabled),
+		// so asking for SSO at create implies them — same rule SET_SSO applies later.
+		if spec.DashboardsEnabled || len(spec.SSO) > 0 {
 			osBlock["dashboards"] = map[string]any{"enabled": true}
+		}
+		if len(spec.SSO) > 0 {
+			sso := map[string]any{"enabled": true}
+			for k, v := range spec.SSO {
+				sso[k] = v
+			}
+			osBlock["sso"] = sso
 		}
 		// Real certs need both halves: a name to certify (dnsZone) and an issuer that can
 		// DNS-01 it. Either alone keeps the operator's self-signed pair.

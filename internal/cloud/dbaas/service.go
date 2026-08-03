@@ -160,7 +160,7 @@ func (s *Service) CreateDatabase(ctx context.Context, spec DatabaseSpec, share N
 	if err := s.api.ApplyApplication(ctx, app); err != nil {
 		return nil, fmt.Errorf("dbaas: apply application: %w", err)
 	}
-	return databaseData(app, nil), nil
+	return databaseData(s.cfg, app, nil), nil
 }
 
 // DeleteDatabase removes the database: Application delete only (the resources-finalizer
@@ -475,14 +475,9 @@ func (s *Service) ConnectionInfo(ctx context.Context, projectID, dbID string) (C
 	if info.Host == "" {
 		return ConnInfo{}, fmt.Errorf("dbaas: database %s: endpoint not ready yet (load balancer still provisioning)", dbID)
 	}
-	// DNS names beat the raw VIP once the endpoint exists (the VIP read above stays the
-	// readiness gate — external-dns publishes off the same Service status). A customer domain
-	// (opensearch BYO cert) beats the platform name: that is what their certificate is for.
-	if custom := digStr(app, "spec", "source", "helm", "valuesObject", "opensearch", "customDomain"); custom != "" {
-		info.Host = custom
-	} else if platform := s.cfg.HostnameFor(dbID); platform != "" {
-		info.Host = platform
-	}
+	// Same spelling the cached row uses (PublicHost) — one helper, so the databases list and
+	// this panel can never disagree about a database's endpoint.
+	info.Host = s.cfg.PublicHost(dbID, digStr(app, "spec", "source", "helm", "valuesObject", "opensearch", "customDomain"), info.Host)
 	info.URI = URI(engine, info.Username, info.Password, info.Host, info.Port, info.DBName)
 	return info, nil
 }

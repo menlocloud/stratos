@@ -88,6 +88,11 @@ Admin UI → System → Cloud providers → Add provider → **Database (DBaaS)*
 - `config.database.dnsZone` (optional) — platform DNS: every database gets `<id>.<zone>`
   (`-dash` for Dashboards, `-b<N>` per kafka broker — kafka brokers then advertise those names)
   as an A record to its private VIP, and connection info returns the name instead of the IP.
+  The cached endpoint and `GET_CONNECTION_INFO` both spell it through one helper
+  (`Config.PublicHost`: customer domain > platform name > VIP), so the list and the connection
+  panel can never disagree; the raw VIP stays available as `endpoint_ip` (what a BYO domain's
+  A record must target). The name only appears once the VIP exists — the billing eligibility
+  gate is unchanged.
 - `config.database.certIssuer` (optional, with `dnsZone`) — cert-manager ClusterIssuer name;
   OpenSearch API + Dashboards then serve a real certificate (`<id>-tls`) for the platform name
   instead of the operator's self-signed pair. Other engines are raw TCP — an A record is all
@@ -135,8 +140,11 @@ sequenceDiagram
 
 - **Create** — client `POST /project/{id}/cloud` `{type: DATABASE_CLUSTER, data: {name,
   engine, version, replicas, cpu, memoryGiB, storageGiB, networkId, subnetId, allowedCidrs,
-  beta?, dashboards?}}` (`dashboards` — opensearch only — deploys OpenSearch Dashboards with
-  its own `<id>-dash-lb` endpoint; `SET_SSO` also enables it, SSO rides Dashboards). Order: namespace (+ its `stratos-default-deny` NetworkPolicy) → net-share marker →
+  beta?, dashboards?, sso?}}` (`dashboards` — opensearch only — deploys OpenSearch Dashboards
+  with its own `<id>-dash-lb` endpoint; `sso` takes the same block as `SET_SSO` and implies
+  `dashboards`, so a customer never has to create the database and immediately reconfigure it.
+  Both paths share one validator, so they cannot drift on the "connectUrl + clientId, or
+  nothing" rule). Order: namespace (+ its `stratos-default-deny` NetworkPolicy) → net-share marker →
   neutron RBAC share → (mariadb/valkey) stratos-owned `<id>-auth` secret → Application —
   marker BEFORE share, so a crash mid-create always leaves a record the sweep converges on.
   Status PENDING → PROGRESSING → READY as ArgoCD converges and the VIP is programmed
@@ -144,8 +152,9 @@ sequenceDiagram
 - **Actions** — `GET_CONNECTION_INFO` (secret + LB read on demand, never stored),
   `RESIZE {cpu,memoryGiB}`, `RESIZE_STORAGE {storageGiB}` (grow-only), `SCALE_REPLICAS`,
   `UPGRADE {version}` (catalog-gated, upward-only vs live values; the operator rolls the pods
-  onto the new engine image, the endpoint never changes — off for valkey [operator unpinned]
-  and ferretdb [frontend/DocumentDB images are a pinned matched pair]), `RESTART`, `RESET_PASSWORD`
+  onto the new engine image, the endpoint never changes — off only for valkey [pre-GA
+  operator]; ferretdb is supported because the chart derives BOTH halves of its matched
+  frontend/backend image pair from engineVersion), `RESTART`, `RESET_PASSWORD`
   (returned once), `SET_ALLOWED_CIDRS`, `SET_SSO` (opensearch only: Dashboards OIDC against a
   **public** IdP client — no client secret is ever stored; API-side securityconfig wiring is a
   live-drill item), `SET_CUSTOM_DOMAIN` (opensearch only: BYO domain + certificate —
@@ -220,10 +229,21 @@ see `deploy/dbaas-cluster/README.md`.
 
 ## Chart pin / platform update
 
-Databases keep their chart pin when the provider's `chartVersion` moves. Operator override:
-`GET /api/v1/admin/service/{id}/db-clusters` lists pins; `POST .../db-clusters/bump-chart`
-(all) or `POST .../db-clusters/{clusterId}/bump-chart` (one) re-pins onto the provider's
-current version.
+Databases keep their chart pin when the provider's `chartVersion` moves — nothing is upgraded
+behind a customer's back. Two ways to move one:
+
+- **Customer, opt-in** — the database page shows a "Platform update available" banner whenever
+  the pin differs from the provider's, driving the `APPLY_PLATFORM_UPDATE` action. It re-pins
+  onto the provider's current version; the engine version, the data and the endpoint are
+  untouched. Deliberately NOT capability-gated: a re-pin is engine-agnostic, and a database
+  whose values are unreadable is exactly the one an update should still be able to repair.
+- **Operator override** — `GET /api/v1/admin/service/{id}/db-clusters` lists pins;
+  `POST .../db-clusters/bump-chart` (all) or `POST .../db-clusters/{clusterId}/bump-chart`
+  (one). The provider page renders these as the "Managed databases — platform (chart)
+  versions" card, shared with managed Kubernetes.
+
+Engine-version upgrades are a different action (`UPGRADE`) and are catalog-gated and
+upward-only. Available for every engine except **valkey**, whose operator is pre-GA.
 
 ## Connection secrets (contract, pinned by TestConnectionSecretContract)
 

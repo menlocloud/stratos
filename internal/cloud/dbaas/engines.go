@@ -70,7 +70,7 @@ var Capabilities = map[string]map[string]bool{
 	EngineMySQL:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 	EngineMariaDB:    {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 	EngineValkey:     {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false, "SET_AUTOSCALE": true},
-	EngineFerretDB:   {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": false, "SET_AUTOSCALE": true},
+	EngineFerretDB:   {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 	EngineOpenSearch: {"RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_CUSTOM_DOMAIN": true, "SET_AUTOSCALE": true},
 	EngineKafka:      {"RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 }

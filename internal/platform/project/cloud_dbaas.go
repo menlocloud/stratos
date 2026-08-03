@@ -172,6 +172,23 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 		return true
 	}
 
+	// Re-pinning the chart is engine-agnostic, so it runs BEFORE the live-engine read and the
+	// capability gate below (the kamaji precedent): a database whose values are unreadable is
+	// exactly the one a platform update should still be able to repair.
+	if action == "APPLY_PLATFORM_UPDATE" {
+		pin := ds.Config().ChartVersion
+		if pin == "" {
+			h.fail(w, httpx.BadRequest("no platform version is pinned on this provider"))
+			return true
+		}
+		if err := ds.SetChartVersion(r.Context(), cr.ExternalID, pin); err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
+		return true
+	}
+
 	if action == "GET_CONNECTION_INFO" {
 		info, err := ds.ConnectionInfo(r.Context(), proj.ID, cr.ExternalID)
 		if err != nil {
@@ -412,17 +429,12 @@ func (h *Handler) dbaasAction(w http.ResponseWriter, r *http.Request, proj *Proj
 		// OpenSearch Dashboards OIDC against a PUBLIC IdP client — no client secret anywhere
 		// (the Application CR is argocd-readable, values must never carry secrets; register a
 		// public client with PKCE in the IdP). Empty connectUrl disables SSO.
-		sso := map[string]any{}
-		for _, k := range []string{"connectUrl", "clientId", "scope", "baseRedirectUrl", "logoutUrl"} {
-			if v := strAny(data[k]); v != "" {
-				sso[k] = v
-			}
-		}
-		if len(sso) > 0 && (sso["connectUrl"] == nil || sso["clientId"] == nil) {
-			h.fail(w, httpx.BadRequest("sso needs at least connectUrl and clientId (or send nothing to disable)"))
+		sso, err := dbaasSSOFields(data)
+		if err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
 			return true
 		}
-		err := ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+		err = ds.PatchDatabaseValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
 			block, _ := values["opensearch"].(map[string]any)
 			if block == nil {
 				block = map[string]any{}
@@ -603,7 +615,35 @@ func dbaasSpecFromData(projectID string, d map[string]any) (dbaas.DatabaseSpec, 
 		}
 		spec.DashboardsEnabled = b
 	}
+	if raw, has := d["sso"]; has && raw != nil {
+		block, ok := raw.(map[string]any)
+		if !ok {
+			return spec, fmt.Errorf("sso must be an object")
+		}
+		sso, err := dbaasSSOFields(block)
+		if err != nil {
+			return spec, err
+		}
+		spec.SSO = sso
+	}
 	return spec, nil
+}
+
+// dbaasSSOFields pulls the Dashboards OIDC block out of a request body. Shared by create and
+// SET_SSO so the two can never drift on the "connectUrl + clientId, or nothing at all" rule.
+// Empty map = SSO off. No client secret is ever accepted: the block rides the argocd-readable
+// Application, so the IdP client must be a public (PKCE) one.
+func dbaasSSOFields(d map[string]any) (map[string]any, error) {
+	sso := map[string]any{}
+	for _, k := range []string{"connectUrl", "clientId", "scope", "baseRedirectUrl", "logoutUrl"} {
+		if v := strAny(d[k]); v != "" {
+			sso[k] = v
+		}
+	}
+	if len(sso) > 0 && (sso["connectUrl"] == nil || sso["clientId"] == nil) {
+		return nil, fmt.Errorf("sso needs at least connectUrl and clientId (or send nothing to disable)")
+	}
+	return sso, nil
 }
 
 // dbaasDomainRE: lowercase DNS name, at least two labels — the shape a public certificate can

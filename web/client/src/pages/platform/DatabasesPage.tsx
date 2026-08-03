@@ -4,14 +4,14 @@
 // runs on platform-owned infrastructure — only the tenant network for the private endpoint is
 // the customer's. Actions map to Go cloud_dbaas.go: create/delete + GET_CONNECTION_INFO /
 // RESIZE / RESIZE_STORAGE / SCALE_REPLICAS / RESTART / RESET_PASSWORD / SET_ALLOWED_CIDRS /
-// UPGRADE / SET_AUTOSCALE.
-import { useCallback, useMemo, useState } from "react"
-import { useNavigate, useParams } from "react-router-dom"
+// UPGRADE / SET_AUTOSCALE / SET_SSO / SET_CUSTOM_DOMAIN / APPLY_PLATFORM_UPDATE.
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { toast } from "sonner"
 import {
-  ArrowLeft, Check, Copy, DatabaseZap, Eye, EyeOff, Loader2, MoreHorizontal, Plus, RefreshCw, Settings2, Trash2,
+  ArrowLeft, Check, Copy, DatabaseZap, Eye, EyeOff, KeyRound, Loader2, MoreHorizontal, Plus, RefreshCw, Settings2, Trash2,
 } from "lucide-react"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { DataTable, sortableHeader } from "@/components/data-table"
@@ -341,6 +341,9 @@ export default function DatabasesPage() {
                 <DropdownMenuItem onClick={() => navigate(row.original.id)}>
                   <Settings2 className="size-4" /> Manage
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate(`${row.original.id}?connect=1`)}>
+                  <KeyRound className="size-4" /> Connection info
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onClick={() => setToDelete(row.original)}>
                   <Trash2 className="size-4" /> Delete
@@ -406,7 +409,7 @@ export default function DatabasesPage() {
           onClose={() => setCreateOpen(false)}
           onSubmit={async (body) => {
             if (!createScope) throw new Error("Select a location first")
-            await apiFetch(`/project/${pid}/cloud`, {
+            const created = await apiFetch<CloudResource>(`/project/${pid}/cloud`, {
               method: "POST",
               body: { type: "DATABASE_CLUSTER", data: body },
               cloud: createScope,
@@ -414,6 +417,10 @@ export default function DatabasesPage() {
             toast.success(`Database "${body.name}" is being created`)
             setCreateOpen(false)
             invalidate()
+            // Land on the database itself: credentials only exist once the operator has minted
+            // the secret and Octavia has programmed the VIP, so ?connect=1 waits for readiness
+            // there rather than leaving the user on a list with no way back to the password.
+            navigate(`${created.id}?connect=1`)
           }}
         />
       )}
@@ -565,6 +572,11 @@ function DatabaseFormDialog({
   const replicas = allowedReplicas.includes(Number(replicasSel)) ? Number(replicasSel) : allowedReplicas[0]
   // OpenSearch only: deploy Dashboards (own private endpoint). Ignored for other engines.
   const [dashboards, setDashboards] = useState(false)
+  // Dashboards OIDC, offered up front so SSO does not need a second trip through the actions
+  // menu. Same fields (and same server-side rule) as the post-create SSO dialog.
+  const [ssoConnectUrl, setSsoConnectUrl] = useState("")
+  const [ssoClientId, setSsoClientId] = useState("")
+  const [ssoRedirect, setSsoRedirect] = useState("")
 
   const [preset, setPreset] = useState<string>("S")
   const [cpu, setCpu] = useState(String(SIZE_PRESETS[0].cpu))
@@ -618,6 +630,15 @@ function DatabaseFormDialog({
         // The server refuses a beta engine without the explicit acknowledgement.
         ...(offer.beta ? { beta: true } : {}),
         ...(engine === "opensearch" && dashboards ? { dashboards: true } : {}),
+        ...(engine === "opensearch" && dashboards && ssoConnectUrl.trim() && ssoClientId.trim()
+          ? {
+              sso: {
+                connectUrl: ssoConnectUrl.trim(),
+                clientId: ssoClientId.trim(),
+                ...(ssoRedirect.trim() ? { baseRedirectUrl: ssoRedirect.trim() } : {}),
+              },
+            }
+          : {}),
       })
     } catch (e) {
       toast.error((e as Error).message)
@@ -744,11 +765,32 @@ function DatabaseFormDialog({
               <div>
                 <Label htmlFor="db-dashboards" className="text-sm font-medium">OpenSearch Dashboards</Label>
                 <div className="text-xs text-muted-foreground">
-                  Deploys Dashboards with its own private endpoint in your network. OIDC single
-                  sign-on can be configured after creation.
+                  Deploys Dashboards with its own private endpoint in your network.
                 </div>
               </div>
               <Switch id="db-dashboards" checked={dashboards} onCheckedChange={setDashboards} />
+            </div>
+          ) : null}
+
+          {engine === "opensearch" && dashboards ? (
+            <div className="grid gap-3 rounded-lg border p-3">
+              <div className="text-sm font-medium">Dashboards single sign-on (optional)</div>
+              <div className="grid gap-2">
+                <Label htmlFor="db-sso-connect">OIDC discovery URL</Label>
+                <Input id="db-sso-connect" value={ssoConnectUrl} onChange={(e) => setSsoConnectUrl(e.target.value)} placeholder="https://idp.example.com/realms/main/.well-known/openid-configuration" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="db-sso-client">Client ID</Label>
+                <Input id="db-sso-client" value={ssoClientId} onChange={(e) => setSsoClientId(e.target.value)} placeholder="opensearch-dashboards" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="db-sso-redirect">Base redirect URL</Label>
+                <Input id="db-sso-redirect" value={ssoRedirect} onChange={(e) => setSsoRedirect(e.target.value)} placeholder="https://dashboards.example.com" />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Register a PUBLIC OIDC client (PKCE) — no client secret is stored. Leave blank to
+                configure SSO later.
+              </p>
             </div>
           ) : null}
 
@@ -934,8 +976,14 @@ function DatabaseDetail({
   const [ssoOpen, setSsoOpen] = useState(false)
   const [domainOpen, setDomainOpen] = useState(false)
   const [autoscaleOpen, setAutoscaleOpen] = useState(false)
+  const [platformOpen, setPlatformOpen] = useState(false)
   // RESET_PASSWORD's result is shown exactly once and never stored anywhere else.
   const [newPassword, setNewPassword] = useState<string | null>(null)
+
+  // A database keeps the chart version it was created with; the provider pin moves on. Offer
+  // the update, never force it — same opt-in posture as managed Kubernetes.
+  const chartVersion = (d.chart_version as string) || ""
+  const updateAvailable = !!platformVersion && !!chartVersion && chartVersion !== platformVersion
 
   const act = (action: string, data?: Record<string, any>) =>
     apiFetch<{ result?: any }>(`/project/${pid}/cloud/${resource.id}/action`, {
@@ -951,6 +999,30 @@ function DatabaseDetail({
     onError: (e: Error) => toast.error(e.message),
   })
   const connInfo = (conn.data?.result ?? null) as ConnectionInfo | null
+
+  // ?connect=1 (set by create and by the list's "Connection info" item) opens the credentials
+  // as soon as the database is actually up. Firing it earlier just produces a red toast: the
+  // operator has not minted the secret and Octavia has not programmed the VIP yet.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const wantConn = searchParams.get("connect") === "1"
+  useEffect(() => {
+    if (!wantConn || busy || connInfo || conn.isPending) return
+    const next = new URLSearchParams(searchParams)
+    next.delete("connect")
+    setSearchParams(next, { replace: true })
+    conn.mutate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantConn, busy, connInfo, conn.isPending])
+
+  const platformUpdate = useMutation({
+    mutationFn: () => act("APPLY_PLATFORM_UPDATE"),
+    onSuccess: () => {
+      onPatch({ chart_version: platformVersion, sync_status: "OutOfSync" })
+      toast.success("Platform update started")
+      setPlatformOpen(false)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
 
   const restart = useMutation({
     mutationFn: () => act("RESTART"),
@@ -1070,6 +1142,20 @@ function DatabaseDetail({
           </Button>
         </div>
 
+        {updateAvailable && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
+            <div>
+              <div className="text-sm font-medium">Platform update available</div>
+              <div className="text-xs text-muted-foreground">
+                This database runs platform <span className="font-mono">{chartVersion}</span>;{" "}
+                <span className="font-mono">{platformVersion}</span> is available. Your engine
+                version, data and endpoint are unchanged.
+              </div>
+            </div>
+            <Button size="sm" onClick={() => setPlatformOpen(true)}>Update platform</Button>
+          </div>
+        )}
+
         {busy && (
           <div className="flex items-center gap-2 rounded-xl border bg-card p-4">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -1166,6 +1252,25 @@ function DatabaseDetail({
           }}
         />
       )}
+
+      {/* Platform update — opt-in re-pin onto the provider's chart version */}
+      <Dialog open={platformOpen} onOpenChange={setPlatformOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Update platform</DialogTitle>
+            <DialogDescription>
+              Re-deploys “{name}” on platform {platformVersion}. The engine version, your data
+              and the endpoint stay the same; pods roll one at a time.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPlatformOpen(false)}>Cancel</Button>
+            <Button onClick={() => platformUpdate.mutate()} disabled={platformUpdate.isPending}>
+              {platformUpdate.isPending ? "Updating…" : "Update"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {ssoOpen && (
         <SsoDialog

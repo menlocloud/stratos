@@ -189,10 +189,12 @@ ferretdb:
   # -- FerretDB frontend image. Empty = resolved from engineVersion via the
   # map in _helpers.tpl.
   image: ""
-  # -- CNPG backend image: PostgreSQL with the DocumentDB extension baked in.
-  # TODO-verify(drill): tag must match the frontend version — FerretDB
-  # publishes matched pairs (ghcr.io/ferretdb/postgres-documentdb).
-  postgresImage: ghcr.io/ferretdb/postgres-documentdb:17-0.106.0-ferretdb-2.5.0
+  # -- CNPG backend image (PostgreSQL + the DocumentDB extension). EMPTY BY
+  # DEFAULT: FerretDB publishes matched frontend/backend pairs, so the tag is
+  # derived from engineVersion in _helpers.tpl and both halves move together
+  # on UPGRADE. Set this only to pin a specific backend during an incident —
+  # a mismatched pair is unsupported.
+  postgresImage: ""
 
 opensearch:
   # -- opensearch.yml settings (string map), passed to the OpenSearchCluster's

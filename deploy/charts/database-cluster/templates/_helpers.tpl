@@ -153,6 +153,30 @@ guard below turns an accidental future call into a loud render failure.
 {{- end }}
 
 {{/*
+FerretDB BACKEND image (the DocumentDB-flavoured postgres CNPG runs). It is a MATCHED PAIR
+with the frontend — a frontend on 2.7 against a 2.5 backend is unsupported — so it is mapped
+off the SAME engineVersion instead of being pinned in values. That pairing is what makes
+UPGRADE safe for ferretdb: one version bump moves both halves together.
+An explicit values.ferretdb.postgresImage still wins, for pinning during an incident.
+*/}}
+{{- define "database-cluster.ferretdbPostgresImage" -}}
+{{- if .Values.ferretdb.postgresImage -}}
+{{- .Values.ferretdb.postgresImage -}}
+{{- else -}}
+{{- $v := .Values.engineVersion | toString -}}
+{{- $pairs := dict
+      "2.5" "ghcr.io/ferretdb/postgres-documentdb:17-0.106.0-ferretdb-2.5.0"
+      "2.7" "ghcr.io/ferretdb/postgres-documentdb:17-0.107.0-ferretdb-2.7.0"
+-}}
+{{- $img := index $pairs $v -}}
+{{- if not $img -}}
+{{- fail (printf "no backend image pair for ferretdb %q — extend database-cluster.ferretdbPostgresImage in _helpers.tpl (and release a new chart version)" $v) -}}
+{{- end -}}
+{{- $img -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 FerretDB frontend image: explicit override wins, else the engineVersion map.
 */}}
 {{- define "database-cluster.ferretdbImage" -}}

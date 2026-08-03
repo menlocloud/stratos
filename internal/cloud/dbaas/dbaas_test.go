@@ -376,6 +376,17 @@ func TestBuildValues(t *testing.T) {
 	if dash["enabled"] != true {
 		t.Errorf("dashboards block = %v, want enabled true", dash)
 	}
+	// Create-time SSO implies Dashboards (the chart reads sso only underneath them) — the same
+	// rule SET_SSO applies later, pinned here so create and the action cannot drift.
+	ssoSpec := testSpec(EngineOpenSearch, "3.3.0")
+	ssoSpec.SSO = map[string]any{"connectUrl": "https://idp/.well-known", "clientId": "dash"}
+	osv2 := BuildValues(cfg, ssoSpec)["opensearch"].(map[string]any)
+	if got := osv2["dashboards"].(map[string]any)["enabled"]; got != true {
+		t.Errorf("sso at create must enable dashboards, got %v", got)
+	}
+	if got := osv2["sso"].(map[string]any); got["enabled"] != true || got["clientId"] != "dash" {
+		t.Errorf("sso block = %v", got)
+	}
 	// DNS/TLS: no zone (testConfig) = no dnsZone/certIssuer keys anywhere; zone+issuer = both
 	// emitted (network.dnsZone for every engine, opensearch.certIssuer for opensearch).
 	if _, has := BuildValues(cfg, testSpec(EnginePostgreSQL, "17"))["network"].(map[string]any)["dnsZone"]; has {
@@ -398,6 +409,24 @@ func TestBuildValues(t *testing.T) {
 	}
 	if h := cfg.HostnameFor("std-abc"); h != "" {
 		t.Errorf("HostnameFor without zone = %q, want empty", h)
+	}
+	// PublicHost is the ONE spelling rule the cache and the connection panel share.
+	for _, tc := range []struct{ name, custom, vip, want string }{
+		{"no vip yet", "", "", ""},
+		{"custom domain wins", "search.acme.com", "10.0.0.5", "search.acme.com"},
+		{"platform name beats vip", "", "10.0.0.5", "std-abc.db.example.com"},
+		{"custom beats platform even with a zone", "x.acme.com", "10.0.0.5", "x.acme.com"},
+	} {
+		if got := dnsCfg.PublicHost("std-abc", tc.custom, tc.vip); got != tc.want {
+			t.Errorf("PublicHost(%s) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// Without a zone the raw VIP is the endpoint — and "" stays "" so the billing gate holds.
+	if got := cfg.PublicHost("std-abc", "", "10.0.0.5"); got != "10.0.0.5" {
+		t.Errorf("PublicHost without zone = %q", got)
+	}
+	if got := cfg.PublicHost("std-abc", "search.acme.com", ""); got != "" {
+		t.Errorf("PublicHost with no vip must stay empty, got %q", got)
 	}
 }
 
