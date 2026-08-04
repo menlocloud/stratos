@@ -30,7 +30,8 @@ func (p *ClusterSyncProvider) List(ctx context.Context) ([]cloud.CloudResource, 
 	// Ownership marker in the selector: pre-stratos clusters on the same management cluster
 	// (unlabelled) never enter the cache, so they never surface in the UI or billing.
 	apps, err := s.api.ListApplications(ctx, s.cfg.ArgoNamespace,
-		LabelProject+"="+p.projectID+","+LabelManagedBy+"="+ManagedByValue)
+		LabelProject+"="+p.projectID+","+LabelManagedBy+"="+ManagedByValue+
+			","+LabelService+"="+s.serviceID)
 	if err != nil {
 		return nil, err
 	}

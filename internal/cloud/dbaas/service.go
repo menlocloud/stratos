@@ -195,7 +195,7 @@ func (s *Service) DeleteDatabase(ctx context.Context, projectID, dbID string) er
 		return err
 	}
 	if app != nil {
-		if !managedBy(app) {
+		if !s.owns(app) {
 			return fmt.Errorf("dbaas: database %s is not managed by stratos — refusing to delete", dbID)
 		}
 		if err := s.api.DeleteApplication(ctx, s.cfg.ArgoNamespace, dbID); err != nil {
@@ -432,6 +432,24 @@ func (s *Service) gcNamespace(ctx context.Context, ns string) error {
 	}
 	if !managedBy(nsObj) {
 		return nil
+	}
+	// The project namespace is SHARED with the sibling provider (both derive "st-"+projectID,
+	// and in production both land on the same cluster — the "different physical cluster, so no
+	// collision" premise in the NamespaceFor comment does not hold). Deleting it takes the other
+	// product's remnants with it, and the object each provider keeps LONGEST is precisely the one
+	// that must outlive its Application: the record needed to revoke a credential or a network
+	// share. Losing that leaks it permanently and silently, with nothing left to find it by.
+	//
+	// So refuse on any stratos-owned secret belonging to another service. Deliberately NOT scoped
+	// by project — a foreign remnant here is a reason to stop, whoever it belongs to.
+	secrets, err := s.api.ListSecrets(ctx, ns, LabelManagedBy+"="+ManagedByValue)
+	if err != nil {
+		return err
+	}
+	for _, sec := range secrets {
+		if digStr(sec, "metadata", "labels", LabelService) != s.serviceID {
+			return nil
+		}
 	}
 	return s.api.DeleteNamespace(ctx, ns)
 }
@@ -906,7 +924,7 @@ func (s *Service) PatchDatabaseApp(ctx context.Context, dbID string, mutate func
 	if app == nil {
 		return fmt.Errorf("dbaas: database %s not found", dbID)
 	}
-	if !managedBy(app) {
+	if !s.owns(app) {
 		return fmt.Errorf("dbaas: database %s is not managed by stratos — refusing to modify", dbID)
 	}
 	if err := mutate(app); err != nil {
@@ -970,7 +988,8 @@ type DatabasePin struct {
 // ListDatabasePins lists every stratos-managed database on this provider with its chart pin
 // (ownership-labelled Applications only).
 func (s *Service) ListDatabasePins(ctx context.Context) ([]DatabasePin, error) {
-	apps, err := s.api.ListApplications(ctx, s.cfg.ArgoNamespace, LabelManagedBy+"="+ManagedByValue)
+	apps, err := s.api.ListApplications(ctx, s.cfg.ArgoNamespace,
+		LabelManagedBy+"="+ManagedByValue+","+LabelService+"="+s.serviceID)
 	if err != nil {
 		return nil, err
 	}

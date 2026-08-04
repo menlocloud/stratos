@@ -70,6 +70,25 @@ const (
 	AnnotationAppCredService = "stratos.io/appcred-service"
 )
 
+// owns reports whether obj is an Application THIS provider created.
+//
+// `managedBy` alone is the fleet-wide "stratos made this" marker, and it is NOT an ownership
+// test: the Managed-Database and Managed-Kubernetes providers can be pointed at the same ArgoCD
+// and the same namespace (they are, in production), and both stamp that exact label on every
+// Application they create. A guard built on it therefore lets one product's delete and patch
+// funnels reach the OTHER product's workloads — an Application delete cascades through the
+// argocd resources finalizer, so that is a live cluster or database destroyed, not a bad read.
+//
+// The per-service label has been stamped by BuildApplication since day one and survives every
+// mutation (Patch*App re-applies metadata.labels verbatim), so this needs no backfill.
+//
+// NOT for namespace objects: the project namespace is shared between the two providers and its
+// stratos.io/service label is last-writer-wins, so `owns` there is a coin flip. Namespaces keep
+// the `managedBy` check.
+func (s *Service) owns(obj map[string]any) bool {
+	return managedBy(obj) && digStr(obj, "metadata", "labels", LabelService) == s.serviceID
+}
+
 // managedBy reports whether obj carries the stratos ownership marker.
 func managedBy(obj map[string]any) bool {
 	labels, _ := dig(obj, "metadata", "labels").(map[string]any)
@@ -240,8 +259,8 @@ type NodeGroup struct {
 	// PublicIP gives every machine in the pool a floating IP from the cluster's external
 	// network (an OpenStackFloatingIPPool per group; released with the machine). The FIPs land
 	// in the customer's tenant, so they sync and bill like any other floating IP.
-	PublicIP bool `json:"publicIp,omitempty"`
-	Count    int  `json:"count"`
+	PublicIP      bool              `json:"publicIp,omitempty"`
+	Count         int               `json:"count"`
 	Autoscale     bool              `json:"autoscale"`
 	Min           int               `json:"min,omitempty"`
 	Max           int               `json:"max,omitempty"`

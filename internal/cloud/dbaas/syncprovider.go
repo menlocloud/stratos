@@ -29,7 +29,8 @@ func (p *DatabaseSyncProvider) List(ctx context.Context) ([]cloud.CloudResource,
 	// Ownership marker in the selector: anything unlabelled on the DB cluster never enters the
 	// cache, so it never surfaces in the UI or billing.
 	apps, err := s.api.ListApplications(ctx, s.cfg.ArgoNamespace,
-		LabelProject+"="+p.projectID+","+LabelManagedBy+"="+ManagedByValue)
+		LabelProject+"="+p.projectID+","+LabelManagedBy+"="+ManagedByValue+
+			","+LabelService+"="+s.serviceID)
 	if err != nil {
 		return nil, err
 	}
