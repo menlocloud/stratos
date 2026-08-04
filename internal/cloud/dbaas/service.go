@@ -164,13 +164,19 @@ func (s *Service) CreateDatabase(ctx context.Context, spec DatabaseSpec, share N
 			return nil, fmt.Errorf("dbaas: apply auth secret: %w", err)
 		}
 	}
-	// A restoring database reads the object store during BOOTSTRAP, so its credential Secret
-	// must exist before the Application does — the operator starts recovering the moment the CR
-	// lands, and a missing Secret there is a failed bootstrap, not a retry.
-	if spec.RestoreFrom != nil {
-		if !s.cfg.Backup.Enabled() {
-			return nil, fmt.Errorf("dbaas: this location has no backup object store configured")
-		}
+	// A restoring database reads the object store during BOOTSTRAP, so this check has to fail
+	// the create rather than let the operator start a recovery it cannot finish.
+	if spec.RestoreFrom != nil && !s.cfg.Backup.Enabled() {
+		return nil, fmt.Errorf("dbaas: this location has no backup object store configured")
+	}
+	// Object-store credentials. The condition MUST mirror BuildValues' backup block: whenever
+	// the values wire an object store, the Secret those CRs name has to exist. It used to be
+	// written only for restores, which meant a plain create rendered an ObjectStore pointing at
+	// a Secret nobody ever created — CNPG then failed every backup AND continuous WAL archiving
+	// with `secrets "<id>-backup-s3" not found`, silently, from the moment the database came up
+	// (ContinuousArchiving=False, no PITR, WAL piling up on the data volume until it fills).
+	// Existing databases get the Secret written the first time SetBackup runs.
+	if s.cfg.Backup.Enabled() && Capabilities[spec.Engine]["BACKUP"] {
 		if err := s.api.ApplySecret(ctx, ns, BackupSecretName(spec.ID), map[string]string{
 			BackupCredKeys.CNPGAccess: s.cfg.Backup.AccessKey,
 			BackupCredKeys.CNPGSecret: s.cfg.Backup.SecretKey,
@@ -178,7 +184,7 @@ func (s *Service) CreateDatabase(ctx context.Context, spec DatabaseSpec, share N
 			BackupCredKeys.AWSSecret:  s.cfg.Backup.SecretKey,
 		}, map[string]string{LabelProject: spec.ProjectID, LabelService: s.serviceID, LabelManagedBy: ManagedByValue},
 			nil); err != nil {
-			return nil, fmt.Errorf("dbaas: apply restore credentials: %w", err)
+			return nil, fmt.Errorf("dbaas: apply backup credentials: %w", err)
 		}
 	}
 	values := BuildValues(s.cfg, spec)

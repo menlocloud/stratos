@@ -1504,3 +1504,43 @@ func TestBuildValuesScheduling(t *testing.T) {
 		t.Errorf("toleration passed through changed: %#v", tol[0])
 	}
 }
+
+// A plain create (no restore, no SetBackup) must still write the object-store credential
+// Secret. BuildValues wires the ObjectStore into every database the provider can back up, and
+// a CR pointing at a Secret that does not exist takes down CONTINUOUS ARCHIVING as well as
+// backups — silently, with WAL then accumulating on the data volume.
+func TestCreateDatabaseWritesBackupCredentials(t *testing.T) {
+	api := newFakeAPI()
+	cfg := testConfig()
+	cfg.Backup = BackupConfig{
+		Endpoint: "https://s3.example", Bucket: "backups", Prefix: "az1",
+		AccessKey: "AKIA-TEST", SecretKey: "s3cr3t-key", PathStyle: true,
+	}
+	svc := NewWithAPI(api, cfg, "svc-1")
+	spec := testSpec(EnginePostgreSQL, "17")
+	ctx := context.Background()
+	if _, err := svc.CreateDatabase(ctx, spec, testShare(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := api.GetSecretData(ctx, NamespaceFor(spec.ProjectID), BackupSecretName(spec.ID))
+	if string(data[BackupCredKeys.CNPGAccess]) != "AKIA-TEST" || string(data[BackupCredKeys.AWSSecret]) != "s3cr3t-key" {
+		t.Fatalf("backup credential secret not written at create: %v", data)
+	}
+	// Before the Application: the operator starts reconciling the moment the CR lands.
+	ops := strings.Join(api.ops, ",")
+	if si, ai := strings.Index(ops, "secret:"+BackupSecretName(spec.ID)), strings.Index(ops, "app:"+spec.ID); si < 0 || si > ai {
+		t.Fatalf("credential must be written before the Application: %s", ops)
+	}
+	// Engines the platform cannot back up get no credential — nothing references it.
+	api2 := newFakeAPI()
+	svc2 := NewWithAPI(api2, cfg, "svc-1")
+	valkey := testSpec(EngineValkey, "9")
+	valkey.BetaAck = true
+	if _, err := svc2.CreateDatabase(ctx, valkey, testShare(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := api2.GetSecretData(ctx, NamespaceFor(valkey.ProjectID), BackupSecretName(valkey.ID)); d != nil {
+		t.Fatalf("engine without BACKUP capability must not get credentials: %v", d)
+	}
+}
