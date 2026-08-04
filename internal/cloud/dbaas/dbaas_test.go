@@ -1160,6 +1160,85 @@ func TestBackupSpecValidate(t *testing.T) {
 	}
 }
 
+// TestBackupDefaultsAtCreate pins the two things that make a new database actually recoverable:
+// a base-backup SCHEDULE exists from the start (continuous archiving alone has nothing to replay
+// onto), and it is the weekly one, because every run is a full copy.
+func TestBackupDefaultsAtCreate(t *testing.T) {
+	cfg := testConfig()
+	cfg.Backup = BackupConfig{
+		Endpoint: "https://s3.example", Bucket: "backups",
+		AccessKey: "AKIA-TEST", SecretKey: "s3cr3t-key", PathStyle: true,
+	}
+	for engine, version := range map[string]string{
+		EnginePostgreSQL: "17", EngineMySQL: "8.4", EngineMariaDB: "11.4", EngineFerretDB: "2",
+	} {
+		values := BuildValues(cfg, testSpec(engine, version))
+		block, _ := values["backup"].(map[string]any)
+		if block["enabled"] != true {
+			t.Fatalf("%s: store not wired at create: %v", engine, block)
+		}
+		if block["schedule"] != DefaultBackupSchedule {
+			t.Errorf("%s: schedule = %v, want the weekly default %q — without one there is no base "+
+				"backup and the archived WAL/binlog is unrestorable", engine, block["schedule"], DefaultBackupSchedule)
+		}
+		if block["retentionDays"] != DefaultBackupRetentionDays {
+			t.Errorf("%s: retentionDays = %v", engine, block["retentionDays"])
+		}
+		// 30 days of a WEEKLY schedule is four backups, not thirty.
+		if block["keepBackups"] != 4 {
+			t.Errorf("%s: keepBackups = %v, want 4", engine, block["keepBackups"])
+		}
+		// Only Percona can chain increments; the others must not carry the key at all.
+		incr := block["incrementalSchedule"]
+		if engine == EngineMySQL {
+			if incr != "0 2 * * 1,2,3,4,5,6" {
+				t.Errorf("mysql: incrementalSchedule = %v", incr)
+			}
+		} else if incr != nil {
+			t.Errorf("%s: must not get an incremental schedule, got %v", engine, incr)
+		}
+	}
+	// An engine without the BACKUP capability gets no block at all.
+	if _, ok := BuildValues(cfg, testSpec(EngineKafka, "4.0"))["backup"]; ok {
+		t.Error("kafka must not get a backup block")
+	}
+}
+
+func TestIncrementalScheduleAndKeep(t *testing.T) {
+	// Only a base pinned to ONE weekday leaves whole days free to fill.
+	if got := IncrementalSchedule(EngineMySQL, "0 2 * * 0"); got != "0 2 * * 1,2,3,4,5,6" {
+		t.Errorf("weekly base -> %q", got)
+	}
+	if got := IncrementalSchedule(EngineMySQL, "30 4 * * 3"); got != "30 4 * * 0,1,2,4,5,6" {
+		t.Errorf("midweek base -> %q", got)
+	}
+	// No gap, no clean complement, or not Percona: no second entry. An increment colliding with
+	// its base would chain onto the PREVIOUS week's full.
+	for _, base := range []string{"", "0 2 * * *", "0 * * * *", "0 2 1 * 0", "0 2 * * 1,3", "0 2 * *"} {
+		if got := IncrementalSchedule(EngineMySQL, base); got != "" {
+			t.Errorf("base %q -> %q, want none", base, got)
+		}
+	}
+	if got := IncrementalSchedule(EnginePostgreSQL, "0 2 * * 0"); got != "" {
+		t.Errorf("postgres has no incremental base backup, got %q", got)
+	}
+
+	// keepBackups converts days->count for the weekly shape only; anything it cannot read
+	// confidently over-keeps rather than pruning a backup someone still needs.
+	for _, c := range []struct {
+		schedule string
+		days     int
+		want     int
+	}{
+		{"0 2 * * 0", 30, 4}, {"0 2 * * 0", 7, 1}, {"0 2 * * 0", 3, 1},
+		{"0 2 * * *", 30, 30}, {"0 * * * *", 30, 30}, {"", 30, 30},
+	} {
+		if got := keepBackups(c.schedule, c.days); got != c.want {
+			t.Errorf("keepBackups(%q, %d) = %d, want %d", c.schedule, c.days, got, c.want)
+		}
+	}
+}
+
 // TestSetBackup covers the whole posture change: credentials land in a Secret (never values),
 // the values carry the provider's store, and disabling takes the credential away again.
 func TestSetBackup(t *testing.T) {

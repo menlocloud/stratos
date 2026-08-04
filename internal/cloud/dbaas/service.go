@@ -757,7 +757,8 @@ func (s *Service) SetBackup(ctx context.Context, projectID, dbID string, spec Ba
 		// Preserve any pending on-demand stamp: a schedule change must not cancel a backup the
 		// customer started seconds earlier.
 		prev, _ := values["backup"].(map[string]any)
-		next := backupValues(s.cfg, dbID, spec)
+		engine, _ := values["engine"].(string)
+		next := backupValues(s.cfg, engine, dbID, spec)
 		if runAt, _ := prev["runAt"].(string); runAt != "" {
 			next["runAt"] = runAt
 		}

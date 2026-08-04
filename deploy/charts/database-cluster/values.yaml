@@ -136,9 +136,20 @@ backup:
   # string as seconds-first — it runs at the wrong time instead of failing — so
   # _backup.tpl converts, and nothing else may. Empty = on-demand only.
   schedule: ""
-  # -- Keep backups this many days. 0 = keep forever. Percona counts BACKUPS
-  # rather than days, so the chart passes this as its `keep` count.
+  # -- mysql ONLY: cron for INCREMENTAL runs, on the days `schedule` leaves free.
+  # Percona is the one operator here that can take an incremental base backup;
+  # stratos derives this from `schedule` (values.go IncrementalSchedule) and
+  # leaves it empty when the base already runs daily or oftener. Increments
+  # chain onto the latest full and are pruned with it.
+  incrementalSchedule: ""
+  # -- Keep backups this many days. 0 = keep forever. Used as-is by the operators
+  # whose retention IS a duration (barman "30d", mariadb hours).
   retentionDays: 0
+  # -- The same retention expressed as a COUNT, which is what Percona's `keep`
+  # means. Derived from retentionDays and the schedule's cadence by stratos
+  # (values.go keepBackups) — the two only coincide at a daily cron, and passing
+  # days straight through would keep 30 WEEKS of full copies on a weekly one.
+  keepBackups: 0
   # -- Stamp written by the CREATE_BACKUP action. A CHANGED value produces one
   # extra backup (new CR name, or mariadb's schedule.onDemand); unchanged is a
   # no-op re-apply, so "back up now" stays declarative.

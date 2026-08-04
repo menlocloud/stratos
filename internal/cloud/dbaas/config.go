@@ -417,6 +417,27 @@ type BackupSpec struct {
 	RetentionDays int
 }
 
+// DefaultBackupSchedule and DefaultBackupRetentionDays are the posture stamped at CREATE, and
+// they exist for two separate reasons.
+//
+// A schedule has to be stamped AT ALL because continuous archiving alone cannot restore
+// anything. WAL and binlog shipping start with the database, but a log is a delta — without a
+// base backup underneath it there is nothing to replay onto. A database created with no schedule
+// would archive to the object store forever and still be unrecoverable, which is the worst shape
+// this feature could take: it looks protected right up to the moment it is needed.
+//
+// The cadence is WEEKLY rather than daily because every operator here takes a FULL physical copy
+// of the data directory on each run — CloudNativePG has no incremental base at all and mariadb
+// does not expose one — so a 30-day retention at a daily cadence is THIRTY complete copies of
+// the database sitting in the object store. Weekly is four. What makes that safe is the other
+// half of the design: the log ships continuously either way, so recovery still reaches any
+// second in the window. A base that is a few days old costs replay time, not data. Customers who
+// want a shorter replay can move the schedule to daily; the cost is theirs to choose.
+const (
+	DefaultBackupSchedule      = "0 2 * * 0" // Sunday 02:00
+	DefaultBackupRetentionDays = 30
+)
+
 // Validate rejects a backup posture the operators would refuse (or, worse, silently misread).
 func (b BackupSpec) Validate() error {
 	if b.Schedule != "" && !cronRE.MatchString(b.Schedule) {

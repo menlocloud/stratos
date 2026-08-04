@@ -1,5 +1,10 @@
 package dbaas
 
+import (
+	"fmt"
+	"strings"
+)
+
 // values.go — the SINGLE source of truth for the `database-cluster` chart values contract
 // (deploy/charts/database-cluster). Every key BuildValues emits is a key the chart reads;
 // TestBuildValues pins all of them per engine, so a rename on either side is a test failure,
@@ -87,7 +92,11 @@ func BuildValues(cfg Config, spec DatabaseSpec) map[string]any {
 	//
 	// What the customer toggles later is the SCHEDULE, not this.
 	if cfg.Backup.Enabled() && Capabilities[spec.Engine]["BACKUP"] {
-		values["backup"] = backupValues(cfg, spec.ID, BackupSpec{Enabled: true})
+		values["backup"] = backupValues(cfg, spec.Engine, spec.ID, BackupSpec{
+			Enabled:       true,
+			Schedule:      DefaultBackupSchedule,
+			RetentionDays: DefaultBackupRetentionDays,
+		})
 	}
 	return values
 }
@@ -133,16 +142,20 @@ func restoreValues(cfg Config, dbID string, src RestoreSource) map[string]any {
 // The schedule stays the ONE canonical 5-field cron here. CNPG's ScheduledBackup wants six
 // fields (leading seconds) and the chart prepends it; keeping both formats in values would
 // eventually put a 5-field string in a 6-field parser, which runs at the wrong hour silently.
-func backupValues(cfg Config, dbID string, spec BackupSpec) map[string]any {
+func backupValues(cfg Config, engine, dbID string, spec BackupSpec) map[string]any {
 	out := map[string]any{"enabled": spec.Enabled}
 	if !spec.Enabled {
 		return out
 	}
 	if spec.Schedule != "" {
 		out["schedule"] = spec.Schedule
+		if incr := IncrementalSchedule(engine, spec.Schedule); incr != "" {
+			out["incrementalSchedule"] = incr
+		}
 	}
 	if spec.RetentionDays > 0 {
 		out["retentionDays"] = spec.RetentionDays
+		out["keepBackups"] = keepBackups(spec.Schedule, spec.RetentionDays)
 	}
 	s3 := map[string]any{
 		"endpoint":    cfg.Backup.Endpoint,
@@ -161,6 +174,58 @@ func backupValues(cfg Config, dbID string, spec BackupSpec) map[string]any {
 	}
 	out["s3"] = s3
 	return out
+}
+
+// IncrementalSchedule is the cron for mysql's INCREMENTAL runs: the days of the week the base
+// backup does not run. "" means no incremental pass, which is the right answer for every other
+// engine and for a base that already runs daily or oftener.
+//
+// Percona is the only operator here that can take an incremental base backup — CloudNativePG has
+// no such concept and mariadb-operator does not expose one — and mysql is the engine that most
+// needs it, because restoring from a week-old base means replaying a week of binlogs. A weekly
+// full plus daily increments keeps both the object store and the restore window small.
+//
+// Retention is safe by construction rather than by care: Percona applies retention to the CHAIN,
+// so pruning a base takes its increments with it and can never orphan one. Its own docs are
+// blunt that the reverse is unsupported ("specifying the retention policy for increments is not
+// supported"), which is why the chart puts `keep` on the full entry only.
+func IncrementalSchedule(engine, base string) string {
+	if engine != EngineMySQL {
+		return ""
+	}
+	f := strings.Fields(base)
+	// Only a base pinned to ONE weekday leaves whole days free. Anything else either has no gap
+	// (daily, hourly) or no clean complement (day-of-month, a list of weekdays), and an
+	// increment firing in the same minute as its base would chain onto the PREVIOUS week's full.
+	if len(f) != 5 || f[2] != "*" || f[3] != "*" || len(f[4]) != 1 || f[4][0] < '0' || f[4][0] > '6' {
+		return ""
+	}
+	days := make([]string, 0, 6)
+	for c := byte('0'); c <= '6'; c++ {
+		if c != f[4][0] {
+			days = append(days, string(c))
+		}
+	}
+	return fmt.Sprintf("%s %s * * %s", f[0], f[1], strings.Join(days, ","))
+}
+
+// keepBackups converts a retention in DAYS into the number of BACKUPS to keep, which is what
+// Percona's `keep` field counts — the only engine whose retention is expressed that way.
+//
+// Only the weekly shape is converted, and deliberately so. Keeping too many backups costs money;
+// keeping too few loses data. So anything this cannot read confidently falls through to the days
+// value, which over-keeps for a sub-daily schedule rather than pruning a backup someone still
+// needs. Without the conversion a 30-day retention on the weekly default would keep thirty full
+// copies — seven months of them.
+func keepBackups(schedule string, retentionDays int) int {
+	f := strings.Fields(schedule)
+	if len(f) == 5 && f[1] != "*" && f[4] != "*" {
+		if n := retentionDays / 7; n > 0 {
+			return n
+		}
+		return 1
+	}
+	return retentionDays
 }
 
 // databasesValues / usersValues render the customer-managed access lists into the values

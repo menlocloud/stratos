@@ -2615,11 +2615,15 @@ type BackupRun = {
 
 // Common schedules, so nobody has to know cron. The value is the 5-FIELD form the server
 // stores; CNPG's six-field arity is the chart's problem, never the customer's.
+//
+// Weekly is the DEFAULT and it is listed first for that reason. Each run is a full copy of the
+// database, so a daily schedule at the same retention is seven times the object store; the log
+// ships continuously either way, so recovery still reaches any second in the window.
 const BACKUP_SCHEDULES = [
-  { value: "", label: "On demand only" },
-  { value: "0 * * * *", label: "Hourly" },
-  { value: "0 2 * * *", label: "Daily at 02:00" },
   { value: "0 2 * * 0", label: "Weekly (Sunday 02:00)" },
+  { value: "0 2 * * *", label: "Daily at 02:00" },
+  { value: "0 * * * *", label: "Hourly" },
+  { value: "", label: "On demand only" },
 ]
 
 // Backups: posture + history. The object store is operator config — nothing here names a
@@ -2637,7 +2641,7 @@ function BackupDialog({
 }) {
   // The store is always wired; this switch is the SCHEDULE, so it starts from whether one exists.
   const [enabled, setEnabled] = useState(!!backup.schedule)
-  const [schedule, setSchedule] = useState(backup.schedule || "0 2 * * *")
+  const [schedule, setSchedule] = useState(backup.schedule || "0 2 * * 0")
   const [retention, setRetention] = useState(String(backup.retentionDays ?? 30))
   const [pending, setPending] = useState(false)
 
@@ -2694,6 +2698,10 @@ function BackupDialog({
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  Each run is a full copy, so a more frequent schedule costs proportionally more
+                  storage. Recovery reaches any point in time either way.
+                </p>
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="bk-ret">Keep for (days)</Label>

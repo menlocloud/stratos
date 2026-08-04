@@ -303,6 +303,38 @@ webhooks reject a User/Database/Grant naming a cluster that does not exist yet.
 what to restore, so a stale answer is worse than a slow one). The store is provider config —
 nothing in the request names a bucket.
 
+### What a backup is, and the default posture
+
+Every engine here takes a **full physical copy** of the data directory on each run. None of them
+snapshots, and only mysql can take an incremental base. The incremental half of the design is the
+**log**: WAL (postgres, ferretdb) and binlog (mysql, mariadb) ship continuously from the moment
+the database is created, and point-in-time recovery is a base backup plus that log replayed
+forward to the requested second.
+
+Two consequences drive the defaults, both stamped at create by `BuildValues`:
+
+- **A schedule must exist from the start.** Continuous archiving on its own restores nothing — a
+  log is a delta and needs a base underneath it. A database with an object store and no
+  `ScheduledBackup` archives forever and is unrecoverable, which is the worst possible shape: it
+  looks protected right up to the moment it is needed.
+- **The cadence is weekly** (`DefaultBackupSchedule`, Sunday 02:00, 30-day retention). A daily
+  cadence at the same retention is thirty complete copies of the database in the object store;
+  weekly is four. Recovery still reaches any second in the window either way — an older base
+  costs replay time, not data. Customers can move it to daily or hourly; the cost is theirs.
+
+Retention is expressed in **days** in the API, but Percona's `keep` counts **backups**, so
+`values.go keepBackups` converts using the schedule's cadence and the chart passes that as
+`backup.keepBackups`. Only the weekly shape is converted — anything ambiguous falls through to
+the days value, over-keeping rather than pruning a backup someone still needs.
+
+**mysql additionally runs increments.** `IncrementalSchedule` derives a second schedule entry
+covering the days the weekly base does not run, so a restore replays a day of binlogs instead of
+a week. Retention is safe by construction: Percona applies it to the **chain**, so pruning a base
+takes its increments with it and never orphans one — and its docs are explicit that a retention
+policy *on* increments is unsupported, which is why `keep` sits on the full entry alone. The
+derivation returns empty for any base that already runs daily or oftener, and for every other
+engine.
+
 Credentials never travel through values: stratos writes one Secret per database
 (`<id>-backup-s3`) carrying every key alias the operators want — `ACCESS_KEY_ID` /
 `ACCESS_SECRET_KEY` for CNPG and `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` for Percona and

@@ -87,13 +87,26 @@ spec:
       - name: stratos-scheduled
         schedule: {{ . | quote }}
         storageName: stratos
-        {{- with $.Values.backup.retentionDays }}
-        {{/* Percona counts BACKUPS, not days: at one run per day the retention
-             window in days is the count. A sub-daily cron keeps proportionally
-             less wall-clock history — documented, not silently wrong. */}}
+        {{- with $.Values.backup.keepBackups }}
+        {{/* Percona counts BACKUPS, not days — stratos converts the customer's
+             retention in days into a count using the schedule's cadence
+             (values.go keepBackups), because the two only coincide at a daily
+             cron. `keep` belongs on the FULL entry alone: retention applies to
+             the whole chain, and Percona does not support a retention policy
+             on increments. */}}
         keep: {{ int . }}
         {{- end }}
         type: full
+      {{- with $.Values.backup.incrementalSchedule }}
+      {{/* Increments on the days the base does not run. They chain onto the
+           latest full — the operator picks the base automatically — so pruning
+           a full takes its increments with it and never orphans one. This is
+           what keeps a weekly full affordable AND the binlog replay short. */}}
+      - name: stratos-incremental
+        schedule: {{ . | quote }}
+        storageName: stratos
+        type: incremental
+      {{- end }}
     {{- end }}
   {{- end }}
   mysql:
