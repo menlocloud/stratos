@@ -155,6 +155,20 @@ type ClusterDefaults struct {
 	// https://<harbor>/v2/<project>. Provider-level, applied at create — an existing cluster
 	// keeps the mirrors stored on its Application (full-values contract, plan §9).
 	RegistryMirrors map[string][]string
+	// NodeSelector/Tolerations place everything this chart runs ON THE MANAGEMENT CLUSTER: the
+	// hosted control-plane pods, the per-cluster OpenStack CCM, the Cinder CSI controller and the
+	// cluster-autoscaler. Worker VMs are unaffected — they are Nova servers, not pods.
+	//
+	// The point is a dedicated management node pool: label + taint it, set both here, and the
+	// pool scales on tenant-cluster demand alone. Both matter — a selector alone still lets other
+	// workloads onto the pool, a toleration alone does not keep control planes on it. Empty =
+	// schedule anywhere, which is the chart's default.
+	//
+	// Provider-level and applied at create, like every other value: an existing cluster keeps the
+	// placement stored on its Application until something rewrites its values (plan §9).
+	NodeSelector map[string]string
+	// Tolerations are opaque Kubernetes toleration objects, passed to the chart unchanged.
+	Tolerations []map[string]any
 }
 
 // ClusterAddons is the curated add-on menu a customer can toggle per cluster (name →

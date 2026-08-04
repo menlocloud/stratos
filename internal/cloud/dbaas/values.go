@@ -53,6 +53,12 @@ func BuildValues(cfg Config, spec DatabaseSpec) map[string]any {
 			"displayName": spec.DisplayName,
 		},
 	}
+	// Pod placement (chart `scheduling`), one block the chart spreads over every pod the engine
+	// runs. Omitted when the provider configures none, so an unconfigured database renders
+	// exactly as it did before the key existed.
+	if placement := placementValues(cfg.NodeSelector, cfg.Tolerations); placement != nil {
+		values["scheduling"] = placement
+	}
 	// Emitted for opensearch only, and only the keys that are on: the chart defaults everything
 	// off, and SET_SSO/SET_CUSTOM_DOMAIN patch this same block later — unconditional keys here
 	// would fight those patches.
@@ -344,6 +350,35 @@ func usersValues(dbs []DBDatabase, users []DBUser) []any {
 			entry["roles"] = roles
 		}
 		out = append(out, entry)
+	}
+	return out
+}
+
+// placementValues renders the chart's `scheduling` block (nodeSelector + tolerations) from the
+// provider config. nil when neither is configured, so the key stays off the values and the
+// chart's "schedule anywhere" default stands.
+//
+// Deliberately a copy of kamaji.PlacementValues rather than a shared helper: the two products'
+// values contracts are independent by design (one writes `scheduling`, the other four separate
+// chart keys), and a shared function would tie a chart-key change on one side to the other.
+func placementValues(nodeSelector map[string]string, tolerations []map[string]any) map[string]any {
+	out := map[string]any{}
+	if len(nodeSelector) > 0 {
+		sel := map[string]any{}
+		for k, v := range nodeSelector {
+			sel[k] = v
+		}
+		out["nodeSelector"] = sel
+	}
+	if len(tolerations) > 0 {
+		list := make([]any, 0, len(tolerations))
+		for _, t := range tolerations {
+			list = append(list, t)
+		}
+		out["tolerations"] = list
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

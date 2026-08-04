@@ -25,6 +25,13 @@ func TestKamajiConfig(t *testing.T) {
 					"empty":  map[string]any{"1.35.4": ""}, // blank ids are dropped → variant dropped
 					"junk":   "not-a-map",                  // malformed entries are skipped
 				},
+				"scheduling": map[string]any{
+					"nodeSelector": map[string]any{"node-role": "kamaji", "blank": ""},
+					"tolerations": []any{
+						map[string]any{"key": "dedicated", "operator": "Equal", "value": "kamaji", "effect": "NoSchedule"},
+						"not-a-map",
+					},
+				},
 				"registryMirrors": map[string]any{
 					"docker.io": []any{"https://harbor.example.com/v2/dockerhub", ""},
 					"ghcr.io":   "https://harbor.example.com/v2/ghcr-io", // bare string accepted
@@ -60,6 +67,13 @@ func TestKamajiConfig(t *testing.T) {
 		len(mirrors["ghcr.io"]) != 1 || mirrors["ghcr.io"][0] != "https://harbor.example.com/v2/ghcr-io" {
 		t.Errorf("registryMirrors = %+v", mirrors)
 	}
+	if sel := cfg.Defaults.NodeSelector; len(sel) != 1 || sel["node-role"] != "kamaji" {
+		t.Errorf("nodeSelector = %+v (blank values must be dropped)", sel)
+	}
+	if tol := cfg.Defaults.Tolerations; len(tol) != 1 || tol[0]["key"] != "dedicated" {
+		t.Errorf("tolerations = %+v (non-object entries must be skipped)", tol)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
 	}

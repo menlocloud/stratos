@@ -1476,3 +1476,31 @@ func TestStampBackupRun(t *testing.T) {
 		t.Error("the rest of the backup posture must survive")
 	}
 }
+
+// Placement rides one `scheduling` block; the chart is what spreads it over each engine's pods.
+func TestBuildValuesScheduling(t *testing.T) {
+	cfg := testConfig()
+	if v := BuildValues(cfg, testSpec(EnginePostgreSQL, "17")); v["scheduling"] != nil {
+		t.Errorf("unconfigured placement must not emit the key: %v", v["scheduling"])
+	}
+
+	cfg.NodeSelector = map[string]string{"node-role": "database"}
+	cfg.Tolerations = []map[string]any{
+		{"key": "dedicated", "operator": "Equal", "value": "database", "effect": "NoSchedule"},
+	}
+	v := BuildValues(cfg, testSpec(EnginePostgreSQL, "17"))
+	block, ok := v["scheduling"].(map[string]any)
+	if !ok {
+		t.Fatalf("scheduling = %#v", v["scheduling"])
+	}
+	if sel, _ := block["nodeSelector"].(map[string]any); sel["node-role"] != "database" {
+		t.Errorf("nodeSelector = %#v", block["nodeSelector"])
+	}
+	tol, _ := block["tolerations"].([]any)
+	if len(tol) != 1 {
+		t.Fatalf("tolerations = %#v", block["tolerations"])
+	}
+	if first, _ := tol[0].(map[string]any); first["effect"] != "NoSchedule" {
+		t.Errorf("toleration passed through changed: %#v", tol[0])
+	}
+}

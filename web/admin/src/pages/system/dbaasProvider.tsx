@@ -14,6 +14,8 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAdminList } from "@/lib/hooks"
 
+import { SchedulingFields, schedulingBlock, schedulingFromConfig, schedulingValid } from "./scheduling"
+
 export type DbaasFormState = {
   name: string
   region: string
@@ -45,6 +47,9 @@ export type DbaasFormState = {
   storageClasses: string // comma-separated
   engines: string // one "postgresql=16,17,18" line per engine
   valkeyEnabled: boolean // valkey is pre-GA — its line is rejected unless explicitly enabled
+  // Pod placement for every pod a database runs on the DBaaS cluster. Empty = schedule anywhere.
+  nodeSelector: string
+  tolerations: string
   // The stored config.database object as loaded from the service. The engines textarea only
   // round-trips versions, and the update route replaces top-level config keys wholesale — so
   // everything the form does not own (limits, per-engine default/replicas/beta, future keys)
@@ -75,6 +80,8 @@ export const emptyDbaasForm: DbaasFormState = {
   storageClasses: "",
   engines: "",
   valkeyEnabled: false,
+  nodeSelector: "",
+  tolerations: "",
   storedDatabase: {},
 }
 
@@ -118,12 +125,13 @@ export const dbaasFormValid = (f: DbaasFormState, requireKubeconfig = true) => {
   const engines = parseEngines(f.engines, f.valkeyEnabled)
   const required = [f.name, f.region, f.chartRepo, f.chartVersion, f.osServiceId, f.osProjectId, f.memberSubnetId]
   if (requireKubeconfig) required.push(f.kubeconfig)
+  if (!schedulingValid(f.nodeSelector, f.tolerations)) return false
   return required.every((v) => v.trim() !== "") && engines !== null && Object.keys(engines).length > 0
 }
 
 // The database.* keys the form edits directly — everything else stored under config.database
 // (limits, future keys) passes through dbaasConfigBlocks untouched.
-const FORM_OWNED_DATABASE_KEYS = ["osServiceId", "osProjectId", "memberSubnetId", "dnsZone", "certIssuer", "storageClasses", "engines", "backup"]
+const FORM_OWNED_DATABASE_KEYS = ["osServiceId", "osProjectId", "memberSubnetId", "dnsZone", "certIssuer", "storageClasses", "engines", "backup", "scheduling"]
 
 // dbaasConfigBlocks are the two config sub-objects stratos reads. The admin update route
 // replaces top-level config keys wholesale, so each block must always be sent complete —
@@ -173,6 +181,7 @@ export function dbaasConfigBlocks(f: DbaasFormState) {
         pathStyle: f.backupPathStyle,
       },
       storageClasses: splitCsv(f.storageClasses),
+      ...schedulingBlock(f.nodeSelector, f.tolerations),
       engines,
     },
   }
@@ -238,6 +247,7 @@ export function dbaasFormFromService(svc: {
     storageClasses: ((database.storageClasses as string[]) ?? []).join(","),
     engines: engineLines.join("\n"),
     valkeyEnabled: !!engines.valkey,
+    ...schedulingFromConfig(database.scheduling as Record<string, any> | undefined),
     storedDatabase: database,
   }
 }
@@ -444,6 +454,13 @@ export function DbaasProviderForm({
         </div>
         <Switch id="db-valkey" checked={form.valkeyEnabled} onCheckedChange={(on) => setForm({ ...form, valkeyEnabled: on })} />
       </div>
+      <SchedulingFields
+        nodeSelector={form.nodeSelector}
+        tolerations={form.tolerations}
+        onChange={(next) => setForm({ ...form, ...next })}
+        what="every pod a database runs on the DB cluster — the engine instances, the haproxy proxies for MySQL/MariaDB and the FerretDB frontend"
+        idPrefix="db"
+      />
       <p className="text-xs text-muted-foreground">
         The kubeconfig belongs to a stratos service account on the pre-built DB cluster (operators,
         ArgoCD and the AppProject installed there by ops). Databases are delivered as ArgoCD

@@ -91,6 +91,16 @@ Admin UI → System → Cloud providers → Add provider → **Database (DBaaS)*
   Replica choices default to `[1, 3]` (single node or the HA trio) and are capped at 3
   platform-wide; the admin form restricts them per engine with an `@` suffix
   (`kafka=4.3.0@3`). More than 3 is a deliberate future release, not a config knob.
+- `config.database.scheduling` (optional) — `{nodeSelector, tolerations}`, applied to **every**
+  pod a database runs: the engine instances, the haproxy proxies (mysql/mariadb) and the FerretDB
+  frontend. The point is a dedicated database node pool — label + taint it, set both halves, and
+  the pool scales on database demand alone instead of competing with whatever else the DB cluster
+  runs. Set BOTH: a selector alone still lets other workloads onto the pool, a toleration alone
+  does not keep database pods on it. Admin form grammar: `label=value` per line for the selector,
+  `key=value:Effect` / `key:Effect` / `key` per line for tolerations (the `kubectl taint`
+  spelling). Kafka differs in shape only — Strimzi's pod template has no `nodeSelector`, so the
+  chart renders the selector as an equivalent required `nodeAffinity`. Applied at create; an
+  existing database keeps the placement stored on its Application. Needs chart ≥ 0.5.0.
 - `config.database.dnsZone` (optional) — platform DNS: every database gets `<id>.<zone>`
   (`-dash` for Dashboards, `-b<N>` per kafka broker — kafka brokers then advertise those names)
   as an A record to its private VIP, and connection info returns the name instead of the IP.

@@ -114,6 +114,7 @@ func (e *ExternalService) DbaasConfig() dbaas.Config {
 		}
 	}
 	limits, _ := db["limits"].(map[string]any)
+	nodeSelector, tolerations := scheduling(db)
 	cfg := dbaas.Config{
 		Kubeconfig:     str(e.secretMap()["kubeconfig"]),
 		Region:         e.DbaasRegion(),
@@ -134,7 +135,9 @@ func (e *ExternalService) DbaasConfig() dbaas.Config {
 			MaxMemoryGiB:  intOf(limits["maxMemoryGiB"]),
 			MaxStorageGiB: intOf(limits["maxStorageGiB"]),
 		},
-		Engines: engines,
+		Engines:      engines,
+		NodeSelector: nodeSelector,
+		Tolerations:  tolerations,
 	}
 	if cfg.ArgoNamespace == "" {
 		cfg.ArgoNamespace = "argocd"

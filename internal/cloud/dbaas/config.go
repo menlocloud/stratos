@@ -208,6 +208,16 @@ type Config struct {
 	Limits         Limits
 	// Engines is the curated engine catalog (the ONLY engines/versions offered).
 	Engines map[string]EngineOffer
+	// NodeSelector/Tolerations place every pod a database runs — engine, proxy (haproxy for
+	// mysql/mariadb), FerretDB frontend — on the DBaaS cluster. The point is a dedicated database
+	// node pool: label + taint it, set both here, and the pool scales on database demand alone.
+	// Both matter — a selector alone still lets other workloads onto the pool, a toleration alone
+	// does not keep database pods on it. Empty = schedule anywhere (the chart's default).
+	//
+	// Applied at create; an existing database keeps the placement on its Application.
+	NodeSelector map[string]string
+	// Tolerations are opaque Kubernetes toleration objects, passed to the chart unchanged.
+	Tolerations []map[string]any
 }
 
 // Limits bound a single database's per-instance size (fail at create, not at the operator).

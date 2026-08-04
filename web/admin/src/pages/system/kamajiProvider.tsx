@@ -16,6 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { useAdminList } from "@/lib/hooks"
 
+import { SchedulingFields, schedulingBlock, schedulingFromConfig, schedulingValid } from "./scheduling"
+
 export type KamajiFormState = {
   name: string
   region: string
@@ -39,6 +41,10 @@ export type KamajiFormState = {
   // Containerd pull-through mirrors for cluster nodes, one "docker.io=https://…/v2/<project>"
   // per line. Empty = the chart's own default mirrors.
   registryMirrors: string
+  // Management-cluster pod placement for everything a cluster runs there (hosted control plane,
+  // CCM, CSI controller, autoscaler). Empty = schedule anywhere.
+  nodeSelector: string
+  tolerations: string
   // The OpenStack provider whose live catalog feeds the flavor/image PICKERS below — a browsing
   // aid only (worker placement stays per-project). Stored so the edit page reopens with the
   // pickers wired; blank = type ids by hand.
@@ -65,6 +71,8 @@ export const emptyKamajiForm: KamajiFormState = {
   flavors: "",
   storageVolumeType: "",
   registryMirrors: "",
+  nodeSelector: "",
+  tolerations: "",
   openstackServiceId: "",
 }
 
@@ -161,6 +169,7 @@ export const kamajiFormValid = (f: KamajiFormState, requireKubeconfig = true) =>
   const required = [f.name, f.region, f.chartRepo, f.chartVersion]
   if (requireKubeconfig) required.push(f.kubeconfig)
   if (parseRegistryMirrors(f.registryMirrors) === null) return false
+  if (!schedulingValid(f.nodeSelector, f.tolerations)) return false
   return (
     required.every((v) => v.trim() !== "") &&
     Number(f.rootVolumeGiB) >= 1 &&
@@ -199,6 +208,7 @@ export function kamajiConfigBlocks(f: KamajiFormState) {
       // Sent complete (the update route replaces whole blocks): {} when the textarea is emptied,
       // which is how an operator falls back to the chart's default mirrors.
       registryMirrors: parseRegistryMirrors(f.registryMirrors) ?? {},
+      ...schedulingBlock(f.nodeSelector, f.tolerations),
       ...(f.openstackServiceId ? { openstackServiceId: f.openstackServiceId } : {}),
     },
   }
@@ -264,6 +274,7 @@ export function kamajiFormFromService(svc: {
     )
       .flatMap(([host, urls]) => (Array.isArray(urls) ? urls : [urls]).map((u) => `${host}=${u}`))
       .join("\n"),
+    ...schedulingFromConfig(cluster.scheduling as Record<string, any> | undefined),
     openstackServiceId: String(cluster.openstackServiceId ?? ""),
   }
 }
@@ -588,6 +599,13 @@ export function KamajiProviderForm({
           created from now on; existing clusters keep the mirrors they were built with.
         </p>
       </div>
+      <SchedulingFields
+        nodeSelector={form.nodeSelector}
+        tolerations={form.tolerations}
+        onChange={(next) => setForm({ ...form, ...next })}
+        what="a cluster's management-side pods — the hosted control plane, its OpenStack cloud-controller-manager, the Cinder CSI controller and the autoscaler — on THIS management cluster (worker VMs are Nova servers and are unaffected)"
+        idPrefix="km"
+      />
       <p className="text-xs text-muted-foreground">
         The kubeconfig belongs to a stratos service account on the Kamaji management cluster (ArgoCD +
         AppProject installed there). Only versions listed here are offered to customers. The support

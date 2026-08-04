@@ -1138,3 +1138,59 @@ func TestSyncProviderList(t *testing.T) {
 		t.Errorf("live merge = %v", g0)
 	}
 }
+
+// Placement has to reach ALL FOUR management-side workloads a cluster brings with it. Missing one
+// leaves that pod off the dedicated pool, which is the failure this feature exists to prevent —
+// and it is invisible until somebody runs `kubectl get pods -o wide` on the management cluster.
+func TestBuildValuesPlacement(t *testing.T) {
+	cfg := testCfg()
+	v := BuildValues(cfg, testSpec())
+	if cp := v["kamajiControlPlane"].(map[string]any); cp["deployment"] != nil {
+		t.Errorf("unconfigured placement must not emit deployment: %v", cp["deployment"])
+	}
+
+	cfg.Defaults.NodeSelector = map[string]string{"node-role": "kamaji"}
+	cfg.Defaults.Tolerations = []map[string]any{
+		{"key": "dedicated", "operator": "Equal", "value": "kamaji", "effect": "NoSchedule"},
+	}
+	v = BuildValues(cfg, testSpec())
+	cp := v["kamajiControlPlane"].(map[string]any)
+	for _, key := range []string{"deployment", "cloudControllerManager", "cinderCSI"} {
+		block, ok := cp[key].(map[string]any)
+		if !ok {
+			t.Fatalf("kamajiControlPlane.%s missing: %#v", key, cp[key])
+		}
+		sel, _ := block["nodeSelector"].(map[string]any)
+		if sel["node-role"] != "kamaji" {
+			t.Errorf("%s nodeSelector = %#v", key, block["nodeSelector"])
+		}
+		if tol, _ := block["tolerations"].([]any); len(tol) != 1 {
+			t.Errorf("%s tolerations = %#v", key, block["tolerations"])
+		}
+	}
+	// Separate maps, not aliases of one — a shared map would make a later edit of one block
+	// silently rewrite the other three.
+	if sameMap(cp["deployment"], cp["cinderCSI"]) {
+		t.Error("placement blocks must not alias the same map")
+	}
+	autoscaler := v["autoscaler"].(map[string]any)
+	if autoscaler["nodeSelector"] == nil || autoscaler["tolerations"] == nil {
+		t.Errorf("autoscaler placement = %#v", autoscaler)
+	}
+	// The version-matched image tag must survive alongside the placement keys.
+	if img, _ := autoscaler["image"].(map[string]any); img["tag"] != "v1.35.0" {
+		t.Errorf("autoscaler image tag = %#v", autoscaler["image"])
+	}
+}
+
+func sameMap(a, b any) bool {
+	am, aok := a.(map[string]any)
+	bm, bok := b.(map[string]any)
+	if !aok || !bok {
+		return false
+	}
+	am["__probe"] = true
+	_, aliased := bm["__probe"]
+	delete(am, "__probe")
+	return aliased
+}

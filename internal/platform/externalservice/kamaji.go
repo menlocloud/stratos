@@ -118,6 +118,7 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			}
 		}
 	}
+	nodeSelector, tolerations := scheduling(cl)
 	cfg := kamaji.Config{
 		Kubeconfig:    str(e.secretMap()["kubeconfig"]),
 		Region:        e.KamajiRegion(),
@@ -140,6 +141,8 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			AllowedCIDRs:            strList(cl["allowedCidrs"]),
 			StorageVolumeType:       str(cl["storageVolumeType"]),
 			RegistryMirrors:         mirrors,
+			NodeSelector:            nodeSelector,
+			Tolerations:             tolerations,
 		},
 	}
 	if cfg.ArgoNamespace == "" {
@@ -164,6 +167,44 @@ func intOf(v any) int {
 		return int(n)
 	}
 	return 0
+}
+
+// scheduling reads the optional pod-placement block both managed-service providers accept:
+//
+//	"scheduling": {
+//	  "nodeSelector": {"node-role": "kamaji"},
+//	  "tolerations":  [{"key": "dedicated", "operator": "Equal", "value": "kamaji", "effect": "NoSchedule"}]
+//	}
+//
+// Tolerations pass through as opaque maps — the shape is Kubernetes', and validating it here
+// would only duplicate the API server's own admission, which is where a bad toleration is
+// rejected anyway. Both halves are independent: a selector without tolerations is valid (an
+// untainted pool), and so is the reverse.
+func scheduling(cfg map[string]any) (map[string]string, []map[string]any) {
+	block, _ := cfg["scheduling"].(map[string]any)
+	if block == nil {
+		return nil, nil
+	}
+	var selector map[string]string
+	if ns, ok := block["nodeSelector"].(map[string]any); ok {
+		for k, v := range ns {
+			if s := str(v); k != "" && s != "" {
+				if selector == nil {
+					selector = map[string]string{}
+				}
+				selector[k] = s
+			}
+		}
+	}
+	var tolerations []map[string]any
+	if ts, ok := block["tolerations"].([]any); ok {
+		for _, t := range ts {
+			if m, ok := t.(map[string]any); ok && len(m) > 0 {
+				tolerations = append(tolerations, m)
+			}
+		}
+	}
+	return selector, tolerations
 }
 
 // strList reads a config array of strings, skipping blanks.

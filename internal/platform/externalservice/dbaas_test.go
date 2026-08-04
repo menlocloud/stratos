@@ -25,6 +25,12 @@ func TestDbaasConfig(t *testing.T) {
 				"memberSubnetId": "member-sub",
 				"storageClasses": []any{"nvme"},
 				"limits":         map[string]any{"maxCpu": float64(32), "maxMemoryGiB": float64(128), "maxStorageGiB": float64(2048)},
+				"scheduling": map[string]any{
+					"nodeSelector": map[string]any{"node-role": "database"},
+					"tolerations": []any{
+						map[string]any{"key": "dedicated", "operator": "Equal", "value": "database", "effect": "NoSchedule"},
+					},
+				},
 				"engines": map[string]any{
 					"postgresql": map[string]any{"versions": []any{"16", "17"}, "default": "17", "replicas": []any{float64(1), float64(3)}},
 					"valkey":     map[string]any{"versions": []any{"9"}, "default": "9", "beta": true},
@@ -36,6 +42,9 @@ func TestDbaasConfig(t *testing.T) {
 	}
 	if !es.IsDbaas() {
 		t.Fatal("IsDbaas")
+	}
+	if cfg := es.DbaasConfig(); cfg.NodeSelector["node-role"] != "database" || len(cfg.Tolerations) != 1 {
+		t.Errorf("scheduling = %+v / %+v", cfg.NodeSelector, cfg.Tolerations)
 	}
 	if es.DbaasRegion() != "RegionOne" {
 		t.Fatal("DbaasRegion")

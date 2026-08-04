@@ -107,10 +107,28 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 
 	// Cluster-autoscaler minor MUST match the cluster's Kubernetes minor (upstream values
 	// comment); the default tag would drift as soon as we offer a different minor.
+	autoscaler := map[string]any{}
 	if maj, min, _, err := ParseVersion(spec.Version); err == nil {
-		values["autoscaler"] = map[string]any{
-			"image": map[string]any{"tag": fmt.Sprintf("v%d.%d.0", maj, min)},
+		autoscaler["image"] = map[string]any{"tag": fmt.Sprintf("v%d.%d.0", maj, min)}
+	}
+
+	// Management-cluster pod placement. The chart runs FOUR things there per customer cluster —
+	// the hosted control plane, the CCM, the Cinder CSI controller and the autoscaler — and each
+	// takes its own nodeSelector/tolerations, so the provider's pool only holds the whole cluster
+	// if all four get it. Missing one leaves that pod on a general node and the "dedicated pool"
+	// is a half-truth.
+	if placement := PlacementValues(d.NodeSelector, d.Tolerations); placement != nil {
+		// The hosted control plane takes it under `deployment` — that block is passed to the
+		// KamajiControlPlane's spec.deployment verbatim by the chart.
+		cp["deployment"] = PlacementValues(d.NodeSelector, d.Tolerations)
+		cp["cloudControllerManager"] = PlacementValues(d.NodeSelector, d.Tolerations)
+		cp["cinderCSI"] = PlacementValues(d.NodeSelector, d.Tolerations)
+		for k, v := range placement {
+			autoscaler[k] = v
 		}
+	}
+	if len(autoscaler) > 0 {
+		values["autoscaler"] = autoscaler
 	}
 
 	// The addons block: the customer's curated toggles (ClusterAddons, one
@@ -145,6 +163,32 @@ func RegistryMirrorValues(mirrors map[string][]string) map[string]any {
 		if len(urls) > 0 {
 			out[strings.TrimSpace(host)] = urls
 		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// PlacementValues renders a chart pod-placement block (nodeSelector + tolerations) from the
+// provider config. nil when neither is set, so the key stays off the values and the chart's
+// "schedule anywhere" default stands. Returns a fresh map per call: the same placement is
+// written under four different chart keys, and a shared map would alias them.
+func PlacementValues(nodeSelector map[string]string, tolerations []map[string]any) map[string]any {
+	out := map[string]any{}
+	if len(nodeSelector) > 0 {
+		sel := map[string]any{}
+		for k, v := range nodeSelector {
+			sel[k] = v
+		}
+		out["nodeSelector"] = sel
+	}
+	if len(tolerations) > 0 {
+		list := make([]any, 0, len(tolerations))
+		for _, t := range tolerations {
+			list = append(list, t)
+		}
+		out["tolerations"] = list
 	}
 	if len(out) == 0 {
 		return nil
