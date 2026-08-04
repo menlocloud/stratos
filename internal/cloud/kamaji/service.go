@@ -299,15 +299,16 @@ func (s *Service) gcNamespace(ctx context.Context, ns string) error {
 	if len(tcps) > 0 || len(mds) > 0 {
 		return nil
 	}
-	// The project namespace is SHARED with the sibling provider (both derive "st-"+projectID,
-	// and in production both land on the same cluster — the "different physical cluster, so no
-	// collision" premise in the NamespaceFor comment does not hold). Deleting it takes the other
-	// product's remnants with it, and the object each provider keeps LONGEST is precisely the one
-	// that must outlive its Application: the record needed to revoke a credential or a network
-	// share. Losing that leaks it permanently and silently, with nothing left to find it by.
+	// Refuse while any stratos-owned secret from ANOTHER service is still here.
 	//
-	// So refuse on any stratos-owned secret belonging to another service. Deliberately NOT scoped
-	// by project — a foreign remnant here is a reason to stop, whoever it belongs to.
+	// The sibling product no longer shares this namespace (dbaas moved to its own stdb- prefix
+	// precisely so that it could not), so this is not that crossing — it is the same hazard one
+	// level down: two providers OF THE SAME KIND on one cluster still collide on a project's
+	// namespace. What is at stake is the object each provider deliberately keeps LONGEST, after
+	// its Application is already gone: the only record by which a credential or a network share
+	// can ever be revoked. Deleting the namespace loses it silently, with nothing left to find
+	// the leaked grant by — so a foreign remnant is a reason to stop, whoever owns it. NOT scoped
+	// by project, for the same reason.
 	secrets, err := s.api.ListSecrets(ctx, ns, LabelManagedBy+"="+ManagedByValue)
 	if err != nil {
 		return err

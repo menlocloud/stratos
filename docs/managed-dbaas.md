@@ -524,7 +524,7 @@ create_collection → insert_one → read → drop_collection as the `app` role 
 
 ## Troubleshooting
 
-- **Endpoint stuck pending** — `kubectl -n st-<project> get svc <id>-lb`; empty
+- **Endpoint stuck pending** — `kubectl -n stdb-<project> get svc <id>-lb`; empty
   `EXTERNAL-IP` → OCCM events (amphora quota in the dbaas project, member-subnet ports,
   neutron RBAC missing).
 - **Application Degraded on first create (ferretdb)** — frontend crash-loops until the CNPG

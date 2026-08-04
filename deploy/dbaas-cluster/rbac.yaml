@@ -21,12 +21,12 @@
 # therefore needs BOTH `create` and `patch`.
 #
 # ⚠ Why secrets/services/engine-CRs are CLUSTER-wide grants: Kubernetes RBAC cannot
-# wildcard namespaces — a Role binds to exactly one concrete namespace, and the `st-<projectId>`
+# wildcard namespaces — a Role binds to exactly one concrete namespace, and the `stdb-<projectId>`
 # namespaces are created dynamically by stratos itself, so no pre-created namespaced Role can
 # cover them. The ClusterRole below is the honest trade-off: the stratos SA can read/write
 # Secrets in ANY namespace of this cluster. Accepted for v1 because the DBaaS cluster is
 # single-purpose (customer databases); if it ever becomes multi-purpose, replace this with a
-# controller that stamps a per-namespace Role into each st-* namespace on creation.
+# controller that stamps a per-namespace Role into each stdb-* namespace on creation.
 #
 # The one surface that CAN be namespace-scoped is the ArgoCD Application CRUD — it lives only
 # in the argocd namespace, so it is a plain Role there (bottom of this file).
@@ -49,7 +49,7 @@ kind: ClusterRole
 metadata:
   name: stratos-dbaas
 rules:
-  # st-<projectId> project namespaces: created via SSA at bootstrap, deleted by the
+  # stdb-<projectId> project namespaces: created via SSA at bootstrap, deleted by the
   # sync-driven GC once a project's last database is finalized. `list` is label-filtered
   # (app.kubernetes.io/managed-by=stratos) by the GC scan.
   - apiGroups: [""]
@@ -77,7 +77,7 @@ rules:
     resources: ["services"]
     verbs: ["get", "list"]
   # Namespace default-deny: stratos stamps a "stratos-default-deny" NetworkPolicy into every
-  # st-* namespace it ensures (dbaas.Service.EnsureProjectNamespace) — the chart's per-database
+  # stdb-* namespace it ensures (dbaas.Service.EnsureProjectNamespace) — the chart's per-database
   # policy is only the additive allow on top.
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]

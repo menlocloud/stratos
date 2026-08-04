@@ -76,12 +76,14 @@ func TestForeignServiceApplicationIsUnreachable(t *testing.T) {
 		t.Fatal("the alien Application was deleted")
 	}
 
-	// NAMESPACE GC — dbaas keeps its neutron-RBAC revocation marker in this shared namespace
-	// after its Application is gone. Collecting the namespace loses the only record of the share.
+	// NAMESPACE GC — dbaas no longer lands here (it owns the stdb- prefix), but a SECOND kamaji
+	// provider on the same cluster still shares a project's namespace, and each keeps its
+	// keystone-appcred revocation record in it after its Application is gone. Collecting the
+	// namespace loses the only record by which that credential can be revoked.
 	api.namespaces[ns] = map[string]string{LabelManagedBy: ManagedByValue}
-	api.secretObjs[ns+"/std-deadbeef-net-share"] = map[string]any{
+	api.secretObjs[ns+"/stc-0ther1234-cloud-config"] = map[string]any{
 		"metadata": map[string]any{
-			"name": "std-deadbeef-net-share",
+			"name": "stc-0ther1234-cloud-config",
 			"labels": map[string]any{
 				LabelManagedBy: ManagedByValue,
 				LabelService:   foreign,
@@ -96,7 +98,7 @@ func TestForeignServiceApplicationIsUnreachable(t *testing.T) {
 	}
 
 	// With the foreign remnant gone it may proceed — the probe must not wedge the GC shut.
-	delete(api.secretObjs, ns+"/std-deadbeef-net-share")
+	delete(api.secretObjs, ns+"/stc-0ther1234-cloud-config")
 	if err := svc.gcNamespace(ctx, ns); err != nil {
 		t.Fatal(err)
 	}

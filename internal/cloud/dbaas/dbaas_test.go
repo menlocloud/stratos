@@ -331,7 +331,11 @@ func TestSpecValidate(t *testing.T) {
 }
 
 func TestNames(t *testing.T) {
-	if NamespaceFor("p1") != "st-p1" {
+	// The prefix is a boundary, not a name. It must differ from kamaji's `st-` — the two products
+	// share a cluster — and it must not MATCH the glob `st-*`, which is the destination
+	// constraint on kamaji's ArgoCD AppProject. Twinned with deploy/dbaas-cluster/appproject.yaml
+	// (namespace: "stdb-*"); changing one without the other breaks every database sync.
+	if NamespaceFor("p1") != "stdb-p1" {
 		t.Fatal("NamespaceFor")
 	}
 	if LBServiceName("std-x") != "std-x-lb" {
@@ -493,7 +497,7 @@ func TestBuildApplication(t *testing.T) {
 	if digStr(app, "spec", "source", "targetRevision") != "0.1.0" {
 		t.Fatal("chart pin fallback")
 	}
-	if digStr(app, "spec", "destination", "namespace") != "st-p1" {
+	if digStr(app, "spec", "destination", "namespace") != NamespaceFor("p1") {
 		t.Fatal("destination namespace")
 	}
 	labels, _ := dig(app, "metadata", "labels").(map[string]any)
@@ -532,14 +536,14 @@ func TestServiceCreateDelete(t *testing.T) {
 	if !shared {
 		t.Fatal("ensureShare not invoked")
 	}
-	wantOps := []string{"ns:st-p1", "np:stratos-default-deny", "secret:" + NetShareSecretName(spec.ID), "secret:" + AuthSecretName(spec.ID), "app:" + spec.ID}
+	wantOps := []string{"ns:" + NamespaceFor("p1"), "np:stratos-default-deny", "secret:" + NetShareSecretName(spec.ID), "secret:" + AuthSecretName(spec.ID), "app:" + spec.ID}
 	if got := strings.Join(api.ops, ","); got != strings.Join(wantOps, ",") {
 		t.Fatalf("create op order = %s, want %s", got, strings.Join(wantOps, ","))
 	}
-	if _, has := api.netpols[key("st-p1", "stratos-default-deny")]; !has {
+	if _, has := api.netpols[key(NamespaceFor("p1"), "stratos-default-deny")]; !has {
 		t.Fatal("namespace default-deny must be stamped at ensure time")
 	}
-	marker := api.secrets[key("st-p1", NetShareSecretName(spec.ID))]
+	marker := api.secrets[key(NamespaceFor("p1"), NetShareSecretName(spec.ID))]
 	if digStr(marker, "metadata", "annotations", AnnotationNetworkID) != "net-1" ||
 		digStr(marker, "metadata", "annotations", AnnotationOSProject) != "dbaas-tenant" ||
 		digStr(marker, "metadata", "annotations", AnnotationOSRegion) != "RegionOne" {
@@ -554,7 +558,7 @@ func TestServiceCreateDelete(t *testing.T) {
 	}); err == nil {
 		t.Fatal("ensureShare failure must fail the create")
 	}
-	if _, has := api3.secrets[key("st-p1", NetShareSecretName(spec3.ID))]; has {
+	if _, has := api3.secrets[key(NamespaceFor("p1"), NetShareSecretName(spec3.ID))]; has {
 		t.Fatal("marker must be reaped when ensureShare fails")
 	}
 	if _, has := api3.apps[key("argocd", spec3.ID)]; has {
@@ -571,7 +575,7 @@ func TestServiceCreateDelete(t *testing.T) {
 	if _, err := s2.CreateDatabase(ctx, testSpec(EnginePostgreSQL, "17"), testShare(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, has := api2.secrets[key("st-p1", AuthSecretName("std-abc12345"))]; has {
+	if _, has := api2.secrets[key(NamespaceFor("p1"), AuthSecretName("std-abc12345"))]; has {
 		t.Fatal("postgresql must not get a stratos auth secret")
 	}
 
@@ -582,7 +586,7 @@ func TestServiceCreateDelete(t *testing.T) {
 	if _, alive := api.apps[key("argocd", spec.ID)]; alive {
 		t.Fatal("application not deleted")
 	}
-	if _, has := api.secrets[key("st-p1", NetShareSecretName(spec.ID))]; !has {
+	if _, has := api.secrets[key(NamespaceFor("p1"), NetShareSecretName(spec.ID))]; !has {
 		t.Fatal("net-share marker must survive the delete (revocation record)")
 	}
 }
@@ -607,9 +611,9 @@ func TestOwnershipGuards(t *testing.T) {
 func TestFinalizeOrphans(t *testing.T) {
 	ctx := context.Background()
 	mkMarker := func(api *fakeAPI, dbID string, age time.Duration) {
-		k := key("st-p1", NetShareSecretName(dbID))
+		k := key(NamespaceFor("p1"), NetShareSecretName(dbID))
 		api.secrets[k] = map[string]any{"metadata": map[string]any{
-			"name": NetShareSecretName(dbID), "namespace": "st-p1",
+			"name": NetShareSecretName(dbID), "namespace": NamespaceFor("p1"),
 			"creationTimestamp": time.Now().UTC().Add(-age).Format(time.RFC3339),
 			"labels":            map[string]any{LabelProject: "p1", LabelService: "svc-dbaas", LabelManagedBy: ManagedByValue},
 			"annotations": map[string]any{
@@ -641,7 +645,7 @@ func TestFinalizeOrphans(t *testing.T) {
 	if pending, err = s.FinalizeOrphans(ctx, "p1", nil); err != nil || pending != 0 {
 		t.Fatalf("live app: pending=%d err=%v", pending, err)
 	}
-	if _, has := api.secrets[key("st-p1", NetShareSecretName("std-live"))]; !has {
+	if _, has := api.secrets[key(NamespaceFor("p1"), NetShareSecretName("std-live"))]; !has {
 		t.Fatal("live database's marker must stay")
 	}
 
@@ -649,7 +653,7 @@ func TestFinalizeOrphans(t *testing.T) {
 	api = newFakeAPI()
 	s = NewWithAPI(api, testConfig(), "svc-dbaas")
 	mkMarker(api, "std-lb", 2*time.Hour)
-	api.services[key("st-p1", LBServiceName("std-lb"))] = map[string]any{"metadata": map[string]any{"name": LBServiceName("std-lb")}}
+	api.services[key(NamespaceFor("p1"), LBServiceName("std-lb"))] = map[string]any{"metadata": map[string]any{"name": LBServiceName("std-lb")}}
 	if pending, err = s.FinalizeOrphans(ctx, "p1", nil); err != nil || pending != 1 {
 		t.Fatalf("lb present: pending=%d err=%v", pending, err)
 	}
@@ -664,7 +668,7 @@ func TestFinalizeOrphans(t *testing.T) {
 	if pending != 1 || err == nil {
 		t.Fatalf("revoke failure must keep the marker: pending=%d err=%v", pending, err)
 	}
-	if _, has := api.secrets[key("st-p1", NetShareSecretName("std-x"))]; !has {
+	if _, has := api.secrets[key(NamespaceFor("p1"), NetShareSecretName("std-x"))]; !has {
 		t.Fatal("marker deleted despite failed revoke")
 	}
 
@@ -690,7 +694,7 @@ func TestFinalizeOrphans(t *testing.T) {
 	if revoked {
 		t.Fatal("revoke must be skipped while a sibling database rides the network")
 	}
-	if _, has := api.secrets[key("st-p1", NetShareSecretName("std-x"))]; has {
+	if _, has := api.secrets[key(NamespaceFor("p1"), NetShareSecretName("std-x"))]; has {
 		t.Fatal("finished-cascade marker must be reaped")
 	}
 
@@ -712,7 +716,7 @@ func TestFinalizeOrphans(t *testing.T) {
 	if revoked {
 		t.Fatal("revoke must be skipped while a mid-create sibling's marker holds the network")
 	}
-	if _, has := api.secrets[key("st-p1", NetShareSecretName("std-x"))]; has {
+	if _, has := api.secrets[key(NamespaceFor("p1"), NetShareSecretName("std-x"))]; has {
 		t.Fatal("orphan marker must be reaped even when the revoke is skipped")
 	}
 
@@ -720,25 +724,25 @@ func TestFinalizeOrphans(t *testing.T) {
 	api = newFakeAPI()
 	s = NewWithAPI(api, testConfig(), "svc-dbaas")
 	mkMarker(api, "std-x", 2*time.Hour)
-	api.secrets[key("st-p1", AuthSecretName("std-x"))] = map[string]any{"metadata": map[string]any{
-		"name": AuthSecretName("std-x"), "namespace": "st-p1"}}
+	api.secrets[key(NamespaceFor("p1"), AuthSecretName("std-x"))] = map[string]any{"metadata": map[string]any{
+		"name": AuthSecretName("std-x"), "namespace": NamespaceFor("p1")}}
 	api.failDelete[AuthSecretName("std-x")] = true
 	pending, err = s.FinalizeOrphans(ctx, "p1", func(_ context.Context, _, _, _, _ string) error { return nil })
 	if pending != 1 || err == nil {
 		t.Fatalf("auth delete failure: pending=%d err=%v", pending, err)
 	}
-	if _, has := api.secrets[key("st-p1", NetShareSecretName("std-x"))]; !has {
+	if _, has := api.secrets[key(NamespaceFor("p1"), NetShareSecretName("std-x"))]; !has {
 		t.Fatal("marker must survive an auth-secret delete failure (retry driver)")
 	}
 
 	// Clean orphan → revoke called with the recorded ids, marker + auth reaped, ns GC'd.
 	api = newFakeAPI()
 	s = NewWithAPI(api, testConfig(), "svc-dbaas")
-	api.namespaces["st-p1"] = map[string]any{"metadata": map[string]any{
-		"name": "st-p1", "labels": map[string]any{LabelManagedBy: ManagedByValue}}}
+	api.namespaces[NamespaceFor("p1")] = map[string]any{"metadata": map[string]any{
+		"name": NamespaceFor("p1"), "labels": map[string]any{LabelManagedBy: ManagedByValue}}}
 	mkMarker(api, "std-x", 2*time.Hour)
-	api.secrets[key("st-p1", AuthSecretName("std-x"))] = map[string]any{"metadata": map[string]any{
-		"name": AuthSecretName("std-x"), "namespace": "st-p1"}}
+	api.secrets[key(NamespaceFor("p1"), AuthSecretName("std-x"))] = map[string]any{"metadata": map[string]any{
+		"name": AuthSecretName("std-x"), "namespace": NamespaceFor("p1")}}
 	var gotSvc, gotProj, gotRegion, gotNet string
 	pending, err = s.FinalizeAllOrphans(ctx, func(_ context.Context, osSvc, osProj, osRegion, net string) error {
 		gotSvc, gotProj, gotRegion, gotNet = osSvc, osProj, osRegion, net
@@ -750,10 +754,10 @@ func TestFinalizeOrphans(t *testing.T) {
 	if gotSvc != "svc-os" || gotProj != "dbaas-tenant" || gotRegion != "RegionOne" || gotNet != "net-1" {
 		t.Fatalf("revoke got (%s,%s,%s,%s)", gotSvc, gotProj, gotRegion, gotNet)
 	}
-	if _, has := api.secrets[key("st-p1", AuthSecretName("std-x"))]; has {
+	if _, has := api.secrets[key(NamespaceFor("p1"), AuthSecretName("std-x"))]; has {
 		t.Fatal("auth secret must be reaped with the marker")
 	}
-	if _, has := api.namespaces["st-p1"]; has {
+	if _, has := api.namespaces[NamespaceFor("p1")]; has {
 		t.Fatal("emptied managed namespace must be GC'd")
 	}
 }
@@ -772,7 +776,7 @@ func TestSyncProviderList(t *testing.T) {
 		"health": map[string]any{"status": "Healthy"},
 		"sync":   map[string]any{"status": "Synced"},
 	}
-	api.services[key("st-p1", LBServiceName(spec.ID))] = map[string]any{
+	api.services[key(NamespaceFor("p1"), LBServiceName(spec.ID))] = map[string]any{
 		"status": map[string]any{"loadBalancer": map[string]any{"ingress": []any{map[string]any{"ip": "10.1.0.5"}}}},
 	}
 	// A terminating sibling must NOT re-enter the cache.
@@ -863,11 +867,11 @@ func TestConnectionInfo(t *testing.T) {
 		t.Fatal("expected not-ready before the operator mints the secret")
 	}
 	// CNPG mints the app secret; LB gets its VIP.
-	api.secretData[key("st-p1", spec.ID+"-app")] = map[string][]byte{
+	api.secretData[key(NamespaceFor("p1"), spec.ID+"-app")] = map[string][]byte{
 		"username": []byte("app"), "password": []byte("s3cr3t"), "dbname": []byte("app"),
 	}
-	api.secrets[key("st-p1", spec.ID+"-app")] = map[string]any{"metadata": map[string]any{"name": spec.ID + "-app"}}
-	api.services[key("st-p1", LBServiceName(spec.ID))] = map[string]any{
+	api.secrets[key(NamespaceFor("p1"), spec.ID+"-app")] = map[string]any{"metadata": map[string]any{"name": spec.ID + "-app"}}
+	api.services[key(NamespaceFor("p1"), LBServiceName(spec.ID))] = map[string]any{
 		"status": map[string]any{"loadBalancer": map[string]any{"ingress": []any{map[string]any{"ip": "10.1.0.9"}}}},
 	}
 	info, err := s.ConnectionInfo(ctx, "p1", spec.ID)
@@ -890,18 +894,18 @@ func TestResetPassword(t *testing.T) {
 	if _, err := s.CreateDatabase(ctx, spec, testShare(), nil); err != nil {
 		t.Fatal(err)
 	}
-	before := string(api.secretData[key("st-p1", AuthSecretName(spec.ID))]["password"])
+	before := string(api.secretData[key(NamespaceFor("p1"), AuthSecretName(spec.ID))]["password"])
 	pw, err := s.ResetPassword(ctx, "p1", spec.ID, EngineMariaDB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := string(api.secretData[key("st-p1", AuthSecretName(spec.ID))]["password"])
+	after := string(api.secretData[key(NamespaceFor("p1"), AuthSecretName(spec.ID))]["password"])
 	if pw == "" || pw == before || after != pw {
 		t.Fatalf("reset: before=%q pw=%q after=%q", before, pw, after)
 	}
 	// The rotation must be a DATA-ONLY patch: the stratos ownership labels applied at create
 	// survive (an SSA re-apply under the same field manager would retract them).
-	auth := api.secrets[key("st-p1", AuthSecretName(spec.ID))]
+	auth := api.secrets[key(NamespaceFor("p1"), AuthSecretName(spec.ID))]
 	if digStr(auth, "metadata", "labels", LabelManagedBy) != ManagedByValue {
 		t.Fatal("reset stripped the ownership labels off the stratos-owned auth secret")
 	}
@@ -926,13 +930,13 @@ func TestResetPasswordOperatorOwned(t *testing.T) {
 	if _, err := s.ResetPassword(ctx, "p1", spec.ID, EnginePostgreSQL); err == nil || !strings.Contains(err.Error(), "not ready") {
 		t.Fatalf("pre-mint reset must be not-ready, got %v", err)
 	}
-	if _, has := api.secrets[key("st-p1", spec.ID+"-app")]; has {
+	if _, has := api.secrets[key(NamespaceFor("p1"), spec.ID+"-app")]; has {
 		t.Fatal("reset must never create the operator's secret")
 	}
 	// CNPG mints the basic-auth secret.
-	k := key("st-p1", spec.ID+"-app")
+	k := key(NamespaceFor("p1"), spec.ID+"-app")
 	api.secrets[k] = map[string]any{"metadata": map[string]any{
-		"name": spec.ID + "-app", "namespace": "st-p1",
+		"name": spec.ID + "-app", "namespace": NamespaceFor("p1"),
 		"labels": map[string]any{"cnpg.io/cluster": spec.ID},
 	}}
 	api.secretTypes[k] = "kubernetes.io/basic-auth"

@@ -110,7 +110,7 @@ users: []
 # resourceId (std-xxxxxxxx) is the base name of EVERY object this chart
 # renders — not the release name, which is an ArgoCD implementation detail.
 stratos:
-  # -- Owning stratos project id (also the st-<projectId> namespace suffix).
+  # -- Owning stratos project id (also the stdb-<projectId> namespace suffix).
   projectId: ""
   # -- The DATABASE_CLUSTER resource id, e.g. std-1a2b3c4d.
   resourceId: ""

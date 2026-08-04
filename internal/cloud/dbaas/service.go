@@ -73,10 +73,16 @@ func (s *Service) Config() Config { return s.cfg }
 
 // EnsureProjectNamespace creates/labels the project's namespace on the DB cluster and stamps
 // the namespace-wide default-deny NetworkPolicy — the dbaas bootstrap leg (BootstrapDbaasOnto).
-// The default-deny lives HERE, not in the chart: multiple releases share one st-* namespace and
-// would collide on its name, and the isolation promise must hold for any pod that ever lands in
-// the namespace, not only chart-rendered ones. The chart's per-database policy then opens the
+// The default-deny lives HERE, not in the chart: multiple releases share one stdb-* namespace
+// and would collide on its name, and the isolation promise must hold for any pod that ever lands
+// in the namespace, not only chart-rendered ones. The chart's per-database policy then opens the
 // engine-specific holes.
+//
+// podSelector {} is namespace-WIDE, which is only sound because this namespace belongs to dbaas
+// alone. It did not: while databases shared kamaji's st-<projectId> namespace this policy also
+// selected tenant control plane pods and, under a CNI that enforces NetworkPolicy, would have
+// cut a customer's Kubernetes API server off from its own workers. The stdb- prefix is what
+// makes "every pod in here is a database pod" true, and therefore what makes this line correct.
 func (s *Service) EnsureProjectNamespace(ctx context.Context, projectID string) error {
 	ns := NamespaceFor(projectID)
 	if err := s.api.EnsureNamespace(ctx, ns, map[string]string{
@@ -433,15 +439,16 @@ func (s *Service) gcNamespace(ctx context.Context, ns string) error {
 	if !managedBy(nsObj) {
 		return nil
 	}
-	// The project namespace is SHARED with the sibling provider (both derive "st-"+projectID,
-	// and in production both land on the same cluster — the "different physical cluster, so no
-	// collision" premise in the NamespaceFor comment does not hold). Deleting it takes the other
-	// product's remnants with it, and the object each provider keeps LONGEST is precisely the one
-	// that must outlive its Application: the record needed to revoke a credential or a network
-	// share. Losing that leaks it permanently and silently, with nothing left to find it by.
+	// Refuse while any stratos-owned secret from ANOTHER service is still here.
 	//
-	// So refuse on any stratos-owned secret belonging to another service. Deliberately NOT scoped
-	// by project — a foreign remnant here is a reason to stop, whoever it belongs to.
+	// The sibling product no longer shares this namespace (dbaas moved to its own stdb- prefix
+	// precisely so that it could not), so this is not that crossing — it is the same hazard one
+	// level down: two providers OF THE SAME KIND on one cluster still collide on a project's
+	// namespace. What is at stake is the object each provider deliberately keeps LONGEST, after
+	// its Application is already gone: the only record by which a credential or a network share
+	// can ever be revoked. Deleting the namespace loses it silently, with nothing left to find
+	// the leaked grant by — so a foreign remnant is a reason to stop, whoever owns it. NOT scoped
+	// by project, for the same reason.
 	secrets, err := s.api.ListSecrets(ctx, ns, LabelManagedBy+"="+ManagedByValue)
 	if err != nil {
 		return err

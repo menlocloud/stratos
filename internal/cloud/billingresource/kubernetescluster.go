@@ -46,8 +46,12 @@ func (p *KubernetesClusterProvider) GetBillingInformation(_ context.Context, _ b
 }
 
 func kubernetesClusterType() *billingapi.BillingResourceType {
-	s := func(n string) billingapi.ResourceAttribute { return billingapi.ResourceAttribute{Name: n, Type: "string"} }
-	n := func(nm string) billingapi.ResourceAttribute { return billingapi.ResourceAttribute{Name: nm, Type: "number"} }
+	s := func(n string) billingapi.ResourceAttribute {
+		return billingapi.ResourceAttribute{Name: n, Type: "string"}
+	}
+	n := func(nm string) billingapi.ResourceAttribute {
+		return billingapi.ResourceAttribute{Name: nm, Type: "number"}
+	}
 	return &billingapi.BillingResourceType{ResourceType: "kubernetes_cluster", Attributes: []billingapi.ResourceAttribute{
 		s("display_name"), s("version"), s("status"), s("endpoint"), n("cp_replicas"), n("node_groups"),
 	}}

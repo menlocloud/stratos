@@ -1,9 +1,11 @@
 {{/*
-Per-database NetworkPolicy. The st-<projectId> namespace gets an ingress
+Per-database NetworkPolicy. The stdb-<projectId> namespace gets an ingress
 default-deny ("stratos-default-deny") stamped by stratos when it ensures the
 namespace (dbaas.Service.EnsureProjectNamespace — NOT by this chart, whose
 releases share the namespace and would collide on the policy name); this
-policy is the additive allow for one database's pods.
+policy is the additive allow for one database's pods. That namespace holds
+databases ONLY — the stdb- prefix exists so the namespace-wide deny cannot
+reach the Managed-Kubernetes product's pods on the same cluster.
 
 WHY allowedCidrs ARE NOT MIRRORED HERE: client filtering is enforced at the
 Octavia LB (spec.loadBalancerSourceRanges on the <id>-lb Service = the Octavia

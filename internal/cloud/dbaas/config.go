@@ -22,9 +22,28 @@ import (
 // Customer-typed names are display-only; every k8s-side identifier is the generated database id
 // (`std-<8 hex>`), so duplicate display names, unicode and RFC1123 limits are non-issues.
 
-// NamespaceFor is the DB-cluster namespace holding a project's databases. Same derivation as
-// kamaji's (different physical cluster, so no collision).
-func NamespaceFor(projectID string) string { return "st-" + projectID }
+// NamespaceFor is the DB-cluster namespace holding a project's databases.
+//
+// The prefix differs from kamaji's `st-` ON PURPOSE, and it is a correctness boundary rather
+// than a naming preference. This used to share kamaji's derivation on the reasoning that the two
+// products run on different physical clusters — which is not true of any real deployment: the
+// Managed-Kubernetes management cluster and the Managed-Database cluster are the same cluster,
+// so both products landed in one namespace per project. Three things followed, and none of them
+// were visible until something broke:
+//
+//   - Each provider's namespace GC could collect the other's namespace, taking with it the one
+//     object each deliberately retains after its Application is gone — the record by which a
+//     keystone application credential or a neutron RBAC share is revoked.
+//   - The namespace-wide default-deny NetworkPolicy this package applies (podSelector {}) also
+//     selected kamaji's tenant control plane pods, and Cilium enforces it.
+//   - Every "is this mine" question had to be answered by labels, in code, in each of a growing
+//     number of places — a list that is only ever correct until someone adds the next one.
+//
+// A separate namespace answers all three structurally. Keep it distinct from kamaji's prefix in
+// a way that cannot glob-collide: `st-*` must not match a dbaas namespace, because that glob is
+// the destination constraint on kamaji's ArgoCD AppProject (and `stdb-*` is dbaas's own — see
+// deploy/dbaas-cluster/appproject.yaml). Change one and you must change the other.
+func NamespaceFor(projectID string) string { return "stdb-" + projectID }
 
 // LBServiceName is the chart-rendered tenant-facing LoadBalancer Service for a database — the
 // chart contract twin of values.stratos.resourceId (templates/service-lb.yaml). The sync reads

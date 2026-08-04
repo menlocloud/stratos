@@ -3,7 +3,7 @@
 # Application stratos applies carries `spec.project: stratos-dbaas`
 # (internal/cloud/dbaas/application.go), so even a compromised stratos credential can only:
 #   * source charts from OUR pinned OCI registry (never an arbitrary git/helm repo),
-#   * deploy into in-cluster st-* namespaces (never argocd/kube-system/operator namespaces).
+#   * deploy into in-cluster stdb-* namespaces (never argocd/kube-system/operator namespaces).
 #
 # The project name and the argocd namespace must match the provider config
 # (config.argocd.project / config.argocd.namespace — deploy/seed/external-service-dev.json).
@@ -26,10 +26,15 @@ spec:
   sourceRepos:
     - ghcr.io/menlocloud/stratos-charts
 
-  # In-cluster st-<projectId> namespaces only.
+  # In-cluster stdb-<projectId> namespaces only.
+  #
+  # `stdb-`, NOT `st-`: the Managed-Kubernetes provider runs on this same cluster and owns the
+  # `st-*` namespaces (deploy/mgmt-cluster/appproject.yaml). The two globs MUST NOT overlap —
+  # this constraint is the boundary that keeps a compromised stratos credential on one product
+  # from deploying into the other's namespaces. Twinned with dbaas.NamespaceFor; change both.
   destinations:
     - server: https://kubernetes.default.svc
-      namespace: "st-*"
+      namespace: "stdb-*"
 
   # Cluster-scoped resources the chart may create. Conservative default: NONE — the
   # database-cluster chart renders only namespaced objects (operator CRs, Service,
@@ -41,5 +46,5 @@ spec:
   # CustomResourceDefinition.
   clusterResourceWhitelist: []
 
-  # Namespaced resources: no blacklist — the AppProject's destination constraint (st-* only)
+  # Namespaced resources: no blacklist — the AppProject's destination constraint (stdb-* only)
   # is the boundary that matters; the chart renders its objects freely inside it.

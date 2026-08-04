@@ -330,7 +330,11 @@ func TestClusterAddons(t *testing.T) {
 		t.Errorf("addons = %v", addons)
 	}
 	// The openstack credential-push toggle must never be client-reachable.
-	if err := (func() error { s := testSpec(); s.Addons = map[string]bool{"openstack": true}; return s.Validate(testCfg().Defaults) })(); err == nil || !strings.Contains(err.Error(), "add-on") {
+	if err := (func() error {
+		s := testSpec()
+		s.Addons = map[string]bool{"openstack": true}
+		return s.Validate(testCfg().Defaults)
+	})(); err == nil || !strings.Contains(err.Error(), "add-on") {
 		t.Errorf("unknown addon: err = %v", err)
 	}
 	if err := spec.Validate(testCfg().Defaults); err != nil {
@@ -593,6 +597,7 @@ func (f *fakeAPI) ApplyApplication(_ context.Context, app map[string]any) error 
 func (f *fakeAPI) GetApplication(_ context.Context, ns, name string) (map[string]any, error) {
 	return f.apps[ns+"/"+name], nil
 }
+
 // matchSelector applies a "k=v[,k2=v2…]" label selector against metadata.labels.
 func matchSelector(obj map[string]any, selector string) bool {
 	if selector == "" {
