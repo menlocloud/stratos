@@ -16,9 +16,15 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.8.0 drops the inherited registryMirrors default (a third party's quay.io namespace) — the
+# chart now mirrors nothing until you configure it, so installing it never routes an operator's
+# image pulls through somebody else's cache. Stratos providers set `config.cluster.registryMirrors`;
+# a plain helm install sets registryMirrors in values. Upgrading an EXISTING cluster to 0.8.0
+# without setting them removes its hosts.toml files and sends pulls straight at the upstream
+# registries — set your own mirrors in the same change.
 # 0.7.0 enables Cilium Hubble + hubble-relay by default (flow observability in every cluster).
 # 0.5.0 adds clusterNetworking.disableExternalNetwork (CAPO auto-discovery opt-out for clusters
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.7.1
+version: 0.8.0

@@ -441,17 +441,37 @@ apiServer:
 # =============================================================================
 # Registry Mirror Configuration
 # =============================================================================
-registryMirrors:
-  docker.io:
-    - https://quay.io/v2/azimuth/docker.io
-  ghcr.io:
-    - https://quay.io/v2/azimuth/ghcr.io
-  nvcr.io:
-    - https://quay.io/v2/azimuth/nvcr.io
-  quay.io:
-    - https://quay.io/v2/azimuth/quay.io
-  registry.k8s.io:
-    - https://quay.io/v2/azimuth/registry.k8s.io
+# -- containerd pull-through mirrors: upstream registry host -> mirror endpoint(s), rendered
+# into /etc/containerd/certs.d/<host>/hosts.toml on every node. Covers EVERY image the node
+# pulls, not just this chart's, and containerd falls back to the upstream registry on a miss.
+#
+# EMPTY BY DEFAULT — on purpose. This chart is derived from the Azimuth capi-helm-charts, whose
+# default routed every pull through a third party's quay.io namespace; a chart published for
+# anyone to install must not silently send their image traffic there. Point it at YOUR OWN cache
+# instead (a Harbor proxy-cache project is https://<harbor>/v2/<project> — a registry API root,
+# not a repository path). Without a mirror, node bootstrap runs against the public registries and
+# is subject to their rate limits.
+#
+#   registryMirrors:
+#     docker.io:
+#       - https://harbor.example.com/v2/dockerhub
+#     # containerd does NOT fold this into docker.io, and Bitnami-style charts write it literally
+#     registry-1.docker.io:
+#       - https://harbor.example.com/v2/dockerhub
+#     ghcr.io:
+#       - https://harbor.example.com/v2/ghcr-io
+#     quay.io:
+#       - https://harbor.example.com/v2/quay-io
+#     registry.k8s.io:
+#       - https://harbor.example.com/v2/k8s-io
+#
+# The long form takes per-mirror options:
+#     docker.io:
+#       upstream: https://registry-1.docker.io
+#       mirrors:
+#         - url: https://harbor.example.com/v2/dockerhub
+#           capabilities: ["pull", "resolve"]
+registryMirrors: {}
 
 # -- A map of trusted CAs to add to the system trust on cluster nodes
 trustedCAs: {}
