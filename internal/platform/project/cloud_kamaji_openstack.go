@@ -55,10 +55,8 @@ func (h *Handler) kamajiProvisionCloud(ctx context.Context, p *Project, d kamaji
 
 // kamajiResolveClusterNetwork settles the cluster's network placement before anything is built.
 //
-// Dedicated mode (no NetworkID): nothing to do — CAPO creates a per-cluster network, and the
-// provider-level default external network applies.
-//
-// BYO mode (NetworkID+SubnetID set): the ids are customer input, so first PROVE they belong to the
+// Every cluster is bring-your-own VPC (ClusterSpec.Validate enforces it), so this always runs:
+// the ids are customer input, so first PROVE they belong to the
 // project's own tenant. ListNetworksFull/ListSubnetsFull are project_id-filtered AND the create
 // would otherwise happily wire nodes onto a shared/external network that happens to be visible
 // cross-tenant. Then derive the external network the same way EKS-style clouds hide this knob:
@@ -75,8 +73,12 @@ func (h *Handler) kamajiProvisionCloud(ctx context.Context, p *Project, d kamaji
 // external networks visible that is a hard reconcile error, so fail HERE with a message the
 // customer can act on instead.
 func (h *Handler) kamajiResolveClusterNetwork(ctx context.Context, p *Project, osSvcID string, d kamaji.ClusterDefaults, spec *kamaji.ClusterSpec) error {
-	if spec.NetworkID == "" {
-		return nil
+	// Unreachable via create — Validate rejects an empty network before this is called — but it
+	// stays a hard error rather than an early return. This function is the ONLY place a
+	// customer-supplied network id is proven to belong to their tenant; a future caller that
+	// skips validation must fail here, not silently wire nodes onto whatever id it was handed.
+	if spec.NetworkID == "" || spec.SubnetID == "" {
+		return fmt.Errorf("Managed Kubernetes needs a network and subnet from your project")
 	}
 	cc, ok := h.tryTenantClient(ctx, p, osSvcID)
 	if !ok {

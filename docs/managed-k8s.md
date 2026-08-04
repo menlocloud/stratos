@@ -254,13 +254,16 @@ the stored desired spec → stratos re-applies the Application (plan §9, one re
 
 ### Cluster networking (create-time, immutable)
 
-The create wizard offers, per cluster, either a **dedicated** network (the default — CAPO
-creates an isolated network + subnet + router from `nodeCidr`) or one of the project's **own**
-networks + subnets (EKS-style "pick your VPC subnet"). The customer never sees an external
-network id:
+Every cluster is **bring-your-own VPC**: the create wizard requires one of the project's own
+networks + subnets (EKS-style "pick your VPC subnet"), and `ClusterSpec.Validate` rejects a spec
+without both. The customer never sees an external network id.
 
-- **Dedicated**: `clusterNetworking.externalNetworkId` = the provider default (or CAPO
-  auto-discovery when there is exactly one external network).
+A cluster used to be creatable with no pick at all, which meant CAPO built a dedicated network +
+subnet + router from `nodeCidr`. That was removed: those nodes sat on a network the customer did
+not own, could not route to from the rest of their estate, and could not see in their own network
+list — and it was the one create path that skipped the tenant-ownership proof below, since a
+platform-created network has nothing to prove.
+
 - **Bring-your-own**: stratos verifies the network + subnet belong to the project's tenant,
   then **derives** the external network from the router that already egresses the chosen
   subnet (falling back to any project router, then the provider default). That derived id

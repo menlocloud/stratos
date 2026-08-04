@@ -282,8 +282,15 @@ func (s ClusterSpec) Validate(d ClusterDefaults) error {
 		return fmt.Errorf("cluster: projectId is required")
 	case s.Version == "":
 		return fmt.Errorf("cluster: version is required")
-	case (s.NetworkID == "") != (s.SubnetID == ""):
-		return fmt.Errorf("cluster: networkId and subnetId must be set together (or both left empty for a dedicated cluster network)")
+	// Bring-your-own VPC, always. Leaving both empty used to mean "let CAPO build a dedicated
+	// per-cluster network", which reads like a convenience and is not one: those nodes land on a
+	// network the customer does not own, cannot route to from the rest of their estate, and
+	// cannot see in their own network list. It also skipped the only ownership check on this
+	// path — BYO ids are PROVEN to belong to the project's tenant before use
+	// (cloud_kamaji_openstack.go), and a dedicated network has nothing to prove, so it bypassed
+	// it entirely. Requiring the pick makes that proof unconditional.
+	case s.NetworkID == "" || s.SubnetID == "":
+		return fmt.Errorf("cluster: networkId and subnetId are required (the cluster's nodes land in your VPC)")
 	case len(s.NodeGroups) == 0:
 		return fmt.Errorf("cluster: at least one node group is required")
 	}

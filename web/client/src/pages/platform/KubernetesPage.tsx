@@ -78,9 +78,9 @@ type FlavorOption = {
   spec?: string // "4 vCPU · 8 GB RAM"
   blocked?: boolean // exceeds project quota or region GPU capacity — must not be picked
 }
-// A pickable cluster network: one of the project's own VPCs plus its subnets. The default —
-// no pick — is a dedicated network CAPO creates for the cluster (EKS-style, the external
-// gateway is derived server-side and never shown).
+// A pickable cluster network: one of the project's own VPCs plus its subnets. The pick is
+// REQUIRED — worker nodes land in the customer's own VPC, never on a platform-created network
+// they cannot route to or see. The external gateway is derived server-side and never shown.
 type NetworkOption = {
   id: string
   name: string
@@ -809,15 +809,15 @@ function ClusterFormDialog({
   const [oidcOpen, setOidcOpen] = useState(false)
   const [oidc, setOidc] = useState<OidcDraft>({ ...emptyOidc })
   const [allowedCidrs, setAllowedCidrs] = useState("")
-  // "" = a dedicated network the platform creates for the cluster; otherwise the picked network id.
   const [networkId, setNetworkId] = useState("")
   const [subnetId, setSubnetId] = useState("")
   const selectedNetwork = networks.find((n) => n.id === networkId)
   const [pending, setPending] = useState(false)
 
-  // BYO requires BOTH; the subnet select only appears once a network is chosen, and picking a
-  // network clears a stale subnet from a previous one.
-  const networkValid = !networkId || (!!subnetId && !!selectedNetwork?.subnets.some((s) => s.id === subnetId))
+  // BOTH ids are required — the server rejects a half-configured or absent pick. The subnet
+  // select only appears once a network is chosen, and picking a network clears a stale subnet
+  // from a previous one.
+  const networkValid = !!networkId && !!subnetId && !!selectedNetwork?.subnets.some((s) => s.id === subnetId)
   const valid =
     !!name.trim() && !!version && networkValid && groups.length > 0 && groups.every(groupValid)
 
@@ -964,31 +964,30 @@ function ClusterFormDialog({
             ))}
           </div>
 
-          {networks.length > 0 && (
+          {(
             <div className="grid gap-3 rounded-lg border p-3">
               <div className="grid gap-2">
                 <Label htmlFor="k8s-network">Network</Label>
                 <Select
-                  value={networkId || "__dedicated__"}
+                  value={networkId || undefined}
                   onValueChange={(v) => {
-                    const id = v === "__dedicated__" ? "" : v
-                    setNetworkId(id)
+                    setNetworkId(v)
                     setSubnetId("") // a subnet from the previous network is meaningless here
                   }}
                 >
                   <SelectTrigger id="k8s-network">
-                    <SelectValue />
+                    <SelectValue placeholder={networks.length ? "Pick a network" : "No networks with a subnet found"} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__dedicated__">Dedicated network (created for this cluster)</SelectItem>
                     {networks.map((n) => (
                       <SelectItem key={n.id} value={n.id}>{n.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Leave as “Dedicated” to let the platform create an isolated network. Pick one of your
-                  own networks to place worker nodes on it — it must reach the internet through a router.
+                  {networks.length
+                    ? "Worker nodes are placed on this network — it must reach the internet through a router."
+                    : "Create a network with a subnet and a router first, then come back — the cluster's nodes live in your own VPC."}
                 </p>
               </div>
               {selectedNetwork && (

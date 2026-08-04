@@ -33,6 +33,7 @@ func testCfg() Config {
 func testSpec() ClusterSpec {
 	return ClusterSpec{
 		ID: "stc-abcd1234", DisplayName: "prod cluster", ProjectID: "p1", Version: "1.35.4", HA: true,
+		NetworkID: "net-1", SubnetID: "sub-1",
 		OIDC:         map[string]string{"issuerUrl": "https://idp.example.com", "clientId": "kube"},
 		AllowedCIDRs: []string{"10.0.0.0/8", "1.2.3.4/32"},
 		NodeGroups: []NodeGroup{
@@ -96,21 +97,23 @@ func TestSpecValidate(t *testing.T) {
 	if err := testSpec().Validate(noDisk); err == nil {
 		t.Error("no root volume size anywhere: want error")
 	}
-	// BYO network needs BOTH ids or neither — a lone one is a half-configured cluster.
+	// The network pick is REQUIRED, and needs both halves. Leaving both empty used to mean "build
+	// a dedicated per-cluster network" — that path is gone, so absent must fail exactly like a
+	// half-configured one, and it must fail HERE rather than at CAPO.
 	half := testSpec()
-	half.NetworkID = "net-1"
+	half.SubnetID = ""
 	if err := half.Validate(d); err == nil {
 		t.Error("networkId without subnetId: want error")
 	}
 	half = testSpec()
-	half.SubnetID = "sub-1"
+	half.NetworkID = ""
 	if err := half.Validate(d); err == nil {
 		t.Error("subnetId without networkId: want error")
 	}
-	both := testSpec()
-	both.NetworkID, both.SubnetID = "net-1", "sub-1"
-	if err := both.Validate(d); err != nil {
-		t.Errorf("networkId+subnetId together: %v", err)
+	none := testSpec()
+	none.NetworkID, none.SubnetID = "", ""
+	if err := none.Validate(d); err == nil {
+		t.Error("no network at all: want error (bring-your-own VPC is mandatory)")
 	}
 }
 
@@ -155,13 +158,16 @@ func TestBuildValues(t *testing.T) {
 	if v["machineSSHKeyName"] != "stratos-support" {
 		t.Errorf("machineSSHKeyName = %v", v["machineSSHKeyName"])
 	}
-	// Dedicated network (no BYO ids): only the provider-default external network, no internalNetwork.
+	// The provider-default external network, plus the customer's own network as internalNetwork.
 	cn := v["clusterNetworking"].(map[string]any)
 	if cn["externalNetworkId"] != "ext-1" {
 		t.Errorf("default externalNetworkId = %v", cn["externalNetworkId"])
 	}
-	if _, has := cn["internalNetwork"]; has {
-		t.Error("dedicated cluster must not carry an internalNetwork")
+	in, _ := cn["internalNetwork"].(map[string]any)
+	nf, _ := in["networkFilter"].(map[string]any)
+	sf, _ := in["subnetFilter"].(map[string]any)
+	if nf["id"] != "net-1" || sf["id"] != "sub-1" {
+		t.Errorf("internalNetwork = %v", in)
 	}
 	groups := v["nodeGroups"].([]any)
 	if len(groups) != 2 {
