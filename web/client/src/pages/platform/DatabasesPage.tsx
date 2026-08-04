@@ -1259,8 +1259,8 @@ function DatabaseDetail({
           <div className="flex items-center gap-2 rounded-xl border bg-card p-4">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
             <span className="text-sm">
-              Working on it \u2014 this page refreshes itself. The endpoint appears once the internal
-              load balancer is programmed (a few minutes on first create).
+              Working on it {"\u2014"} this page refreshes itself. The endpoint appears once the
+              internal load balancer is programmed (a few minutes on first create).
             </span>
           </div>
         )}
@@ -1346,7 +1346,7 @@ function DatabaseDetail({
                     </>
                   ) : (
                     <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <Loader2 className="size-3 animate-spin" /> Pending \u2014 appears once the load balancer is programmed
+                      <Loader2 className="size-3 animate-spin" /> Pending {"\u2014"} appears once the load balancer is programmed
                     </span>
                   )}
                 </div>
