@@ -194,7 +194,10 @@ func parseVersion(v string) ([]int, error) {
 // ConnectionSecret returns the (secretName, userKey, passKey, dbKey) tuple GET_CONNECTION_INFO
 // reads for an engine. Empty userKey/dbKey = the value is fixed, not in the secret — see
 // DefaultUser/DefaultDB. Conventions (the chart's engine templates are the other half):
-//   - postgresql: CNPG-generated app-user secret `<id>-app` (superuser stays internal)
+//   - postgresql: CNPG-generated SUPERUSER secret `<id>-superuser` (the real `postgres` role,
+//     kept in sync by the operator because the chart sets enableSuperuserAccess). The customer
+//     owns the database, so they get the account that can install extensions and create roles;
+//     `<id>-app` stays as the fallback for databases created before that switch
 //   - ferretdb:   the CNPG BACKEND is named `<id>-pg`, so its app secret is `<id>-pg-app`;
 //     FerretDB reuses the backend's app credential over the Mongo wire protocol
 //   - mysql:      the Percona operator auto-generates `<id>-secrets` (chart pins
@@ -213,7 +216,9 @@ func parseVersion(v string) ([]int, error) {
 func ConnectionSecret(engine, dbID string) (name, userKey, passKey, dbKey string) {
 	switch engine {
 	case EnginePostgreSQL:
-		return dbID + "-app", "username", "password", "dbname"
+		// dbKey stays empty on purpose: the superuser Secret's own `dbname` is not the database
+		// the customer wants to land in (CNPG fills it for its own use), so DefaultDB decides.
+		return dbID + "-superuser", "username", "password", ""
 	case EngineFerretDB:
 		return dbID + "-pg-app", "username", "password", "dbname"
 	case EngineMySQL:
@@ -254,14 +259,27 @@ func DefaultUser(engine, dbID string) string {
 	return ""
 }
 
-// DefaultDB is the exposed database name when ConnectionSecret carries no dbKey. The mariadb
-// chart template creates database "app" for the declarative app user; mysql root has no
-// default schema; valkey has none by design.
+// DefaultDB is the exposed database name when ConnectionSecret carries no dbKey. postgresql and
+// mariadb both ship an `app` database created at bootstrap — the superuser/root account can
+// reach every database, but a connection string still has to name one, and `app` is the one that
+// exists and is the customer's. mysql root has no default schema; valkey has none by design.
 func DefaultDB(engine string) string {
-	if engine == EngineMariaDB {
+	if engine == EngineMariaDB || engine == EnginePostgreSQL {
 		return "app"
 	}
 	return ""
+}
+
+// PriorConnectionSecret is the tuple used before postgresql moved to the superuser account —
+// the scoped `app` role CNPG creates unconditionally. Databases provisioned by an older chart
+// have no `<id>-superuser` Secret at all (enableSuperuserAccess was off), so the connection
+// panel and RESET_PASSWORD fall back to this rather than reporting "credentials not ready" on a
+// database that has been serving traffic for months. Empty name = no fallback for that engine.
+func PriorConnectionSecret(engine, dbID string) (name, userKey, passKey, dbKey string) {
+	if engine == EnginePostgreSQL {
+		return dbID + "-app", "username", "password", "dbname"
+	}
+	return "", "", "", ""
 }
 
 // Port is the engine's client port — the LB Service port the chart renders (for kafka, the

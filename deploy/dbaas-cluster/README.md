@@ -15,6 +15,9 @@ Full operator runbook: [`docs/managed-dbaas.md`](../../docs/managed-dbaas.md).
    - **OpenStack cloud-controller-manager (OCCM)** — it is what turns the chart's
      `<id>-lb` Services into Octavia internal LBs (the whole connectivity model).
    - **cinder-csi** with a default StorageClass — every database volume is a PVC.
+   - **A working `kubectl logs` / `exec`** — i.e. the API server is authorized against the
+     kubelets. CNPG runs a backup by exec'ing into the instance pod, so a cluster missing that
+     binding takes no backups at all (`kubelet-api-admin.yaml` fixes it; see its header).
    - **ArgoCD** on this cluster. Any standard install; the manifests here assume the
      `argocd` namespace.
    - **A containerd registry mirror on the nodes** (`/etc/containerd/certs.d/<host>/hosts.toml`
@@ -60,6 +63,10 @@ Full operator runbook: [`docs/managed-dbaas.md`](../../docs/managed-dbaas.md).
 ## Apply order
 
 ```sh
+# 0. apiserver -> kubelet authorization. Skip ONLY if `kubectl logs <any-pod>` already works:
+#    without it CNPG backups fail at the exec step (and so do logs/exec/port-forward).
+kubectl apply -f kubelet-api-admin.yaml
+
 # 1. Stratos identity + least-privilege RBAC + SA token
 kubectl apply -f rbac.yaml
 
@@ -88,6 +95,7 @@ external service (admin UI → Cloud providers → Add provider → Database, or
 
 | File | Contents |
 |---|---|
+| `kubelet-api-admin.yaml` | ClusterRoleBinding `kubeadm:kubelet-api-admin` → the API server's kubelet client. Without it every `kubectl logs`/`exec` — and therefore every CNPG backup, which runs through an exec — fails with `Forbidden ... nodes/proxy`. Normally created by kubeadm; apply only if the cluster is missing it. |
 | `rbac.yaml` | `stratos-system` namespace, `stratos` ServiceAccount, ClusterRole/binding limited to exactly the verbs the dbaas leg of `internal/cloud/kamajik8s/client.go` uses (namespaces CRUD, secrets CRUD, services read, engine-CRD status reads), a namespaced Role for Application CRUD in `argocd`, the SA token Secret, and the kubeconfig recipe. Read its header for why the secrets grant is cluster-wide (RBAC cannot wildcard `stdb-*` namespaces). |
 | `appproject.yaml` | AppProject `stratos-dbaas`: sourceRepos = our OCI registry only, destinations = in-cluster `stdb-*` only, empty (conservative, record-on-demand) clusterResourceWhitelist. |
 | `repo-credential.yaml` | ArgoCD repository Secret for the (private) chart registry, with `enableOCI: true`. Its `url` must match `config.argocd.chartRepo` and the AppProject sourceRepos exactly — ArgoCD matches credentials by URL prefix. |

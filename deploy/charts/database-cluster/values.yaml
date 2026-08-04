@@ -262,8 +262,19 @@ postgresql:
   # spec.postgresql.parameters verbatim.
   parameters: {}
   # -- CNPG enableSuperuserAccess: when true the operator maintains the
-  # <id>-superuser Secret. Off by default — the app user is the product.
-  superuserAccess: false
+  # <id>-superuser Secret (the real `postgres` role).
+  #
+  # ON by default: the product hands the customer their database, not a sandbox
+  # inside it. The `app` role CNPG creates cannot install most extensions, create
+  # roles or read another role's objects, which is exactly the set of things a
+  # customer opens a ticket about. Stratos serves this Secret as the connection
+  # credential (internal/cloud/dbaas/engines.go ConnectionSecret).
+  #
+  # The trade is real and accepted: a superuser can ALTER SYSTEM, drop the
+  # replication role, or otherwise break what CNPG manages, and the platform still
+  # owns the resulting page. Set this to false per-database to hand out the scoped
+  # `app` role instead.
+  superuserAccess: true
 
 mysql:
   # -- my.cnf [mysqld] parameters (string map), rendered into the Percona CR's

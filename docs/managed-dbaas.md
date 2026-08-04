@@ -483,13 +483,24 @@ project.
 
 | Engine | Secret | Exposed account |
 |---|---|---|
-| postgresql | `<id>-app` (CNPG-minted) | `username`/`password`/`dbname` keys |
+| postgresql | `<id>-superuser` (CNPG-minted, chart ≥ 0.6.0) | the real `postgres` superuser; database fixed to `app`. Pre-0.6.0 databases have no such secret and fall back to `<id>-app` (`PriorConnectionSecret`) |
 | ferretdb | `<id>-pg-app` (CNPG backend `<id>-pg`) | same keys, Mongo wire |
 | mysql | `<id>-secrets` (operator-minted) | `root` under key `root` (PS has no declarative app users) |
-| mariadb | `<id>-auth` (**stratos-provisioned**) | user `app`, database `app` |
+| mariadb | `<id>-auth` (**stratos-provisioned**) | user `app`, database `app` — holds `ALL PRIVILEGES ON *.* WITH GRANT OPTION` (chart ≥ 0.6.0), i.e. root's privilege set under a different name |
 | valkey | `<id>-auth` (**stratos-provisioned**) | AUTH only |
 | opensearch | `<id>-admin-password` (operator-minted, default securityconfig) | `username`/`password` keys |
 | kafka | `<id>-auth` (**stratos-provisioned**, KafkaUser BYO-password) | SASL user `<id>-app`, SCRAM-SHA-512 |
+
+**The exposed account is the engine's admin account, deliberately.** A managed database is the
+customer's database: postgresql hands over `postgres` (`enableSuperuserAccess`), mysql already
+handed over `root`, opensearch `admin`, and mariadb's `app` carries root's global privileges. The
+accepted trade is that a customer can ALTER SYSTEM, drop a role the operator manages, or otherwise
+break their own instance while the platform still owns the page — the alternative, a scoped role,
+turns "install this extension" and "add a user" into support tickets. mariadb keeps the
+declarative account rather than the operator's `<id>-root` Secret for a concrete reason:
+mariadb-operator sets that password at bootstrap and uses root for its own reconciliation, so
+RESET_PASSWORD (a merge-patch onto the Secret) would be ignored by the running server — or lock
+the operator out.
 
 The stratos-provisioned secrets live OUTSIDE the Application on purpose: a chart-generated
 password would re-roll on every ArgoCD render, and values must never carry secrets (the

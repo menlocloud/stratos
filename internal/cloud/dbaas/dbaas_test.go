@@ -824,7 +824,9 @@ func TestConnectionSecretContract(t *testing.T) {
 		port                                  int
 		defUser, defDB                        string
 	}{
-		{EnginePostgreSQL, "std-1-app", "username", "password", "dbname", 5432, "", ""},
+		// The exposed postgres account is the SUPERUSER (chart sets enableSuperuserAccess); the
+		// database name is fixed, not read off that secret.
+		{EnginePostgreSQL, "std-1-superuser", "username", "password", "", 5432, "", "app"},
 		{EngineFerretDB, "std-1-pg-app", "username", "password", "dbname", 27017, "", ""},
 		{EngineMySQL, "std-1-secrets", "", "root", "", 3306, "root", ""},
 		{EngineMariaDB, "std-1-auth", "", "password", "", 3306, "app", "app"},
@@ -842,6 +844,15 @@ func TestConnectionSecretContract(t *testing.T) {
 		}
 		if DefaultUser(c.engine, "std-1") != c.defUser || DefaultDB(c.engine) != c.defDB {
 			t.Errorf("%s: defaults (%s,%s)", c.engine, DefaultUser(c.engine, "std-1"), DefaultDB(c.engine))
+		}
+	}
+	// Databases predating the superuser switch keep working off the scoped app role.
+	if n, uk, pk, dk := PriorConnectionSecret(EnginePostgreSQL, "std-1"); n != "std-1-app" || uk != "username" || pk != "password" || dk != "dbname" {
+		t.Errorf("postgres fallback = (%s,%s,%s,%s)", n, uk, pk, dk)
+	}
+	for _, e := range []string{EngineMySQL, EngineMariaDB, EngineValkey, EngineOpenSearch, EngineKafka, EngineFerretDB} {
+		if n, _, _, _ := PriorConnectionSecret(e, "std-1"); n != "" {
+			t.Errorf("%s must have no fallback, got %s", e, n)
 		}
 	}
 	if !NeedsAuthSecret(EngineMariaDB) || !NeedsAuthSecret(EngineValkey) || !NeedsAuthSecret(EngineKafka) ||
@@ -1542,5 +1553,47 @@ func TestCreateDatabaseWritesBackupCredentials(t *testing.T) {
 	}
 	if d, _ := api2.GetSecretData(ctx, NamespaceFor(valkey.ProjectID), BackupSecretName(valkey.ID)); d != nil {
 		t.Fatalf("engine without BACKUP capability must not get credentials: %v", d)
+	}
+}
+
+// A postgres database created before the superuser switch has no <id>-superuser Secret. It is
+// serving traffic, so the connection panel must show the account it actually has instead of
+// "credentials not ready", and RESET_PASSWORD must rotate that same account.
+func TestConnectionInfoFallsBackToAppRole(t *testing.T) {
+	api := newFakeAPI()
+	cfg := testConfig()
+	svc := NewWithAPI(api, cfg, "svc-1")
+	spec := testSpec(EnginePostgreSQL, "17")
+	ctx := context.Background()
+	if _, err := svc.CreateDatabase(ctx, spec, testShare(), nil); err != nil {
+		t.Fatal(err)
+	}
+	ns := NamespaceFor(spec.ProjectID)
+	// Only the legacy secret exists — exactly the shape of a pre-switch database. Registered in
+	// both maps because the fake mirrors the real API: a patch 404s when the object is absent.
+	api.secrets[key(ns, spec.ID+"-app")] = map[string]any{
+		"metadata": map[string]any{"name": spec.ID + "-app", "namespace": ns},
+	}
+	api.secretData[key(ns, spec.ID+"-app")] = map[string][]byte{
+		"username": []byte("app"), "password": []byte("legacy-pw"), "dbname": []byte("app"),
+	}
+	api.services[key(ns, LBServiceName(spec.ID))] = map[string]any{
+		"status": map[string]any{"loadBalancer": map[string]any{"ingress": []any{map[string]any{"ip": "10.1.0.9"}}}},
+	}
+
+	info, err := svc.ConnectionInfo(ctx, spec.ProjectID, spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Username != "app" || info.Password != "legacy-pw" || info.DBName != "app" {
+		t.Fatalf("fallback conn info = %+v", info)
+	}
+
+	pw, err := svc.ResetPassword(ctx, spec.ProjectID, spec.ID, EnginePostgreSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(api.secretData[key(ns, spec.ID+"-app")]["password"]); got != pw {
+		t.Fatalf("reset must rotate the legacy secret: %q vs %q", got, pw)
 	}
 }

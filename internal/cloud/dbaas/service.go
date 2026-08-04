@@ -500,6 +500,16 @@ func (s *Service) ConnectionInfo(ctx context.Context, projectID, dbID string) (C
 	if err != nil {
 		return ConnInfo{}, err
 	}
+	// Databases created before postgresql moved to the superuser account have no
+	// `<id>-superuser` Secret; serve the account they were built with rather than telling a
+	// running database its credentials are not ready.
+	if data == nil {
+		if pn, pu, pp, pd := PriorConnectionSecret(engine, dbID); pn != "" {
+			if prior, perr := s.api.GetSecretData(ctx, ns, pn); perr == nil && prior != nil {
+				data, userKey, passKey, dbKey = prior, pu, pp, pd
+			}
+		}
+	}
 	if data == nil {
 		return ConnInfo{}, fmt.Errorf("dbaas: database %s: credentials not ready yet", dbID)
 	}
@@ -552,10 +562,21 @@ func (s *Service) ResetPassword(ctx context.Context, projectID, dbID, engine str
 	}
 	if err := s.api.PatchSecretData(ctx, NamespaceFor(projectID), secretName,
 		map[string]string{passKey: password}); err != nil {
-		if kamajik8s.NotFound(err) {
+		if !kamajik8s.NotFound(err) {
+			return "", fmt.Errorf("dbaas: rotate password: %w", err)
+		}
+		// Same fallback as ConnectionInfo: rotate the account the database actually has.
+		pn, _, pp, _ := PriorConnectionSecret(engine, dbID)
+		if pn == "" {
 			return "", fmt.Errorf("dbaas: database %s: credentials not ready yet", dbID)
 		}
-		return "", fmt.Errorf("dbaas: rotate password: %w", err)
+		if err := s.api.PatchSecretData(ctx, NamespaceFor(projectID), pn,
+			map[string]string{pp: password}); err != nil {
+			if kamajik8s.NotFound(err) {
+				return "", fmt.Errorf("dbaas: database %s: credentials not ready yet", dbID)
+			}
+			return "", fmt.Errorf("dbaas: rotate password: %w", err)
+		}
 	}
 	return password, nil
 }

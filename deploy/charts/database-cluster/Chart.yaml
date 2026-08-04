@@ -23,7 +23,12 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
+# 0.6.0 hands the customer the engine's OWN admin account: postgresql now runs with
+# enableSuperuserAccess (stratos serves `<id>-superuser`, the real `postgres` role) and mariadb's
+# exposed `app` user gets ALL PRIVILEGES ON *.* WITH GRANT OPTION. Upgrading an existing database
+# is additive — CNPG mints the superuser Secret on sync, the Grant is applied by the operator —
+# but it DOES widen what a customer can do to their own instance.
 # 0.5.0 adds `scheduling` (nodeSelector + tolerations) so a provider can pin every pod a
 # database runs — engine, proxy, FerretDB frontend — onto a dedicated node pool. Additive: with
 # it unset the render is byte-identical to 0.4.5.
-version: 0.5.0
+version: 0.6.0
