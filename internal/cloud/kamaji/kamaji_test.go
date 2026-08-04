@@ -395,6 +395,34 @@ func TestClusterAddons(t *testing.T) {
 	}
 }
 
+// Registry mirrors reach the chart's own registryMirrors key, and — the part that matters — stay
+// OFF the values entirely when the provider configures none, so the chart default stands instead
+// of being overridden with an empty map.
+func TestBuildValuesRegistryMirrors(t *testing.T) {
+	cfg := testCfg()
+	if v := BuildValues(cfg, testSpec()); v["registryMirrors"] != nil {
+		t.Errorf("unconfigured mirrors must not emit the key: %v", v["registryMirrors"])
+	}
+
+	cfg.Defaults.RegistryMirrors = map[string][]string{
+		"docker.io": {"https://harbor.example.com/v2/dockerhub", " "},
+		"ghcr.io":   {"https://harbor.example.com/v2/ghcr-io"},
+		"quay.io":   {""}, // nothing usable → dropped, not rendered as an empty mirror list
+	}
+	v := BuildValues(cfg, testSpec())
+	mirrors, ok := v["registryMirrors"].(map[string]any)
+	if !ok || len(mirrors) != 2 {
+		t.Fatalf("registryMirrors = %#v", v["registryMirrors"])
+	}
+	urls, _ := mirrors["docker.io"].([]any)
+	if len(urls) != 1 || urls[0] != "https://harbor.example.com/v2/dockerhub" {
+		t.Errorf("docker.io mirrors = %#v", mirrors["docker.io"])
+	}
+	if _, dropped := mirrors["quay.io"]; dropped {
+		t.Error("host with no usable endpoint must be dropped")
+	}
+}
+
 func TestBuildValuesBYONetwork(t *testing.T) {
 	cfg := testCfg()
 	spec := testSpec()

@@ -67,6 +67,12 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 	if d.SupportKeypairName != "" {
 		values["machineSSHKeyName"] = d.SupportKeypairName
 	}
+	// Containerd pull-through mirrors for the cluster's nodes. Omitted (not `{}`) when the
+	// provider configures none, so the values carry no opinion and the chart default — none
+	// since 0.8.0, a mirror pinned in an older pin — decides.
+	if mirrors := RegistryMirrorValues(d.RegistryMirrors); mirrors != nil {
+		values["registryMirrors"] = mirrors
+	}
 	// clusterNetworking — the CUSTOMER-project side of the cluster (the API-server LB above lives
 	// in the MANAGEMENT project; two clouds, do not conflate).
 	//
@@ -117,6 +123,33 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 		values["addons"] = addons
 	}
 	return values
+}
+
+// RegistryMirrorValues renders the chart's registryMirrors block (host → mirror endpoints) from
+// the provider config. nil when nothing is configured — the caller must then leave the key OFF
+// the values entirely so the chart's own defaults apply. Hosts with no usable endpoint are
+// dropped rather than rendered empty: an empty host entry produces a hosts.toml with no mirror,
+// which silently turns the mirror OFF for that registry instead of leaving it at the default.
+func RegistryMirrorValues(mirrors map[string][]string) map[string]any {
+	out := map[string]any{}
+	for host, endpoints := range mirrors {
+		if strings.TrimSpace(host) == "" {
+			continue
+		}
+		urls := make([]any, 0, len(endpoints))
+		for _, u := range endpoints {
+			if u = strings.TrimSpace(u); u != "" {
+				urls = append(urls, u)
+			}
+		}
+		if len(urls) > 0 {
+			out[strings.TrimSpace(host)] = urls
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // AddonValues renders the addons block: the customer's picks as `addons.<name>.enabled`, plus

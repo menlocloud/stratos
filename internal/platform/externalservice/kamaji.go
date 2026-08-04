@@ -22,7 +22,8 @@ package externalservice
 //	      "externalNetworkId": "…",       // CAPO external network
 //	      "dnsZone":           "k8s.example.com",
 //	      "versions":          {"1.35.4": "<glance-image-id>"},  // curated version→DEFAULT-image matrix
-//	      "imageVariants":     {"nvidia": {"1.35.4": "<glance-image-id>"}}  // optional per-version variants
+//	      "imageVariants":     {"nvidia": {"1.35.4": "<glance-image-id>"}},  // optional per-version variants
+//	      "registryMirrors":   {"docker.io": ["https://registry.example.com/v2/dockerhub"]}  // optional containerd pull-through; absent = chart defaults
 //	    }
 //	  },
 //	  "secret": {"kubeconfig": "<management-cluster kubeconfig>"}  // encrypted at rest
@@ -91,6 +92,32 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			}
 		}
 	}
+	// registryMirrors: upstream host → mirror endpoint(s). A bare string is accepted alongside
+	// the list form because that is the shape an operator hand-editing the document reaches for.
+	var mirrors map[string][]string
+	if ms, ok := cl["registryMirrors"].(map[string]any); ok {
+		for host, raw := range ms {
+			var urls []string
+			switch v := raw.(type) {
+			case string:
+				if v != "" {
+					urls = []string{v}
+				}
+			case []any:
+				for _, u := range v {
+					if s := str(u); s != "" {
+						urls = append(urls, s)
+					}
+				}
+			}
+			if len(urls) > 0 {
+				if mirrors == nil {
+					mirrors = map[string][]string{}
+				}
+				mirrors[host] = urls
+			}
+		}
+	}
 	cfg := kamaji.Config{
 		Kubeconfig:    str(e.secretMap()["kubeconfig"]),
 		Region:        e.KamajiRegion(),
@@ -112,6 +139,7 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			SupportKeypairPublicKey: str(cl["supportKeypairPublicKey"]),
 			AllowedCIDRs:            strList(cl["allowedCidrs"]),
 			StorageVolumeType:       str(cl["storageVolumeType"]),
+			RegistryMirrors:         mirrors,
 		},
 	}
 	if cfg.ArgoNamespace == "" {

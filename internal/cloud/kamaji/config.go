@@ -139,6 +139,22 @@ type ClusterDefaults struct {
 	// StorageVolumeType is the Cinder volume type behind every cluster's default StorageClass
 	// (csi-cinder). Empty = the cloud's default volume type.
 	StorageVolumeType string
+	// RegistryMirrors is the containerd pull-through map every node of every cluster gets:
+	// upstream registry host → mirror endpoints, rendered by the chart into
+	// /etc/containerd/certs.d/<host>/hosts.toml. It therefore covers EVERY image the node
+	// pulls — CNI, CSI, add-ons and the customer's own workloads — not just chart images, and
+	// containerd falls back to the upstream registry when a mirror misses.
+	//
+	// This is the lever against public-registry rate limits: unmirrored clusters bootstrap at
+	// the mercy of docker.io/quay.io throttling, which is what turns a create into an hour of
+	// ImagePullBackOff. Empty = no mirrors at all (chart 0.8.0 dropped the inherited Azimuth
+	// default rather than route an installer's pulls through a third party), so a provider that
+	// wants a cache has to name one — and a registry left off the map is pulled from directly.
+	//
+	// Mirror endpoints are REGISTRY API ROOTS, not repo paths: a Harbor proxy-cache project is
+	// https://<harbor>/v2/<project>. Provider-level, applied at create — an existing cluster
+	// keeps the mirrors stored on its Application (full-values contract, plan §9).
+	RegistryMirrors map[string][]string
 }
 
 // ClusterAddons is the curated add-on menu a customer can toggle per cluster (name →

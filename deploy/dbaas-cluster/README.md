@@ -17,6 +17,16 @@ Full operator runbook: [`docs/managed-dbaas.md`](../../docs/managed-dbaas.md).
    - **cinder-csi** with a default StorageClass — every database volume is a PVC.
    - **ArgoCD** on this cluster. Any standard install; the manifests here assume the
      `argocd` namespace.
+   - **A containerd registry mirror on the nodes** (`/etc/containerd/certs.d/<host>/hosts.toml`
+     with `config_path = "/etc/containerd/certs.d"`), pointed at your own pull-through cache — a
+     Harbor proxy-cache project is `https://<harbor>/v2/<project>`. Every database image comes
+     from a public registry (`ghcr.io/cloudnative-pg`, `docker.io/percona`,
+     `docker.io/library/mariadb`, `docker.io/valkey`, `ghcr.io/ferretdb`, plus whatever the
+     OpenSearch and Strimzi operators resolve from their `version` fields), so an unmirrored
+     DB cluster provisions at the mercy of public-registry rate limits. Node-level, on purpose:
+     it also covers the operator images and the images the two operators pick themselves, which
+     no chart value can reach. Cover `docker.io`, `registry-1.docker.io`, `ghcr.io`, `quay.io`
+     and `registry.k8s.io` — containerd does NOT treat `registry-1.docker.io` as `docker.io`.
 2. **The database operator suite**, at PINNED versions — record the installed version next
    to the chart version you release, because CRD drift between operator and chart is the
    main compatibility risk (chart README, plan risk list):

@@ -25,6 +25,11 @@ func TestKamajiConfig(t *testing.T) {
 					"empty":  map[string]any{"1.35.4": ""}, // blank ids are dropped → variant dropped
 					"junk":   "not-a-map",                  // malformed entries are skipped
 				},
+				"registryMirrors": map[string]any{
+					"docker.io": []any{"https://harbor.example.com/v2/dockerhub", ""},
+					"ghcr.io":   "https://harbor.example.com/v2/ghcr-io", // bare string accepted
+					"quay.io":   []any{},                                // no usable endpoint → host dropped
+				},
 			},
 		},
 		Secret: map[string]any{"kubeconfig": "KC"},
@@ -48,6 +53,12 @@ func TestKamajiConfig(t *testing.T) {
 	}
 	if cfg.Defaults.ImageVariants["nvidia"]["1.35.4"] != "img-nv" || len(cfg.Defaults.ImageVariants) != 1 {
 		t.Errorf("imageVariants = %+v", cfg.Defaults.ImageVariants)
+	}
+	mirrors := cfg.Defaults.RegistryMirrors
+	if len(mirrors) != 2 ||
+		len(mirrors["docker.io"]) != 1 || mirrors["docker.io"][0] != "https://harbor.example.com/v2/dockerhub" ||
+		len(mirrors["ghcr.io"]) != 1 || mirrors["ghcr.io"][0] != "https://harbor.example.com/v2/ghcr-io" {
+		t.Errorf("registryMirrors = %+v", mirrors)
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
