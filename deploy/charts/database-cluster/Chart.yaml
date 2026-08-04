@@ -23,4 +23,7 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
-version: 0.4.5
+# 0.5.0 adds `scheduling` (nodeSelector + tolerations) so a provider can pin every pod a
+# database runs — engine, proxy, FerretDB frontend — onto a dedicated node pool. Additive: with
+# it unset the render is byte-identical to 0.4.5.
+version: 0.5.0

@@ -30,6 +30,7 @@ spec:
         kubectl.kubernetes.io/restartedAt: {{ . | quote }}
       {{- end }}
     spec:
+      {{- include "database-cluster.podPlacement" . | nindent 6 }}
       containers:
         - name: ferretdb
           image: {{ include "database-cluster.ferretdbImage" . }}

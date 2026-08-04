@@ -124,6 +124,7 @@ spec:
     authorization:
       type: simple
   entityOperator:
+    {{- include "database-cluster.strimziPodTemplate" . | nindent 4 }}
     topicOperator: {}
     # userOperator is MANDATORY here: without it KafkaUsers (kafkauser.yaml —
     # the only credential customers get) are never reconciled and no SCRAM

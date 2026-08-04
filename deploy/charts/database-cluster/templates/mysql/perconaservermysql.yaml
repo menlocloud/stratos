@@ -113,6 +113,7 @@ spec:
     clusterType: group-replication
     size: {{ int .Values.instances }}
     image: {{ include "database-cluster.image" . }}
+    {{- include "database-cluster.podPlacement" . | nindent 4 }}
     resources:
       {{- include "database-cluster.resources" . | nindent 6 }}
     {{- with .Values.mysql.parameters }}
@@ -147,6 +148,7 @@ spec:
     haproxy:
       enabled: true
       size: {{ gt (int .Values.instances) 1 | ternary 2 1 }}
+      {{- include "database-cluster.podPlacement" . | nindent 6 }}
       # TODO-verify(drill): tag from the pinned operator's compatibility list.
       image: docker.io/percona/haproxy:2.8.11
       resources:

@@ -48,6 +48,11 @@ spec:
         key: password
   resources:
     {{- include "database-cluster.resources" . | nindent 4 }}
+  {{- if or .Values.scheduling.nodeSelector .Values.scheduling.tolerations }}
+  # valkey-operator groups placement under spec.scheduling.
+  scheduling:
+    {{- include "database-cluster.podPlacement" . | nindent 4 }}
+  {{- end }}
   persistence:
     size: {{ .Values.storage.sizeGi }}Gi
     {{- with .Values.storage.storageClassName }}

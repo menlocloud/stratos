@@ -38,6 +38,7 @@ spec:
         kubectl.kubernetes.io/restartedAt: {{ . | quote }}
         {{- end }}
     spec:
+      {{- include "database-cluster.podPlacement" . | nindent 6 }}
       containers:
         - name: haproxy
           image: {{ .Values.mariadb.haproxy.image }}

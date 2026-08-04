@@ -87,6 +87,7 @@ spec:
     name: {{ $name }}-auth
     key: password
   image: {{ include "database-cluster.image" . }}
+  {{- include "database-cluster.podPlacement" . | nindent 2 }}
   {{- with .Values.restartedAt }}
   # RESTART mechanism: a changed pod-template annotation rolls the pods, same
   # convention as `kubectl rollout restart`. TODO-verify(drill): podMetadata

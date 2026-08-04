@@ -201,6 +201,48 @@ limits:
 {{- end }}
 
 {{/*
+Pod placement, in the plain Kubernetes shape (nodeSelector + tolerations). Emits nothing when
+the provider configures neither, so an unconfigured database keeps rendering byte-identically.
+Every engine template includes this at whatever path its CRD puts pod scheduling under.
+*/}}
+{{- define "database-cluster.podPlacement" -}}
+{{- $p := dict -}}
+{{- with .Values.scheduling.nodeSelector }}{{- $_ := set $p "nodeSelector" . }}{{- end -}}
+{{- with .Values.scheduling.tolerations }}{{- $_ := set $p "tolerations" . }}{{- end -}}
+{{- with $p }}{{ toYaml . }}{{- end -}}
+{{- end }}
+
+{{/*
+The same placement in Strimzi's shape. Strimzi's PodTemplate has tolerations but NO
+nodeSelector, so the selector has to be expressed as a required nodeAffinity — one matchExpression
+per label, all of which must match (In with a single value == equality), which is precisely what a
+nodeSelector means. Emits nothing when neither is configured.
+*/}}
+{{- define "database-cluster.strimziPodTemplate" -}}
+{{- $s := .Values.scheduling -}}
+{{- if or $s.nodeSelector $s.tolerations }}
+template:
+  pod:
+    {{- with $s.nodeSelector }}
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                {{- range $k, $v := . }}
+                - key: {{ $k }}
+                  operator: In
+                  values:
+                    - {{ $v | quote }}
+                {{- end }}
+    {{- end }}
+    {{- with $s.tolerations }}
+    tolerations: {{ toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
 Per-engine pod selector for the LB Service: the WRITE endpoint of each engine.
   postgresql: the CNPG primary. TODO-verify(drill): cnpg.io/instanceRole is the
               current label on CNPG >= 1.25 (older docs show `role`); if 1.29

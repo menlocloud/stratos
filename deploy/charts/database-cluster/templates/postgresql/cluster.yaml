@@ -27,6 +27,11 @@ spec:
   instances: {{ int .Values.instances }}
   imageName: {{ include "database-cluster.image" . }}
   enableSuperuserAccess: {{ .Values.postgresql.superuserAccess | default false }}
+  {{- if or .Values.scheduling.nodeSelector .Values.scheduling.tolerations }}
+  # CNPG keeps pod placement under spec.affinity, not on a pod template.
+  affinity:
+    {{- include "database-cluster.podPlacement" . | nindent 4 }}
+  {{- end }}
   {{- with .Values.postgresql.parameters }}
   postgresql:
     parameters:

@@ -105,6 +105,7 @@ spec:
     enable: true
     replicas: 1
     version: {{ .Values.engineVersion | quote }}
+    {{- include "database-cluster.podPlacement" . | nindent 4 }}
     # Same cert precedence as security.tls.http above (the platform cert's
     # SAN list carries <id>-dash.<zone> for exactly this).
     tls:
@@ -152,6 +153,7 @@ spec:
         - cluster_manager
         - data
         - ingest
+      {{- include "database-cluster.podPlacement" . | nindent 6 }}
       # NOTE: diskSize is a SIBLING of persistence in this CRD — the pvc block
       # carries class/accessModes only, NOT the size.
       diskSize: {{ .Values.storage.sizeGi }}Gi

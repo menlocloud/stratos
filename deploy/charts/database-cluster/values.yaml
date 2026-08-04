@@ -54,6 +54,26 @@ resources:
   # -- Memory per instance in Gi (number; rendered as "<n>Gi").
   memoryGi: ""
 
+# -- Pod placement for everything this chart runs: the engine pods, their
+# proxies (haproxy for mysql/mariadb) and the FerretDB frontend. Optional —
+# empty means "schedule anywhere", which is the DBaaS cluster's default.
+#
+# The point is a dedicated node pool for databases: label + taint those nodes
+# and set both keys here, and the pool can then scale on database demand alone
+# without platform workloads landing on it (or database pods drifting off it).
+# Set BOTH — a nodeSelector alone still lets other pods onto the pool, and a
+# toleration alone does not keep database pods on it.
+#
+# Kafka is the exception in shape only: Strimzi's pod template has no
+# nodeSelector, so the selector is rendered as an equivalent required
+# nodeAffinity. Same effect, different field.
+scheduling:
+  # -- Node labels a database pod must match, e.g. {node-role: database}.
+  nodeSelector: {}
+  # -- Tolerations for the taints on those nodes, in the standard k8s shape:
+  # [{key: dedicated, operator: Equal, value: database, effect: NoSchedule}].
+  tolerations: []
+
 # -- Persistent storage per instance.
 storage:
   # -- Volume size in Gi. REQUIRED for every engine (for ferretdb it sizes the

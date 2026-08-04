@@ -34,6 +34,11 @@ spec:
   # by an older chart cannot be repaired in place, it must be recreated.
   postgresUID: 999
   postgresGID: 999
+  {{- if or .Values.scheduling.nodeSelector .Values.scheduling.tolerations }}
+  # CNPG keeps pod placement under spec.affinity, not on a pod template.
+  affinity:
+    {{- include "database-cluster.podPlacement" . | nindent 4 }}
+  {{- end }}
   # DocumentDB requirements, taken verbatim from the image's own bootstrap
   # scripts (/docker-entrypoint-initdb.d/10-preload.sh + 20-install.sql), which
   # CNPG never runs — it does not use the image entrypoint, so everything those
