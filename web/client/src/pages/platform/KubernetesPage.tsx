@@ -1528,7 +1528,14 @@ function ClusterDetail({
                   groups.map((g, i) => (
                     <TableRow key={(g.name as string) ?? i}>
                       <TableCell className="font-medium">{(g.name as string) || "—"}</TableCell>
-                      <TableCell className="font-mono text-xs">{(g.flavor_id as string) || "—"}</TableCell>
+                      {/* The cache stores the flavor ID; the customer picked a NAME and that is what
+                          the editor, the create wizard and the instance list all show. Falling back
+                          to the raw UUID keeps a since-removed flavor visible rather than blank. */}
+                      <TableCell className="text-sm">
+                        {flavors.find((f) => f.id === g.flavor_id)?.name ?? (
+                          <span className="font-mono text-xs">{(g.flavor_id as string) || "—"}</span>
+                        )}
+                      </TableCell>
                       <TableCell className="font-mono text-sm">
                         {g.autoscale ? `${g.min}–${g.max} (auto)` : (g.count ?? g.replicas ?? "—")}
                       </TableCell>
