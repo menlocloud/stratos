@@ -23,6 +23,9 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
+# 0.6.1 gives the mysql CR a backup image. Without it the Percona operator rejected the whole
+# object ("backup.image can't be empty") and no mysql database ever started — no pods, no
+# credentials, no CR status, while ArgoCD reported the manifests healthy.
 # 0.6.0 hands the customer the engine's OWN admin account: postgresql now runs with
 # enableSuperuserAccess (stratos serves `<id>-superuser`, the real `postgres` role) and mariadb's
 # exposed `app` user gets ALL PRIVILEGES ON *.* WITH GRANT OPTION. Upgrading an existing database
@@ -31,4 +34,4 @@ type: application
 # 0.5.0 adds `scheduling` (nodeSelector + tolerations) so a provider can pin every pod a
 # database runs — engine, proxy, FerretDB frontend — onto a dedicated node pool. Additive: with
 # it unset the render is byte-identical to 0.4.5.
-version: 0.6.0
+version: 0.6.1

@@ -52,6 +52,8 @@ spec:
   */}}
   backup:
     enabled: true
+    # REQUIRED by the operator (CheckNSetDefaults rejects the CR without it).
+    image: {{ include "database-cluster.mysqlBackupImage" . }}
     {{/* The binlog server streams binlogs to the same object store; without it
          a restore can only land on a backup boundary, never a chosen second. */}}
     pitr:

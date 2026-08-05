@@ -153,6 +153,28 @@ guard below turns an accidental future call into a loud render failure.
 {{- end }}
 
 {{/*
+mysql BACKUP image (xtrabackup). The Percona operator REFUSES a CR whose backup block carries no
+image — CheckNSetDefaults fails with "backup.image can't be empty" and the WHOLE reconcile stops:
+no pods, no <id>-secrets, no status, while ArgoCD reports the applied manifests healthy. The chart
+wires a backup storage into every mysql database, so this is never optional.
+
+The major must track the server (xtrabackup 8.0 cannot back up 8.4). Ops-updatable exactly like
+the engine image map: bump a tag here, bump Chart.yaml, re-pin the provider.
+*/}}
+{{- define "database-cluster.mysqlBackupImage" -}}
+{{- $v := .Values.engineVersion | toString -}}
+{{- $map := dict
+      "8.0" "docker.io/percona/percona-xtrabackup:8.0.35-36.1"
+      "8.4" "docker.io/percona/percona-xtrabackup:8.4.0-6.1"
+-}}
+{{- $img := index $map $v -}}
+{{- if not $img -}}
+{{- fail (printf "no xtrabackup image for mysql %q — extend database-cluster.mysqlBackupImage in _helpers.tpl (and release a new chart version)" $v) -}}
+{{- end -}}
+{{- $img -}}
+{{- end }}
+
+{{/*
 FerretDB BACKEND image (the DocumentDB-flavoured postgres CNPG runs). It is a MATCHED PAIR
 with the frontend — a frontend on 2.7 against a 2.5 backend is unsupported — so it is mapped
 off the SAME engineVersion instead of being pinned in values. That pairing is what makes
