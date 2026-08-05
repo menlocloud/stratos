@@ -285,6 +285,26 @@ export default function DatabasesPage() {
 
   const [createOpen, setCreateOpen] = useState(false)
   const [toDelete, setToDelete] = useState<CloudResource | null>(null)
+  // Restore is a CREATE: the engines recover into a fresh instance, never in place. The detail
+  // page's per-backup Restore button therefore links here with the source pinned, and the form
+  // opens on the same path a customer would have taken by hand. Params are consumed once
+  // (the `?connect=1` precedent) so a reload does not reopen a half-filled form.
+  const [listParams, setListParams] = useSearchParams()
+  const restoreParam = listParams.get("restore") ?? ""
+  const [initialRestore, setInitialRestore] = useState<InitialRestore | null>(null)
+  useEffect(() => {
+    if (!restoreParam) return
+    setInitialRestore({
+      sourceId: restoreParam,
+      backupName: listParams.get("backup") ?? "",
+      at: listParams.get("at") ?? "",
+    })
+    setCreateOpen(true)
+    const next = new URLSearchParams(listParams)
+    for (const k of ["restore", "backup", "at"]) next.delete(k)
+    setListParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreParam])
 
   const del = useMutation({
     mutationFn: (r: CloudResource) => apiFetch(`/project/${pid}/cloud/${r.id}`, { method: "DELETE", cloud: dScope }),
@@ -450,6 +470,7 @@ export default function DatabasesPage() {
           pid={pid}
           scope={createScope}
           restoreSources={restoreSources}
+          initialRestore={initialRestore}
           engines={createEngines}
           limits={createSvc?.databaseLimits}
           storageClasses={createSvc?.databaseStorageClasses}
@@ -457,7 +478,10 @@ export default function DatabasesPage() {
           locations={dLocs}
           locKey={createLoc ? locKeyOf(createLoc) : ""}
           onLocKey={setCreateLocKey}
-          onClose={() => setCreateOpen(false)}
+          onClose={() => {
+            setCreateOpen(false)
+            setInitialRestore(null)
+          }}
           onSubmit={async (body) => {
             if (!createScope) throw new Error("Select a location first")
             const created = await apiFetch<CloudResource>(`/project/${pid}/cloud`, {
@@ -598,7 +622,7 @@ export function DatabaseClusterDetailPage() {
 const CLUSTER_DEFAULT_STORAGE = "__cluster-default__"
 
 function DatabaseFormDialog({
-  engines, limits, storageClasses, restoreSources, pid, scope, networks, locations, locKey, onLocKey, onClose, onSubmit,
+  engines, limits, storageClasses, restoreSources, initialRestore, pid, scope, networks, locations, locKey, onLocKey, onClose, onSubmit,
 }: {
   engines: Record<string, DatabaseEngineOffer>
   limits?: DatabaseLimits
@@ -606,6 +630,8 @@ function DatabaseFormDialog({
   // Databases already in this project that a new one could be recovered from — same engine,
   // backups on. The page owns the list, so the dialog never re-fetches it.
   restoreSources: { id: string; name: string; engine: string; resourceId: string }[]
+  // Set when the form was opened from a specific backup (detail page → Restore).
+  initialRestore?: InitialRestore | null
   // Needed only to list a source's backups when the engine restores by name (mysql).
   pid: string
   scope: CloudScope | undefined
@@ -636,12 +662,13 @@ function DatabaseFormDialog({
   // Restore-from-backup. A recovered database is a NEW one: these engines take physical
   // backups, which can only be laid on a fresh data directory, so the damaged database stays
   // untouched until the customer is satisfied with the replacement.
-  const [restoreFrom, setRestoreFrom] = useState("")
-  const [restoreTime, setRestoreTime] = useState("")
+  const [restoreFrom, setRestoreFrom] = useState(initialRestore?.sourceId ?? "")
+  // <input type="datetime-local"> wants local "YYYY-MM-DDTHH:mm"; the API speaks ISO/UTC.
+  const [restoreTime, setRestoreTime] = useState(() => toLocalInput(initialRestore?.at))
   const restoreCandidates = restoreSources.filter((c) => c.engine === engine)
   // mysql restores by NAMING a backup object; the other engines find their own base backup.
   const needsBackupPick = engine === "mysql"
-  const [restoreBackup, setRestoreBackup] = useState("")
+  const [restoreBackup, setRestoreBackup] = useState(initialRestore?.backupName ?? "")
   const sourceBackups = useMutation({
     mutationFn: (sourceResourceId: string) =>
       apiFetch<{ result?: { name: string; phase?: string; finishedAt?: string }[] }>(
@@ -1133,6 +1160,19 @@ function DatabaseDetail({
   const [platformOpen, setPlatformOpen] = useState(false)
   const [accessOpen, setAccessOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
+  const navigate = useNavigate()
+  // Read live off the DB cluster, never from the cache: this list is what a customer picks a
+  // recovery point from, and a stale answer there is worse than a slow one.
+  const backupRuns = useMutation({
+    mutationFn: () =>
+      apiFetch<{ result?: BackupRun[] }>(`/project/${pid}/cloud/${resource.id}/action`, {
+        method: "POST",
+        body: { action: "LIST_BACKUPS", data: {} },
+        cloud: scope,
+      }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+  const runs = (backupRuns.data?.result ?? []).slice(0, 10) as BackupRun[]
   const [paramsOpen, setParamsOpen] = useState(false)
   const backupsOn = (d.backup as BackupState | undefined)?.enabled === true
   const readEndpointOn = d.read_endpoint === true
@@ -1270,7 +1310,12 @@ function DatabaseDetail({
         {/* One tab per concern, each carrying BOTH the current state and the controls that
             change it. The flat button row this replaces made every action look equally likely
             and told the customer nothing about what was already configured. */}
-        <Tabs defaultValue="overview">
+        <Tabs
+          defaultValue="overview"
+          onValueChange={(v) => {
+            if (v === "backups" && !backupRuns.data && !backupRuns.isPending) backupRuns.mutate()
+          }}
+        >
           <div className="-mx-1 overflow-x-auto px-1 pb-1">
             <TabsList className="w-max">
               <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -1467,15 +1512,67 @@ function DatabaseDetail({
                       onClick={() =>
                         act("CREATE_BACKUP")
                           .then(() => toast.success("Backup started"))
+                          .then(() => backupRuns.mutate())
                           .catch((e: Error) => toast.error(e.message))
                       }
                     >
                       Back up now
                     </Button>
+                    <Button size="sm" variant="outline" onClick={() => backupRuns.mutate()} disabled={backupRuns.isPending}>
+                      {backupRuns.isPending ? "Loading…" : "Refresh"}
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => setBackupOpen(true)}>
-                      Schedule and history
+                      Schedule
                     </Button>
                   </div>
+                  {/* The history lives HERE rather than behind a dialog: the reason to look at a
+                      backup list is almost always to pick one to recover from, so the list and the
+                      Restore action belong on the same surface. */}
+                  <div className="grid gap-1">
+                    <div className="text-xs text-muted-foreground">Backups</div>
+                    {runs.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        {backupRuns.isPending
+                          ? "Loading…"
+                          : "No backups yet — the first one runs on the next schedule, or start one now."}
+                      </p>
+                    ) : (
+                      runs.map((b) => (
+                        <div key={b.name} className="flex items-center justify-between gap-3 rounded-lg border p-2 text-xs">
+                          <span className="truncate font-mono">{b.name}</span>
+                          <span className="flex shrink-0 items-center gap-3">
+                            <span className="text-muted-foreground">
+                              {timeAgo(b.finishedAt || b.startedAt || b.createdAt)}
+                            </span>
+                            <StatusBadge status={b.phase} />
+                            {supports(engine, "RESTORE") ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                // Only a finished copy can be recovered from; a running or failed
+                                // one would send the customer into a create that cannot succeed.
+                                disabled={String(b.phase ?? "").toLowerCase() !== "completed"}
+                                onClick={() => {
+                                  const q = new URLSearchParams({ restore: String(resource.externalId ?? resource.id), backup: b.name })
+                                  if (b.finishedAt) q.set("at", b.finishedAt)
+                                  navigate(`/p/${pid}/databases?${q.toString()}`)
+                                }}
+                              >
+                                Restore
+                              </Button>
+                            ) : null}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  {supports(engine, "RESTORE") ? (
+                    <p className="text-xs text-muted-foreground">
+                      Restoring recovers into a NEW database — this one keeps running and is never
+                      written to. Point-in-time recovery reaches any second the archive covers, not
+                      just the moment a backup finished.
+                    </p>
+                  ) : null}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -2611,6 +2708,23 @@ type BackupRun = {
   startedAt?: string
   finishedAt?: string
   error?: string
+}
+
+// What a "Restore this backup" click carries into the create form. `at` is the backup's finish
+// time in ISO: for the engines that recover by point in time (postgresql, ferretdb, mariadb) that
+// instant IS the backup, and for mysql — which recovers by naming a backup object — backupName is
+// what the form needs. Sending both keeps one shape for every engine.
+type InitialRestore = { sourceId: string; backupName?: string; at?: string }
+
+// ISO instant -> the value <input type="datetime-local"> accepts, in the BROWSER's timezone
+// (that input has no zone of its own, so anything else silently shifts the recovery point).
+// Empty/unparseable in, empty out — the form then recovers as close to now as the archive reaches.
+function toLocalInput(iso?: string): string {
+  if (!iso) return ""
+  const t = new Date(iso)
+  if (Number.isNaN(t.getTime())) return ""
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`
 }
 
 // Common schedules, so nobody has to know cron. The value is the 5-FIELD form the server
