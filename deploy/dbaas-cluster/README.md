@@ -37,7 +37,8 @@ Full operator runbook: [`docs/managed-dbaas.md`](../../docs/managed-dbaas.md).
    | operator | install namespace (LOAD-BEARING) | version guidance | engine |
    |---|---|---|---|
    | CloudNativePG | `cnpg-system` | **≥ 1.29.1** | postgresql + the ferretdb backend |
-   | Percona Operator for MySQL (ps-operator) | `ps-operator` | current stable; verify served CRD version (`kubectl api-resources \| grep ps.percona.com`) | mysql |
+   | Percona Operator for MySQL (ps-operator) | `ps-operator` | current stable; verify served CRD version (`kubectl api-resources \| grep ps.percona.com`). **Install it CLUSTER-WIDE** (`watchAllNamespaces=true`, which also gives it a ClusterRole) — the default install sets `WATCH_NAMESPACE` to its own namespace and its RBAC is a namespaced Role, so it never sees a `PerconaServerMySQL` in a customer's `stdb-*` namespace: the CR is created, nothing reconciles it, no pods and no `<id>-secrets` ever appear. Check with `kubectl -n ps-operator get deploy -o jsonpath='{..env}' \| tr , '
+' \| grep WATCH` | mysql |
    | mariadb-operator | `mariadb-operator` | **26.x** | mariadb |
    | valkey-operator | `valkey-operator-system` | **only if the valkey beta gate will open** — CRD unverified, see the chart's `templates/valkey/valkey.yaml` header | valkey |
    | opensearch-k8s-operator | `opensearch-operator-system` | **3.0.2** — 3.x serves both api groups (`opensearch.opster.io` deprecated → `opensearch.org`); the chart renders `opensearch.opster.io/v1`, re-check at the drill (chart's `templates/opensearch/opensearchcluster.yaml` header) | opensearch (+ Dashboards) |
@@ -77,7 +78,10 @@ kubectl apply -f appproject.yaml
 #    public. Fill in the placeholders first — see the header of the file.
 kubectl apply -f repo-credential.yaml
 
-# 4. Custom health checks — a MERGE PATCH onto the existing argocd-cm, NOT kubectl apply
+# 4. Custom health checks — a MERGE PATCH onto the existing argocd-cm, NOT kubectl apply.
+#    Load-bearing: without them ArgoCD calls a database Healthy the moment the manifests apply,
+#    and stratos reports READY for an instance that has no pods at all. Verify after step 5 with
+#      kubectl -n argocd get cm argocd-cm -o yaml | grep resource.customizations.health
 kubectl -n argocd patch configmap argocd-cm --type merge --patch-file argocd-health.yaml
 
 # 5. Restart the ArgoCD controllers so the new Lua health checks load.
