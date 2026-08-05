@@ -1597,3 +1597,38 @@ func TestConnectionInfoFallsBackToAppRole(t *testing.T) {
 		t.Fatalf("reset must rotate the legacy secret: %q vs %q", got, pw)
 	}
 }
+
+// The cached row must carry the backup posture. It did not, and the cost was not a wrong label:
+// the console builds its restore-source list from `backup.enabled`, so with the key absent no
+// database was ever offered as a recovery source and restore-from-backup could not be reached
+// from the UI at all.
+func TestDatabaseDataCarriesBackupPosture(t *testing.T) {
+	cfg := testConfig()
+	cfg.Backup = BackupConfig{Endpoint: "https://s3.example", Bucket: "b", AccessKey: "a", SecretKey: "s"}
+	spec := testSpec(EnginePostgreSQL, "17")
+	values := BuildValues(cfg, spec)
+	app := BuildApplication(cfg, spec, "svc-1", cfg.ChartVersion, values)
+
+	d, _ := databaseData(cfg, app, nil)["database"].(map[string]any)
+	block, ok := d["backup"].(map[string]any)
+	if !ok {
+		t.Fatalf("cached row has no backup block: %v", d["backup"])
+	}
+	if block["enabled"] != true {
+		t.Errorf("backup.enabled = %v, want true (the store is wired at create)", block["enabled"])
+	}
+	if block["schedule"] != DefaultBackupSchedule {
+		t.Errorf("backup.schedule = %v, want %q", block["schedule"], DefaultBackupSchedule)
+	}
+	if block["retentionDays"] != DefaultBackupRetentionDays {
+		t.Errorf("backup.retentionDays = %v, want %d", block["retentionDays"], DefaultBackupRetentionDays)
+	}
+
+	// An engine the platform cannot back up carries no block rather than a false one.
+	valkey := testSpec(EngineValkey, "9")
+	vApp := BuildApplication(cfg, valkey, "svc-1", cfg.ChartVersion, BuildValues(cfg, valkey))
+	vd, _ := databaseData(cfg, vApp, nil)["database"].(map[string]any)
+	if _, has := vd["backup"]; has {
+		t.Errorf("valkey must not carry a backup block: %v", vd["backup"])
+	}
+}

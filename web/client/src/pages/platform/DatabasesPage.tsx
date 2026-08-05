@@ -256,7 +256,7 @@ export default function DatabasesPage() {
           engine: String(d.engine ?? ""),
           // Recovery lays a physical copy on a fresh data directory, so the new database has to
           // be the SAME major version — the form seeds it from here when restoring.
-          version: String(d.engine_version ?? ""),
+          version: String(d.version ?? ""),
         })),
     [data],
   )
@@ -654,12 +654,25 @@ function DatabaseFormDialog({
   // it, and the whole restore block stayed hidden — a Restore button that silently restored
   // nothing. Version matters just as much: a physical copy only replays on the same major.
   const restoreSource = restoreSources.find((c) => c.id === initialRestore?.sourceId)
-  const [engineSel, setEngineSel] = useState(restoreSource?.engine ?? "")
-  const engine = engineKeys.includes(engineSel) ? engineSel : engineKeys[0] ?? ""
+  // Derived, not a useState seed: the source list is loaded by the page and can arrive AFTER this
+  // dialog mounts, and a state initialiser only ever runs once — the restore would then open on
+  // the wrong engine with no way back to the right one.
+  const [engineSel, setEngineSel] = useState("")
+  const engine = engineKeys.includes(engineSel)
+    ? engineSel
+    : restoreSource?.engine && engineKeys.includes(restoreSource.engine)
+      ? restoreSource.engine
+      : engineKeys[0] ?? ""
   const offer = engines[engine] ?? {}
   const versions = (offer.versions ?? []).filter(Boolean)
-  const [versionSel, setVersionSel] = useState(restoreSource?.version ?? "")
-  const version = versions.includes(versionSel) ? versionSel : offer.default && versions.includes(offer.default) ? offer.default : versions[0] ?? ""
+  const [versionSel, setVersionSel] = useState("")
+  const version = versions.includes(versionSel)
+    ? versionSel
+    : restoreSource?.version && versions.includes(restoreSource.version)
+      ? restoreSource.version
+      : offer.default && versions.includes(offer.default)
+        ? offer.default
+        : versions[0] ?? ""
   const allowedReplicas = offer.replicas?.length ? offer.replicas : [1, 3]
   const [replicasSel, setReplicasSel] = useState("")
   const replicas = allowedReplicas.includes(Number(replicasSel)) ? Number(replicasSel) : allowedReplicas[0]

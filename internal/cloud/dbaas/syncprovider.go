@@ -145,6 +145,25 @@ func databaseDataWithHost(cfg Config, app map[string]any, host, readHost string)
 	if sc := digStr(values, "storage", "storageClassName"); sc != "" {
 		d["storage_class"] = sc
 	}
+	// Backup posture. This was missing, and its absence disabled a whole feature rather than one
+	// label: the console builds the restore-source list from `backup.enabled`, so with the key
+	// never projected NO database was ever offered as a recovery source and restore-from-backup
+	// was unreachable in the UI. The schedule/retention summary read the same absent key and
+	// therefore always rendered the defaults, whatever the customer had set.
+	//
+	// Object-store wiring is the operator's, so `enabled` tracks the values block the chart got —
+	// which is what "this database archives to the object store" means — and schedule/retention
+	// carry the customer's posture on top.
+	if b, ok := values["backup"].(map[string]any); ok {
+		block := map[string]any{"enabled": b["enabled"] == true}
+		if sched := digStr(b, "schedule"); sched != "" {
+			block["schedule"] = sched
+		}
+		if days := intAt(b, "retentionDays"); days > 0 {
+			block["retentionDays"] = days
+		}
+		d["backup"] = block
+	}
 	// Autoscale opt-in: 1/0 as a JSON number — the billing surcharge attribute keys on it.
 	if enabled, _ := dig(values, "autoscale", "enabled").(bool); enabled {
 		d["autoscale_enabled"] = 1
