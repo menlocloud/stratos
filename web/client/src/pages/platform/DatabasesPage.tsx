@@ -297,14 +297,10 @@ export default function DatabasesPage() {
   const [initialRestore, setInitialRestore] = useState<InitialRestore | null>(null)
   useEffect(() => {
     if (!restoreParam) return
-    setInitialRestore({
-      sourceId: restoreParam,
-      backupName: listParams.get("backup") ?? "",
-      at: listParams.get("at") ?? "",
-    })
+    setInitialRestore({ sourceId: restoreParam, backupName: listParams.get("backup") ?? "" })
     setCreateOpen(true)
     const next = new URLSearchParams(listParams)
-    for (const k of ["restore", "backup", "at"]) next.delete(k)
+    for (const k of ["restore", "backup"]) next.delete(k)
     setListParams(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restoreParam])
@@ -684,8 +680,7 @@ function DatabaseFormDialog({
   // backups, which can only be laid on a fresh data directory, so the damaged database stays
   // untouched until the customer is satisfied with the replacement.
   const [restoreFrom, setRestoreFrom] = useState(initialRestore?.sourceId ?? "")
-  // <input type="datetime-local"> wants local "YYYY-MM-DDTHH:mm"; the API speaks ISO/UTC.
-  const [restoreTime, setRestoreTime] = useState(() => toLocalInput(initialRestore?.at))
+  const [restoreTime, setRestoreTime] = useState("")
   const restoreCandidates = restoreSources.filter((c) => c.engine === engine)
   // mysql restores by NAMING a backup object; the other engines find their own base backup.
   const needsBackupPick = engine === "mysql"
@@ -918,7 +913,8 @@ function DatabaseFormDialog({
                   <Label htmlFor="rs-time" className="text-xs">Recover to (optional)</Label>
                   <Input id="rs-time" type="datetime-local" value={restoreTime} onChange={(e) => setRestoreTime(e.target.value)} />
                   <p className="text-xs text-muted-foreground">
-                    Leave empty to recover as close to now as the archive reaches.
+                    Leave empty to recover everything the archive holds — the backup plus every
+                    change made after it. Set a time only to deliberately go back to that instant.
                   </p>
                 </div>
               ) : null}
@@ -1575,7 +1571,6 @@ function DatabaseDetail({
                                 disabled={String(b.phase ?? "").toLowerCase() !== "completed"}
                                 onClick={() => {
                                   const q = new URLSearchParams({ restore: String(resource.externalId ?? resource.id), backup: b.name })
-                                  if (b.finishedAt) q.set("at", b.finishedAt)
                                   navigate(`/p/${pid}/databases?${q.toString()}`)
                                 }}
                               >
@@ -1590,8 +1585,9 @@ function DatabaseDetail({
                   {supports(engine, "RESTORE") ? (
                     <p className="text-xs text-muted-foreground">
                       Restoring recovers into a NEW database — this one keeps running and is never
-                      written to. Point-in-time recovery reaches any second the archive covers, not
-                      just the moment a backup finished.
+                      written to. The recovery replays the archive to its end, so it includes
+                      changes made after the backup you pick; the form lets you stop at an earlier
+                      point in time instead.
                     </p>
                   ) : null}
                 </CardContent>
@@ -2731,22 +2727,18 @@ type BackupRun = {
   error?: string
 }
 
-// What a "Restore this backup" click carries into the create form. `at` is the backup's finish
-// time in ISO: for the engines that recover by point in time (postgresql, ferretdb, mariadb) that
-// instant IS the backup, and for mysql — which recovers by naming a backup object — backupName is
-// what the form needs. Sending both keeps one shape for every engine.
-type InitialRestore = { sourceId: string; backupName?: string; at?: string }
-
-// ISO instant -> the value <input type="datetime-local"> accepts, in the BROWSER's timezone
-// (that input has no zone of its own, so anything else silently shifts the recovery point).
-// Empty/unparseable in, empty out — the form then recovers as close to now as the archive reaches.
-function toLocalInput(iso?: string): string {
-  if (!iso) return ""
-  const t = new Date(iso)
-  if (Number.isNaN(t.getTime())) return ""
-  const pad = (n: number) => String(n).padStart(2, "0")
-  return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`
-}
+// What a "Restore this backup" click carries into the create form.
+//
+// Deliberately NOT a recovery time. Prefilling the backup's finish time looks right and loses
+// data twice over: <input type="datetime-local"> has minute precision, so the instant is rounded
+// DOWN — below the backup itself — and even at full precision it would throw away every write
+// made after that backup, which continuous archiving still holds. Recovering with no target
+// replays the archive to its end, i.e. the backup AND everything after it, which is what someone
+// clicking Restore on a database that is still running wants. A specific point in time stays
+// available as an explicit choice in the form.
+//
+// backupName is for mysql, the one engine that recovers by naming a backup object.
+type InitialRestore = { sourceId: string; backupName?: string }
 
 // Common schedules, so nobody has to know cron. The value is the 5-FIELD form the server
 // stores; CNPG's six-field arity is the chart's problem, never the customer's.
