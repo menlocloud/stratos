@@ -1194,3 +1194,37 @@ func sameMap(a, b any) bool {
 	delete(am, "__probe")
 	return aliased
 }
+
+// The node-group rules must stand alone: SET_NODE_GROUPS edits an EXISTING cluster and sends
+// only pools, so anything the create path requires — a picked network above all — cannot be a
+// precondition for validating them. It was, and every resize/add/remove/relabel 400'd with
+// "networkId and subnetId are required" on clusters that had both.
+func TestValidateNodeGroupsIsIndependentOfCreateRules(t *testing.T) {
+	d := testCfg().Defaults
+	groups := []NodeGroup{{Name: "workers", FlavorID: "m5.large", Count: 3, RootVolumeGiB: 120}}
+
+	// The shape the edit path builds: node groups and nothing else.
+	if err := (ClusterSpec{NodeGroups: groups}).ValidateNodeGroups(ClusterDefaults{}); err != nil {
+		t.Fatalf("edit-path validation must not need create-time fields: %v", err)
+	}
+	// And it still rejects what it is there to reject.
+	for name, bad := range map[string][]NodeGroup{
+		"no groups":       {},
+		"missing flavor":  {{Name: "workers", Count: 1, RootVolumeGiB: 120}},
+		"bad name":        {{Name: "Workers_1", FlavorID: "m5.large", Count: 1, RootVolumeGiB: 120}},
+		"duplicate name":  {{Name: "w", FlavorID: "m5.large", Count: 1, RootVolumeGiB: 120}, {Name: "w", FlavorID: "m5.large", Count: 1, RootVolumeGiB: 120}},
+		"autoscale range": {{Name: "workers", FlavorID: "m5.large", Autoscale: true, Min: 3, Max: 1, RootVolumeGiB: 120}},
+		"no disk":         {{Name: "workers", FlavorID: "m5.large", Count: 1}},
+		"bad taint":       {{Name: "workers", FlavorID: "m5.large", Count: 1, RootVolumeGiB: 120, Taints: []string{"gpu=true"}}},
+	} {
+		if err := (ClusterSpec{NodeGroups: bad}).ValidateNodeGroups(ClusterDefaults{}); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+	// Create-time validation still enforces the network pick.
+	spec := testSpec()
+	spec.NetworkID, spec.SubnetID = "", ""
+	if err := spec.Validate(d); err == nil {
+		t.Error("create without a network must still fail")
+	}
+}

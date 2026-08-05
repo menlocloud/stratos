@@ -334,6 +334,22 @@ func (s ClusterSpec) Validate(d ClusterDefaults) error {
 			return fmt.Errorf("cluster: unknown add-on %q", name)
 		}
 	}
+	return s.ValidateNodeGroups(d)
+}
+
+// ValidateNodeGroups checks ONLY the node-group half of a spec, so an action that edits pools
+// (SET_NODE_GROUPS) can reuse the rules without the create-time ones.
+//
+// It is split out because it was not: the edit path shape-checked its groups by building a
+// throwaway ClusterSpec and calling Validate, which worked until Validate grew a cluster-level
+// rule the throwaway could not satisfy. Requiring a BYO network did exactly that, and every
+// node-group edit — resize, add or remove a pool, relabel, retaint — started failing with
+// "networkId and subnetId are required" on clusters that already had both. Keeping the two sets
+// of rules in separate methods is what stops the next cluster-level rule from doing it again.
+func (s ClusterSpec) ValidateNodeGroups(d ClusterDefaults) error {
+	if len(s.NodeGroups) == 0 {
+		return fmt.Errorf("cluster: at least one node group is required")
+	}
 	seen := map[string]bool{}
 	for _, ng := range s.NodeGroups {
 		if ng.Name == "" || ng.FlavorID == "" {

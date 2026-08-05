@@ -395,8 +395,10 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 // (name/flavor required, count/min/max sanity) — allowlist enforcement happens inside the
 // values patch where the cluster's current groups are known.
 func validateNodeGroupShapes(groups []kamaji.NodeGroup) error {
-	spec := kamaji.ClusterSpec{ID: "x", ProjectID: "x", Version: "x", NodeGroups: groups}
-	return spec.Validate(kamaji.ClusterDefaults{})
+	// ONLY the node-group rules: this is an edit of an existing cluster, so the create-time
+	// checks (version offered, BYO network picked, add-on names) have nothing to say about it —
+	// and one of them, the required network, used to fail every edit here.
+	return kamaji.ClusterSpec{NodeGroups: groups}.ValidateNodeGroups(kamaji.ClusterDefaults{})
 }
 
 // prevGroupIndex indexes the live values' nodeGroups by name → flavor / imageId / imageVariant.
