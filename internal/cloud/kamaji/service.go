@@ -399,11 +399,13 @@ func publicKubeconfig(kc []byte, fqdn string) []byte {
 	return out
 }
 
-// RotateKubeconfig triggers a Kamaji certificate rotation for the cluster's admin kubeconfig:
-// annotating the secret with `certs.kamaji.clastix.io/rotate` makes the CertificateLifecycle
-// controller regenerate it and roll the control plane
-// (https://kamaji.clastix.io/guides/certs-lifecycle/). Every kubeconfig already handed out stops
-// working — the caller is expected to have confirmed that with the user.
+// RotateKubeconfig re-issues the cluster's admin kubeconfig: the Secret is deleted and Kamaji's
+// controller immediately recreates it with a fresh client certificate. GET_KUBECONFIG then serves
+// the new credential.
+//
+// It is NOT a revocation. Kubeconfigs already downloaded keep working until their certificate
+// expires — revoking them would mean rotating the cluster CA, which also invalidates every
+// kubelet's certificate and re-bootstraps the nodes. Callers must not tell the customer otherwise.
 func (s *Service) RotateKubeconfig(ctx context.Context, projectID, clusterID string) error {
 	ns := NamespaceFor(projectID)
 	tcp, err := s.findTCP(ctx, ns, clusterID)
@@ -413,8 +415,18 @@ func (s *Service) RotateKubeconfig(ctx context.Context, projectID, clusterID str
 	if tcp == nil {
 		return fmt.Errorf("kamaji: cluster %s: control plane not found (still provisioning?)", clusterID)
 	}
-	return s.api.AnnotateSecret(ctx, ns, adminKubeconfigSecret(tcp, clusterID),
-		map[string]string{"certs.kamaji.clastix.io/rotate": ""})
+	// DELETE, not annotate. The `certs.kamaji.clastix.io/rotate` annotation this used to write is
+	// ignored by the operator on the version we run (verified against kamaji 26.7.5-edge: the
+	// annotation lands, the TCP reconciles, and the Secret is byte-identical afterwards), so the
+	// action was a no-op that reported success. Deleting the Secret is the contract Kamaji does
+	// honour — its controller recreates it, with a freshly signed client certificate, within a
+	// second.
+	//
+	// What this does NOT do is invalidate kubeconfigs already handed out: they carry client certs
+	// signed by the cluster CA, and x509 has no revocation here — only rotating the CA would do
+	// that, and it would also break every node's kubelet. Say what it is (a fresh credential),
+	// never "the old one stops working".
+	return s.api.DeleteSecret(ctx, ns, adminKubeconfigSecret(tcp, clusterID))
 }
 
 // adminKubeconfigSecret is the Kamaji admin-kubeconfig secret for a control plane: `<tcp>-admin-

@@ -1366,9 +1366,9 @@ function ClusterDetail({
   const rotate = useMutation({
     mutationFn: () => act("ROTATE_KUBECONFIG"),
     onSuccess: () => {
-      // Nothing in the cached cluster payload changes — the control plane just re-issues its
-      // certificates — so there is no optimistic patch to apply here.
-      toast.success("Rotating — download a fresh kubeconfig in a minute")
+      // Nothing in the cached cluster payload changes — only the credential Secret does — so
+      // there is no optimistic patch to apply here.
+      toast.success("New kubeconfig issued — download it below")
       setRotateOpen(false)
     },
     onError: (e: Error) => toast.error(e.message),
@@ -1708,21 +1708,24 @@ function ClusterDetail({
           </DialogContent>
         </Dialog>
 
-        {/* Rotate kubeconfig — destructive for anyone holding the old one, so confirm */}
+        {/* Re-issue the admin kubeconfig. Deliberately NOT described as a revocation: the
+            credential is an x509 client cert signed by the cluster CA, so copies already handed
+            out stay valid until they expire — only a CA rotation would kill them, and that
+            re-bootstraps every node. */}
         <Dialog open={rotateOpen} onOpenChange={setRotateOpen}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Rotate kubeconfig</DialogTitle>
               <DialogDescription>
-                Issues fresh cluster credentials and restarts the control plane. Every kubeconfig
-                downloaded before now stops working, including any in CI. Download a new one
-                afterwards.
+                Issues a fresh admin kubeconfig for this cluster. Kubeconfigs already downloaded
+                keep working until their certificate expires — this is not a way to cut off a
+                leaked one. To do that, replace the cluster.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
               <Button variant="outline" onClick={() => setRotateOpen(false)}>Cancel</Button>
               <Button variant="destructive" onClick={() => rotate.mutate()} disabled={rotate.isPending}>
-                {rotate.isPending ? "Rotating…" : "Rotate"}
+                {rotate.isPending ? "Issuing…" : "Issue new kubeconfig"}
               </Button>
             </DialogFooter>
           </DialogContent>

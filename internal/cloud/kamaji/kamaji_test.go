@@ -2,6 +2,7 @@ package kamaji
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -971,11 +972,14 @@ func TestRotateKubeconfig(t *testing.T) {
 	if err := svc.RotateKubeconfig(ctx, "p1", "stc-x"); err != nil {
 		t.Fatalf("RotateKubeconfig: %v", err)
 	}
-	// Kamaji watches for this annotation and regenerates the secret; anything else is a no-op that
-	// would look like it worked.
-	ann := api.annotated["st-p1/"+AdminKubeconfigSecretName("stc-x")]
-	if _, ok := ann["certs.kamaji.clastix.io/rotate"]; !ok {
-		t.Errorf("rotate annotation = %v", ann)
+	// Deleting the Secret is the trigger Kamaji actually honours: its controller recreates it with
+	// a fresh client certificate within a second. This test used to assert the
+	// `certs.kamaji.clastix.io/rotate` annotation instead — which the operator ignores on 26.7.5,
+	// so the action reported success while the credential never changed, and the test kept the
+	// wrong assumption alive. Verified against a live cluster before changing it.
+	want := "secret:st-p1/" + AdminKubeconfigSecretName("stc-x")
+	if !slices.Contains(api.deleted, want) {
+		t.Errorf("rotation must delete the admin kubeconfig secret; deleted = %v", api.deleted)
 	}
 }
 
