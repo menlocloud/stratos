@@ -254,6 +254,9 @@ export default function DatabasesPage() {
           resourceId: r.id,
           name: (d.name as string) || r.externalId || r.id,
           engine: String(d.engine ?? ""),
+          // Recovery lays a physical copy on a fresh data directory, so the new database has to
+          // be the SAME major version — the form seeds it from here when restoring.
+          version: String(d.engine_version ?? ""),
         })),
     [data],
   )
@@ -629,7 +632,7 @@ function DatabaseFormDialog({
   storageClasses?: string[]
   // Databases already in this project that a new one could be recovered from — same engine,
   // backups on. The page owns the list, so the dialog never re-fetches it.
-  restoreSources: { id: string; name: string; engine: string; resourceId: string }[]
+  restoreSources: { id: string; name: string; engine: string; resourceId: string; version?: string }[]
   // Set when the form was opened from a specific backup (detail page → Restore).
   initialRestore?: InitialRestore | null
   // Needed only to list a source's backups when the engine restores by name (mysql).
@@ -646,11 +649,16 @@ function DatabaseFormDialog({
   const [name, setName] = useState("")
   // Derived, not effect-reset: switching location swaps the catalog, and a stale pick that is
   // no longer offered falls back to the first offered engine/version.
-  const [engineSel, setEngineSel] = useState("")
+  // Opened from a backup row: the engine and version are the SOURCE's, not the catalog's first
+  // entry. Without this the form came up on whatever engine sorts first, the source did not match
+  // it, and the whole restore block stayed hidden — a Restore button that silently restored
+  // nothing. Version matters just as much: a physical copy only replays on the same major.
+  const restoreSource = restoreSources.find((c) => c.id === initialRestore?.sourceId)
+  const [engineSel, setEngineSel] = useState(restoreSource?.engine ?? "")
   const engine = engineKeys.includes(engineSel) ? engineSel : engineKeys[0] ?? ""
   const offer = engines[engine] ?? {}
   const versions = (offer.versions ?? []).filter(Boolean)
-  const [versionSel, setVersionSel] = useState("")
+  const [versionSel, setVersionSel] = useState(restoreSource?.version ?? "")
   const version = versions.includes(versionSel) ? versionSel : offer.default && versions.includes(offer.default) ? offer.default : versions[0] ?? ""
   const allowedReplicas = offer.replicas?.length ? offer.replicas : [1, 3]
   const [replicasSel, setReplicasSel] = useState("")
