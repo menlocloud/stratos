@@ -136,12 +136,16 @@ func (h *Handler) dbaasCreate(w http.ResponseWriter, r *http.Request, u *user.Us
 		Type: cloud.TypeDatabaseCluster, ExternalID: spec.ID,
 		Data: data, CreatedAt: &now, UpdatedAt: &now,
 	}
-	if _, err := h.cloud.Insert(r.Context(), cr); err != nil {
+	// Respond with the STORED resource, not the struct we built: the id is generated on insert,
+	// and callers navigate to it. Dropping it here shipped the client to `/databases/undefined`
+	// straight after a successful create.
+	saved, err := h.cloud.Insert(r.Context(), cr)
+	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_CREATE", "", cr)
-	httpx.OK(w, *cr)
+	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_CREATE", "", saved)
+	httpx.OK(w, *saved)
 }
 
 // dbaasDelete handles the DATABASE_CLUSTER leg of cloudDelete: Application delete (ArgoCD's
