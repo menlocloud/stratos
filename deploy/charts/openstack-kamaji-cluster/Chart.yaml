@@ -16,6 +16,16 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.11.0 gives every node port the cluster's pod and service CIDRs as allowedAddressPairs, which
+# is what makes POD-TO-POD TRAFFIC BETWEEN NODES work at all. Cilium runs in native routing mode
+# here, so a pod's packets leave the node carrying the POD's source address; Neutron port security
+# drops every frame whose source is neither the port's fixed IP nor an allowed pair. Without them a
+# ONE-NODE cluster looks perfectly healthy and the failure only appears once a second node exists —
+# which is how it was reported. The infra-ops wrapper charts have always set these by hand; the
+# Stratos values builder never did, so no Stratos-created cluster has ever had them.
+# Also relaxes the 0.9.0 guard: securityGroupIds is refused only alongside a port that sets its OWN
+# securityGroups (the case CAPO resolves by replacement), not alongside any port at all — the old
+# rule would have blocked this very fix.
 # 0.10.0 adds `clusterNetworking.dnsServers`: DNS servers written onto every node as a
 # systemd-resolved drop-in. Until now the chart's only DNS knob was `dnsNameservers`, which CAPO
 # honours ONLY on a subnet it creates itself — with a bring-your-own subnet, which is the only mode
@@ -46,4 +56,4 @@ type: application
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.10.0
+version: 0.11.0
