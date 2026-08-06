@@ -488,8 +488,10 @@ func TestBuildApplication(t *testing.T) {
 		t.Fatal("metadata name/namespace")
 	}
 	fins, _ := dig(app, "metadata", "finalizers").([]any)
-	if len(fins) != 1 || fins[0] != "resources-finalizer.argocd.argoproj.io" {
-		t.Fatal("resources-finalizer missing — delete would not cascade")
+	// The BACKGROUND variant: ArgoCD's default foreground cascade livelocks against an operator
+	// that recreates children while the parent is still visible (valkey-operator does).
+	if len(fins) != 1 || fins[0] != "resources-finalizer.argocd.argoproj.io/background" {
+		t.Fatal("background resources-finalizer missing — delete would not cascade, or would livelock")
 	}
 	if digStr(app, "spec", "project") != "stratos-dbaas" {
 		t.Fatal("AppProject")

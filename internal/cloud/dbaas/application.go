@@ -5,6 +5,19 @@ package dbaas
 // itself. The resources-finalizer makes an Application delete cascade to everything the chart
 // rendered (engine CR, LB Service, NetworkPolicy) — our delete path relies on it; the LB
 // Service delete in turn makes the OCCM tear down the Octavia LB on the tenant subnet.
+//
+// The BACKGROUND variant of the finalizer, deliberately. ArgoCD's default cascade deletes with
+// foreground propagation, which makes the API server stamp a `foregroundDeletion` finalizer on
+// each resource and hold it until its dependents are gone. An operator that keeps reconciling a
+// resource it can still see then recreates those dependents faster than the GC removes them, and
+// the delete LIVELOCKS: valkey-operator does exactly this — a deleted ValkeyCluster sat with
+// `foregroundDeletion` while its headless Service was recreated every second, forever, and each
+// pass minted a fresh PVC and a fresh Cinder volume until the project hit its volume quota.
+//
+// Background propagation deletes the parent immediately and lets the GC collect children by
+// ownerReference, so the operator has no object left to reconcile. Ordering within the cascade is
+// not something we rely on: the LB Service still carries its own OCCM finalizer, so Octavia is
+// torn down properly either way.
 func BuildApplication(cfg Config, spec DatabaseSpec, serviceID, chartVersion string, values map[string]any) map[string]any {
 	if chartVersion == "" {
 		chartVersion = cfg.ChartVersion
@@ -30,7 +43,7 @@ func BuildApplication(cfg Config, spec DatabaseSpec, serviceID, chartVersion str
 			"annotations": map[string]any{
 				AnnotationDisplayName: spec.DisplayName,
 			},
-			"finalizers": []any{"resources-finalizer.argocd.argoproj.io"},
+			"finalizers": []any{"resources-finalizer.argocd.argoproj.io/background"},
 		},
 		"spec": map[string]any{
 			"project": project,
