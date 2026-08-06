@@ -1645,3 +1645,40 @@ func TestDatabaseDataCarriesBackupPosture(t *testing.T) {
 		t.Errorf("valkey must not carry a backup block: %v", vd["backup"])
 	}
 }
+
+// A database whose desired state never reached the cluster must not be shown as ready. ArgoCD
+// computes health over the resources it can see and has no health check for most operator CRs, so
+// an engine CR the API server rejected — or one the operator marked failed — leaves the app
+// Healthy while nothing runs. Live-caught: valkey (UsersACLError) and opensearch (admission
+// webhook refusal) both reported `ready` with a published endpoint and zero pods.
+func TestDatabaseStatusNotReadyWhenOutOfSync(t *testing.T) {
+	app := func(health, sync string) map[string]any {
+		return map[string]any{
+			"metadata": map[string]any{"name": "std-1"},
+			"spec": map[string]any{"source": map[string]any{"helm": map[string]any{
+				"valuesObject": map[string]any{"engine": EngineValkey, "engineVersion": "7.2"},
+			}}},
+			"status": map[string]any{
+				"health": map[string]any{"status": health},
+				"sync":   map[string]any{"status": sync},
+			},
+		}
+	}
+	cfg := testConfig()
+	for _, tc := range []struct {
+		health, sync, want string
+	}{
+		{"Healthy", "Synced", "READY"},
+		{"Healthy", "OutOfSync", "PROGRESSING"},
+		{"Progressing", "OutOfSync", "PROGRESSING"},
+		// A real failure keeps its own word — OutOfSync must not soften Degraded into
+		// "still working on it".
+		{"Degraded", "OutOfSync", "DEGRADED"},
+	} {
+		db, _ := databaseDataWithHost(cfg, app(tc.health, tc.sync), "10.1.0.5", "")["database"].(map[string]any)
+		got := db["status"]
+		if got != tc.want {
+			t.Errorf("health=%s sync=%s → status=%v, want %s", tc.health, tc.sync, got, tc.want)
+		}
+	}
+}

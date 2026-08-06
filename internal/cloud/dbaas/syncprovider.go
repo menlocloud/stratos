@@ -91,6 +91,21 @@ func databaseDataWithHost(cfg Config, app map[string]any, host, readHost string)
 			status = "UNKNOWN"
 		}
 	}
+	// Health ALONE is not readiness. ArgoCD computes health over the resources it can actually
+	// see, and it has no health check for most operator CRs — so an engine CR the API server
+	// REJECTED (never applied, app left OutOfSync) and one whose operator set a hard failure
+	// condition both leave every remaining resource healthy, and the app reads Healthy. The drill
+	// caught both on the same afternoon: valkey stuck at UsersACLError and opensearch refused
+	// outright by its admission webhook, each with zero pods, each shown to the customer as
+	// `ready` with a published endpoint behind which nothing listens.
+	//
+	// OutOfSync is the honest signal there: it means ArgoCD could not put the desired state on the
+	// cluster, whatever the surviving pieces look like. A database whose spec never landed is not
+	// ready. PROGRESSING rather than DEGRADED — ArgoCD retries, and most OutOfSync moments are a
+	// sync still in flight — but it stops the console claiming an endpoint works.
+	if status == "READY" && digStr(app, "status", "sync", "status") == "OutOfSync" {
+		status = "PROGRESSING"
+	}
 
 	engine := digStr(values, "engine")
 	d := map[string]any{
