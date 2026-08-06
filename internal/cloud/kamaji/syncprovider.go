@@ -57,12 +57,20 @@ func (p *ClusterSyncProvider) List(ctx context.Context) ([]cloud.CloudResource, 
 		if err != nil {
 			return nil, err
 		}
+		// The CAPO infrastructure object, for the "what did the platform create for me" panel.
+		// BEST EFFORT on purpose: this enrichment must never be able to fail a project's whole
+		// cluster sync — a management cluster without the CRD, or without RBAC for it, still has
+		// clusters worth listing. An error means "not known", which renders as an absent panel.
+		osc, oscErr := s.api.GetOpenStackCluster(ctx, ns, id)
+		if oscErr != nil {
+			osc = nil
+		}
 		out = append(out, cloud.CloudResource{
 			Type:       cloud.TypeKubernetesCluster,
 			ExternalID: id,
 			Region:     p.region,
 			ProjectID:  p.projectID,
-			Data:       clusterData(app, tcp, mds),
+			Data:       clusterData(app, tcp, mds, osc),
 		})
 	}
 	return out, nil
@@ -71,7 +79,7 @@ func (p *ClusterSyncProvider) List(ctx context.Context) ([]cloud.CloudResource, 
 // clusterData maps Application (+ optional TCP/MachineDeployments) → the cached `data` payload.
 // bson-round-trip-stable by construction: strings, bools and JSON numbers only, timestamps as
 // the RFC3339 strings Kubernetes already serializes (never time.Time — the dev-era churn lesson).
-func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
+func clusterData(app, tcp map[string]any, mds []map[string]any, osc map[string]any) map[string]any {
 	values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
 
 	status := "PENDING"
@@ -190,5 +198,31 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 		groups = append(groups, g)
 	}
 	c["node_groups"] = groups
+
+	// ── what the platform created for this cluster ────────────────────────────
+	// Read off CAPO's own status rather than derived from names: these are the objects the
+	// delete cascade takes with it, and a customer deciding whether an OpenStack object is safe
+	// to touch needs the authoritative list, not a guess.
+	if osc != nil {
+		managed := []any{}
+		for _, sg := range []struct{ field, role string }{
+			{"controlPlaneSecurityGroup", "control-plane"},
+			{"workerSecurityGroup", "worker"},
+			{"bastionSecurityGroup", "bastion"},
+		} {
+			g, _ := dig(osc, "status", sg.field).(map[string]any)
+			if id := digStr(g, "id"); id != "" {
+				managed = append(managed, map[string]any{"id": id, "name": digStr(g, "name"), "role": sg.role})
+			}
+		}
+		if len(managed) > 0 {
+			c["managed_security_groups"] = managed
+		}
+	}
+	// The break-glass keypair injected into every node — platform-owned, and the customer should
+	// know it is there.
+	if kp := digStr(values, "machineSSHKeyName"); kp != "" {
+		c["support_keypair"] = kp
+	}
 	return map[string]any{"cluster": c}
 }

@@ -22,6 +22,10 @@ const (
 	pathApplications        = "/apis/argoproj.io/v1alpha1/namespaces/%s/applications"
 	pathTenantControlPlanes = "/apis/kamaji.clastix.io/v1alpha1/namespaces/%s/tenantcontrolplanes"
 	pathMachineDeployments  = "/apis/cluster.x-k8s.io/v1beta1/namespaces/%s/machinedeployments"
+	// CAPO's infrastructure object. Read-only here: its status carries the ids and names of the
+	// security groups CAPO manages for the cluster, which is the only authoritative source for
+	// "what did the platform create for me".
+	pathOpenStackClusters = "/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/%s/openstackclusters"
 	pathSecrets             = "/api/v1/namespaces/%s/secrets"
 	pathServices            = "/api/v1/namespaces/%s/services"
 	pathNetworkPolicies     = "/apis/networking.k8s.io/v1/namespaces/%s/networkpolicies"
@@ -387,6 +391,12 @@ func (c *Client) GetTenantControlPlane(ctx context.Context, ns, name string) (ma
 // ListTenantControlPlanes lists TCPs in ns (labelSelector optional).
 func (c *Client) ListTenantControlPlanes(ctx context.Context, ns, labelSelector string) ([]map[string]any, error) {
 	return c.list(ctx, fmt.Sprintf(pathTenantControlPlanes, ns), labelSelector)
+}
+
+// GetOpenStackCluster reads the CAPO OpenStackCluster for a cluster. nil when absent — a cluster
+// mid-create has none yet, and the caller must treat that as "not known yet", never as "none".
+func (c *Client) GetOpenStackCluster(ctx context.Context, ns, name string) (map[string]any, error) {
+	return c.get(ctx, fmt.Sprintf(pathOpenStackClusters, ns), name)
 }
 
 // ListMachineDeployments lists CAPI MachineDeployments in ns filtered by labelSelector

@@ -520,6 +520,8 @@ func TestCloudsYAML(t *testing.T) {
 
 // fakeAPI records calls and serves canned objects.
 type fakeAPI struct {
+	osc    map[string]any
+	oscErr error
 	namespaces map[string]map[string]string
 	secrets    map[string]map[string]string // ns/name → stringData
 	secretObjs map[string]map[string]any    // ns/name → full object (metadata for ListSecrets)
@@ -677,6 +679,10 @@ func (f *fakeAPI) ListTenantControlPlanes(_ context.Context, ns, labelSelector s
 }
 func (f *fakeAPI) ListMachineDeployments(_ context.Context, _, _ string) ([]map[string]any, error) {
 	return f.mds, nil
+}
+
+func (f *fakeAPI) GetOpenStackCluster(_ context.Context, _, _ string) (map[string]any, error) {
+	return f.osc, f.oscErr
 }
 
 func TestServiceCreateDelete(t *testing.T) {

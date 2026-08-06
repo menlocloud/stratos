@@ -34,6 +34,7 @@ type K8sAPI interface {
 	GetTenantControlPlane(ctx context.Context, ns, name string) (map[string]any, error)
 	ListTenantControlPlanes(ctx context.Context, ns, labelSelector string) ([]map[string]any, error)
 	ListMachineDeployments(ctx context.Context, ns, labelSelector string) ([]map[string]any, error)
+	GetOpenStackCluster(ctx context.Context, ns, name string) (map[string]any, error)
 }
 
 // defaultFinalizeGrace: a cloud-config secret younger than this is never treated as an orphan.
@@ -118,7 +119,7 @@ func (s *Service) CreateCluster(ctx context.Context, spec ClusterSpec, osCfg cli
 	if err := s.api.ApplyApplication(ctx, app); err != nil {
 		return nil, fmt.Errorf("kamaji: apply application: %w", err)
 	}
-	return clusterData(app, nil, nil), nil
+	return clusterData(app, nil, nil, nil), nil
 }
 
 // DeleteCluster removes the cluster: Application delete only (the resources-finalizer cascades

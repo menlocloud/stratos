@@ -86,6 +86,20 @@ type FlavorOption = {
 // they cannot route to or see. The external gateway is derived server-side and never shown.
 // A pickable security group: one of the project's own, offered per node group.
 type SecurityGroupOption = { id: string; name: string }
+
+// CAPO creates a security group per cluster per role and names them deterministically —
+// k8s-cluster-<namespace>-<cluster>-secgroup-{controlplane,worker,bastion}. They live in the
+// customer's tenant, so they sync like any other security group and were showing up in this
+// picker: one row per role per cluster, growing with every cluster the project owns.
+//
+// They are never a sane pick. They belong to a specific cluster, they are deleted with it, and
+// attaching one pool to ANOTHER cluster's rules is a dependency nobody asked for. Filtered from
+// the picker only — the server still accepts them if an API client insists, because they do
+// belong to the tenant and a name pattern is not a thing to build an authorisation rule on.
+const platformSecurityGroup = /^k8s-cluster-.+-secgroup-(controlplane|worker|bastion)$/
+function isPlatformSecurityGroup(name: string): boolean {
+  return platformSecurityGroup.test(name)
+}
 type NetworkOption = {
   id: string
   name: string
@@ -456,7 +470,7 @@ function useKubernetesData(pid: string) {
         const sg = (r.data?.securityGroup ?? {}) as Record<string, unknown>
         return { id: ((sg.id as string) || r.externalId || ""), name: (sg.name as string) || "" }
       })
-      .filter((g) => !!g.id)
+      .filter((g) => !!g.id && !isPlatformSecurityGroup(g.name))
       .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
   }, [securityGroupsQ.data])
 
@@ -1283,6 +1297,115 @@ function NodeGroupsEditor({
   )
 }
 
+
+// ── the cloud-resources card ────────────────────────────────────────────────
+// "What exists in my OpenStack project because of this cluster, and what happens to it when I
+// delete the cluster." Split by OWNERSHIP rather than by object type, because that is the only
+// distinction that changes what a customer may safely do: the platform's objects go with the
+// cluster, the customer's are left exactly where they were.
+//
+// Node servers, root volumes and floating IPs are deliberately NOT listed one by one — they
+// already have their own pages, and duplicating an inventory that goes stale is worse than a
+// pointer to the live one.
+function CloudResourcesCard({
+  cluster, securityGroups,
+}: {
+  cluster: Cluster
+  securityGroups: SecurityGroupOption[]
+}) {
+  const nameOf = (id: string) => securityGroups.find((g) => g.id === id)?.name || id
+  const managed = (cluster.managed_security_groups as { id: string; name?: string; role?: string }[]) ?? []
+  const pools = (cluster.node_groups as Cluster[]) ?? []
+  const serverGroups = pools.filter((g) => !!g.server_group_id)
+  const chosen = pools.flatMap((g) =>
+    ((g.security_group_ids as string[]) ?? []).map((id) => ({ pool: String(g.name ?? ""), id })),
+  )
+  const keypair = (cluster.support_keypair as string) || ""
+  const clusterId = (cluster.id as string) || ""
+
+  const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="min-w-0 break-all">{children}</span>
+    </div>
+  )
+
+  return (
+    <div className="grid gap-3 rounded-lg border p-4">
+      <div className="text-sm font-medium">Cloud resources</div>
+
+      <div className="grid gap-1.5">
+        <div className="text-xs font-medium uppercase text-muted-foreground">Created by the platform</div>
+        {managed.length > 0 && (
+          <Row label="Security groups">
+            {managed.map((g) => (
+              <span key={g.id} className="mr-2 inline-block">
+                <span className="font-mono text-xs">{g.name || g.id}</span>
+                {g.role ? <span className="text-xs text-muted-foreground"> ({g.role})</span> : null}
+              </span>
+            ))}
+          </Row>
+        )}
+        {serverGroups.length > 0 && (
+          <Row label="Server groups">
+            {serverGroups.map((g) => (
+              <span key={String(g.name)} className="mr-2 inline-block font-mono text-xs">
+                {clusterId}-{String(g.name)}
+              </span>
+            ))}
+            <span className="text-xs text-muted-foreground">— soft anti-affinity, one per node group</span>
+          </Row>
+        )}
+        {clusterId ? (
+          <Row label="Application credential">
+            <span className="font-mono text-xs">stratos-{clusterId}</span>
+            <span className="text-xs text-muted-foreground"> — scoped to this cluster alone</span>
+          </Row>
+        ) : null}
+        {keypair ? (
+          <Row label="SSH key">
+            <span className="font-mono text-xs">{keypair}</span>
+            <span className="text-xs text-muted-foreground"> — break-glass access for support</span>
+          </Row>
+        ) : null}
+        <Row label="Nodes, root volumes, floating IPs">
+          <span className="text-xs text-muted-foreground">on the Servers, Volumes and Floating IPs pages</span>
+        </Row>
+      </div>
+
+      <div className="grid gap-1.5">
+        <div className="text-xs font-medium uppercase text-muted-foreground">Chosen by you</div>
+        {(cluster.network_id as string) ? (
+          <Row label="Network">
+            <span className="font-mono text-xs">{cluster.network_id as string}</span>
+            {(cluster.subnet_id as string) ? (
+              <span className="text-xs text-muted-foreground"> · subnet {cluster.subnet_id as string}</span>
+            ) : null}
+          </Row>
+        ) : null}
+        {chosen.length > 0 ? (
+          <Row label="Security groups">
+            {chosen.map((c) => (
+              <span key={`${c.pool}:${c.id}`} className="mr-2 inline-block">
+                <span className="font-mono text-xs">{nameOf(c.id)}</span>
+                <span className="text-xs text-muted-foreground"> ({c.pool})</span>
+              </span>
+            ))}
+          </Row>
+        ) : (
+          <Row label="Security groups">
+            <span className="text-xs text-muted-foreground">none — the platform's own group is the only one attached</span>
+          </Row>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Deleting the cluster removes everything in the first group. What you chose is left alone.
+      </p>
+    </div>
+  )
+}
+
 // ── cluster detail body (the manage surface, rendered by the detail page) ────
 function ClusterDetail({
   pid, scope, resource, versions, variantsForVersion, platformVersion, flavors, securityGroups, onDeleted, onPatch,
@@ -1488,6 +1611,8 @@ function ClusterDetail({
               </>
             ) : null}
           </p>
+
+          <CloudResourcesCard cluster={c} securityGroups={securityGroups} />
 
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => kubeconfig.mutate()} disabled={kubeconfig.isPending}>
