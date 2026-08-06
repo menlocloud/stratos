@@ -859,20 +859,31 @@ func (s *Service) TriggerBackup(ctx context.Context, dbID, stamp string) error {
 // ListBackups reports the backup objects the engine's operator has produced, newest first. Read
 // straight off the DB cluster rather than cached: a backup list is small, read rarely, and a
 // stale one is the kind of thing someone plans a restore around.
+//
+// Deliberately NOT filtered on the stratos managed-by label. Only the ON-DEMAND backups are ours
+// to label — the chart renders those. The SCHEDULED ones are created by the engine's operator from
+// the ScheduledBackup we render, and every operator stamps its own labels on that child instead of
+// inheriting ours (CNPG: cnpg.io/cluster + cnpg.io/scheduled-backup, no passthrough). Requiring the
+// label therefore hid every unattended backup a database has ever taken, which made the whole
+// schedule decorative: the backups ran, retention consumed them, and the console could never offer
+// one as a restore source.
+//
+// Ownership is the NAMESPACE plus the `<dbID>-` name prefix, which is the real test either way:
+// the namespace is per project, ids are stratos-generated, and nothing outside stratos and the
+// operators can write there.
 func (s *Service) ListBackups(ctx context.Context, projectID, dbID, engine string) ([]map[string]any, error) {
 	plural, group, version := BackupCRFor(engine)
 	if plural == "" {
 		return nil, fmt.Errorf("dbaas: engine %q does not support backups", engine)
 	}
-	items, err := s.api.ListCRs(ctx, group, version, plural, NamespaceFor(projectID),
-		LabelManagedBy+"="+ManagedByValue)
+	items, err := s.api.ListCRs(ctx, group, version, plural, NamespaceFor(projectID), "")
 	if err != nil {
 		return nil, err
 	}
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
-		// Ownership is by name prefix as well as label: one namespace holds every database in
-		// the project, and a backup belonging to a sibling must never appear here.
+		// One namespace holds every database in the project, so a backup belonging to a sibling
+		// must never appear here.
 		name := digStr(it, "metadata", "name")
 		if !strings.HasPrefix(name, dbID+"-") {
 			continue

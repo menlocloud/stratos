@@ -1372,19 +1372,32 @@ func TestListBackups(t *testing.T) {
 		},
 		"status": map[string]any{"phase": "completed"},
 	}
+	// A SCHEDULED backup: created by the engine's operator from our ScheduledBackup, so it carries
+	// the operator's labels and NOT ours. It is still this database's backup and must be listed —
+	// filtering on the stratos label hid every unattended backup and left the schedule decorative.
+	scheduled := map[string]any{
+		"metadata": map[string]any{
+			"name": "std-mine-schedule-20260805165026", "namespace": ns,
+			"labels":            map[string]any{"cnpg.io/cluster": "std-mine", "cnpg.io/scheduled-backup": "std-mine-schedule"},
+			"creationTimestamp": "2026-08-05T16:50:26Z",
+		},
+		"status": map[string]any{"phase": "completed"},
+	}
 	api.crs["backups"] = map[string]map[string]any{
-		key(ns, "std-mine-ondemand-1"):  mine,
-		key(ns, "std-other-ondemand-1"): sibling,
+		key(ns, "std-mine-ondemand-1"):              mine,
+		key(ns, "std-other-ondemand-1"):             sibling,
+		key(ns, "std-mine-schedule-20260805165026"): scheduled,
 	}
 	got, err := svc.ListBackups(context.Background(), "p1", "std-mine", EnginePostgreSQL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0]["name"] != "std-mine-ondemand-1" {
-		t.Fatalf("list = %v, want only this database's backups", got)
+	names := map[string]string{}
+	for _, b := range got {
+		names[b["name"].(string)] = b["phase"].(string)
 	}
-	if got[0]["phase"] != "completed" {
-		t.Errorf("phase = %v", got[0]["phase"])
+	if len(got) != 2 || names["std-mine-ondemand-1"] != "completed" || names["std-mine-schedule-20260805165026"] != "completed" {
+		t.Fatalf("list = %v, want this database's on-demand AND scheduled backups only", got)
 	}
 	if _, err := svc.ListBackups(context.Background(), "p1", "std-mine", EngineValkey); err == nil {
 		t.Error("an engine with no backup CR must report that, not an empty list")
