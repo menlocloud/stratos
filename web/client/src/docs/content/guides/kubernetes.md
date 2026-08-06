@@ -13,6 +13,8 @@ Because workers are your servers, they appear under **Compute → Servers**, con
 
 ## Creating a cluster
 
+![The Kubernetes cluster list](/docs-img/k8s-list.png)
+
 **Create cluster** asks for everything up front. Nothing here is guesswork — every field has a safe default except the network.
 
 ![The Create Kubernetes cluster dialog](/docs-img/k8s-create.png)
@@ -42,6 +44,8 @@ Creation takes several minutes: the platform provisions the control plane, waits
 ## Connecting
 
 Open the cluster and use **Download kubeconfig**.
+
+![A cluster's detail page: endpoint, cloud resources, actions and node groups](/docs-img/k8s-detail.png)
 
 ```sh
 export KUBECONFIG=~/Downloads/my-cluster-kubeconfig.yaml
