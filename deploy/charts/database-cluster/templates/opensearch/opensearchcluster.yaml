@@ -6,9 +6,15 @@ deploy/dbaas-cluster/README.md).
 API GROUP: opensearch.org/v1. Settled at the live drill — operator 3.0.2
 serves BOTH groups, but its validating webhooks REFUSE creation on the old
 opensearch.opster.io group ("API group is deprecated. Please use
-opensearch.org/v1 instead"), for clusters, users and role bindings alike. The
-pod LABELS the operator stamps are still opster.io/* (networkpolicy.yaml and
-dashboards-lb.yaml select on them) — those did not move with the API group.
+opensearch.org/v1 instead"), for clusters, users and role bindings alike.
+
+The pod LABELS moved WITH the api group. This header used to claim the opposite
+— that pods still carried opster.io/* — and networkpolicy.yaml and
+dashboards-lb.yaml selected on that, which matched nothing: a podSelector that
+matches nothing grants nothing, the namespace default-deny then blocked the node
+pods from reaching the bootstrap pod on 9300, and the cluster never formed. A
+live 3.0.2 node pod carries opensearch.org/opensearch-cluster and
+opensearch.org/opensearch-nodepool, and no opster.io key at all.
 
 Auth: NO spec.security.config on purpose — with the operator's DEFAULT
 securityconfig init, the operator generates the admin credential Secret

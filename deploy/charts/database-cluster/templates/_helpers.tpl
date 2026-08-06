@@ -329,7 +329,12 @@ app.kubernetes.io/instance: {{ $name }}
 app.kubernetes.io/name: ferretdb
 app.kubernetes.io/instance: {{ $name }}
 {{- else if eq .Values.engine "opensearch" -}}
-opster.io/opensearch-cluster: {{ $name }}
-opensearch.opster.io/component: nodes
+{{/* opensearch.org/*, NOT opster.io/*. The labels DID move with the api group on
+     operator 3.0.2 — drill-verified off a live node pod, which carries
+     opensearch.org/opensearch-cluster + opensearch.org/opensearch-nodepool and no
+     opster.io key at all. The bootstrap pod carries only the cluster label, so
+     selecting on the nodepool too still keeps it out of the LB. */}}
+opensearch.org/opensearch-cluster: {{ $name }}
+opensearch.org/opensearch-nodepool: nodes
 {{- end -}}
 {{- end }}

@@ -37,17 +37,28 @@ spec:
   # TODO-verify(beta) for valkey), and by the chart's own Deployments
   # (mariadb haproxy / ferretdb frontend). EXCEPTIONS — operators that stamp
   # their own cluster label instead: kafka (strimzi.io/cluster) and opensearch
-  # (opster.io/opensearch-cluster; TODO-verify(drill): Dashboards pods carry
-  # opensearch.cluster.dashboards, NOT necessarily the cluster label — if the
-  # drill shows the dash pods outside this selector, the namespace
-  # default-deny blocks the <id>-dash-lb and the selector below needs an OR
-  # via a second policy).
+  # (opensearch.org/opensearch-cluster).
+  #
+  # That opensearch key was `opster.io/opensearch-cluster` and it matched NOTHING
+  # on operator 3.0.2: the labels moved with the api group, so every pod carries
+  # opensearch.org/* only. A podSelector that matches nothing grants nothing,
+  # while the namespace-wide stratos-default-deny still applies — so the node
+  # pods could not reach the bootstrap pod on 9300, the cluster never formed
+  # ("cluster-manager not discovered yet ... must discover
+  # cluster-manager-eligible nodes [<id>-bootstrap-0]"), and the node pod
+  # CrashLoopBackOffed while the operator reported RUNNING. Drill-caught
+  # 2026-08-06 off the live pod labels.
+  #
+  # STILL TODO-verify(drill): Dashboards pods carry opensearch.cluster.dashboards
+  # and may not carry the cluster label — if they fall outside this selector the
+  # default-deny blocks <id>-dash-lb and this needs an OR via a second policy.
+  # Not reachable in this drill (dashboards disabled).
   podSelector:
     matchLabels:
       {{- if eq .Values.engine "kafka" }}
       strimzi.io/cluster: {{ $name }}
       {{- else if eq .Values.engine "opensearch" }}
-      opster.io/opensearch-cluster: {{ $name }}
+      opensearch.org/opensearch-cluster: {{ $name }}
       {{- else }}
       app.kubernetes.io/instance: {{ $name }}
       {{- end }}
@@ -98,7 +109,7 @@ spec:
               {{- if eq .Values.engine "kafka" }}
               strimzi.io/cluster: {{ $name }}
               {{- else if eq .Values.engine "opensearch" }}
-              opster.io/opensearch-cluster: {{ $name }}
+              opensearch.org/opensearch-cluster: {{ $name }}
               {{- else }}
               app.kubernetes.io/instance: {{ $name }}
               {{- end }}
