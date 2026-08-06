@@ -19,8 +19,10 @@ package project
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
+	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 )
@@ -51,6 +53,108 @@ func (h *Handler) kamajiProvisionCloud(ctx context.Context, p *Project, d kamaji
 		return err
 	}
 	return nil
+}
+
+// kamajiCheckNodeGroupDisks refuses a node group whose root volume is too small for the image its
+// machines boot. Every worker boots FROM A CINDER VOLUME — kamaji.NodeGroupValues always writes
+// machineRootVolume, because the node images are bigger than most flavors' ephemeral disk — and
+// Cinder will not write an image into a volume smaller than the image's min_disk or its own virtual
+// size. Nothing checked this: an undersized number was accepted by the API, stamped into the
+// Application values and only surfaced as a MachineDeployment that stayed at zero ready replicas,
+// with the real reason (a Cinder 400 CAPO logs on the management cluster) invisible to the customer.
+//
+// Runs BEFORE anything is minted, on create and on every SET_NODE_GROUPS.
+func (h *Handler) kamajiCheckNodeGroupDisks(ctx context.Context, p *Project, d kamaji.ClusterDefaults, version string, groups []kamaji.NodeGroup, current map[string]string) error {
+	osCfg, _, err := h.kamajiWorkerCloudConfig(ctx, p)
+	if err != nil {
+		return err
+	}
+	cc, err := client.New(ctx, osCfg)
+	if err != nil {
+		return fmt.Errorf("Managed Kubernetes could not reach your cloud project: %w", err)
+	}
+	return validateNodeGroupDisks(d, version, groups, current, func(id string) (map[string]any, error) {
+		return cc.GetImage(ctx, id)
+	})
+}
+
+// validateNodeGroupDisks is the rule itself, with the cloud behind a getter so it is testable
+// without one. getImage is called at most once per distinct image.
+//
+// Best effort on the LOOKUP, strict on the ANSWER: an image we cannot read leaves its groups
+// unvalidated (status quo — the create still goes through) rather than turning a glance hiccup
+// into a blocked cluster. An image we CAN read is enforced.
+func validateNodeGroupDisks(
+	d kamaji.ClusterDefaults,
+	version string,
+	groups []kamaji.NodeGroup,
+	current map[string]string,
+	getImage func(string) (map[string]any, error),
+) error {
+	minimums := map[string]int{}
+	for _, ng := range groups {
+		size := ng.RootVolumeGiB
+		if size == 0 {
+			size = d.RootVolumeGiB
+		}
+		imageID := kamajiNodeGroupImage(d, version, ng, current)
+		if size == 0 || imageID == "" {
+			// No size or no resolvable image — ClusterSpec.ValidateNodeGroups and
+			// applyNodeGroupImages own those two refusals; nothing to weigh here.
+			continue
+		}
+		minimum, known := minimums[imageID]
+		if !known {
+			image, err := getImage(imageID)
+			if err != nil || image == nil {
+				slog.Warn("kamaji: node image unreadable — root-disk size left unchecked",
+					"image", imageID, "nodeGroup", ng.Name, "err", err)
+				minimums[imageID] = 0
+				continue
+			}
+			minimum = imageMinimumRootGiB(image)
+			minimums[imageID] = minimum
+		}
+		if minimum > 0 && size < minimum {
+			return fmt.Errorf(
+				"node group %q: a root disk of %d GiB is too small for its node image — use at least %d GiB",
+				ng.Name, size, minimum)
+		}
+	}
+	return nil
+}
+
+// kamajiNodeGroupImage resolves the glance image a node group's machines boot, in the SAME order
+// the values builder does: an explicit override, then the provider's curated version→variant image
+// matrix, then — on an edit — whatever the group already runs (kamaji.NodeGroupValues +
+// applyNodeGroupImages). "" when nothing resolves.
+func kamajiNodeGroupImage(d kamaji.ClusterDefaults, version string, ng kamaji.NodeGroup, current map[string]string) string {
+	if ng.ImageID != "" {
+		return ng.ImageID
+	}
+	if img := d.ImageFor(version, ng.ImageVariant); img != "" {
+		return img
+	}
+	return current[ng.Name]
+}
+
+// kamajiCachedImages reads a cluster's current k8s version and per-group boot image off the sync
+// cache — the fallback an EDIT resolves an unchanged group's image through, mirroring
+// applyNodeGroupImages.
+func kamajiCachedImages(cr *cloud.CloudResource) (string, map[string]string) {
+	cl, _ := cr.Data["cluster"].(map[string]any)
+	images := map[string]string{}
+	raw, _ := cl["node_groups"].([]any)
+	for _, item := range raw {
+		g, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name := strAny(g["name"]); name != "" {
+			images[name] = strAny(g["image_id"])
+		}
+	}
+	return strAny(cl["version"]), images
 }
 
 // kamajiResolveClusterNetwork settles the cluster's network placement before anything is built.

@@ -71,6 +71,12 @@ func (h *Handler) kamajiCreate(w http.ResponseWriter, r *http.Request, u *user.U
 		h.fail(w, err)
 		return
 	}
+	// Root disks big enough for the node image each pool boots — refuse here, where the customer
+	// can read the number, instead of at a Cinder 400 nobody outside the management cluster sees.
+	if err := h.kamajiCheckNodeGroupDisks(r.Context(), proj, ks.Config().Defaults, spec.Version, spec.NodeGroups, nil); err != nil {
+		h.fail(w, httpx.BadRequest(err.Error()))
+		return
+	}
 	// Network placement: BYO ids are verified against the live tenant and the external network is
 	// derived from the chosen subnet's router (immutable after create — do it right here or never).
 	if err := h.kamajiResolveClusterNetwork(r.Context(), proj, osSvcID, ks.Config().Defaults, &spec); err != nil {
@@ -254,6 +260,14 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 		}
 		d := ks.Config().Defaults
 		if err := validateNodeGroupShapes(groups); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		// Same root-disk rule as create. The cluster's version and each group's CURRENT image come
+		// off the sync cache: that is the exact fallback applyNodeGroupImages uses below for a group
+		// whose variant is unchanged, so an untouched pool is weighed against the image it runs.
+		cachedVersion, cachedImages := kamajiCachedImages(cr)
+		if err := h.kamajiCheckNodeGroupDisks(r.Context(), proj, d, cachedVersion, groups, cachedImages); err != nil {
 			h.fail(w, httpx.BadRequest(err.Error()))
 			return true
 		}
