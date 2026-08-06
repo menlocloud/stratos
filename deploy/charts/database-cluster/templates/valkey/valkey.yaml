@@ -45,7 +45,22 @@ spec:
       enabled: true
       passwordSecret:
         name: {{ $name }}-auth
-        key: password
+        {{- /* keys, PLURAL and an ARRAY — valkey supports several passwords per
+             user for rotation. It was `key: password`, a field the CRD does not
+             have: the API server pruned it without a word, and the operator
+             fell back to its documented default, "defaults to username", i.e.
+             it looked for a key called `default` in our secret. The cluster
+             then never started —
+
+               state: Failed
+               reason: UsersACLError
+               message: user default: missing password key in secret
+
+             — with ZERO pods and, because nothing reads that condition, an
+             ArgoCD app still reporting Healthy. Live-caught on the 2026-08-06
+             engine drill. */}}
+        keys:
+          - password
   resources:
     {{- include "database-cluster.resources" . | nindent 4 }}
   {{- if or .Values.scheduling.nodeSelector .Values.scheduling.tolerations }}

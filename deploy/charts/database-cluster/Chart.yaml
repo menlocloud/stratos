@@ -23,6 +23,18 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
+# 0.6.2 unblocks valkey and opensearch — both were 100% uncreatable, and both failed quietly.
+#   valkey: the user's passwordSecret said `key: password`, a field the CRD does not have. The
+#     API server pruned it silently and the operator fell back to its documented default ("keys
+#     defaults to username"), hunting for a key called `default`. Result: UsersACLError, zero
+#     pods, ArgoCD still green. Now `keys: [password]`, plural and an array.
+#   opensearch: handing the security plugin a custom http cert (the platform cert-manager one,
+#     which EVERY provider with certIssuer + dnsZone gets — including production) made the
+#     operator's validating webhook reject the object outright: it demands security.config
+#     .adminSecret whenever http certs are user-provided, and that admin CLIENT cert must be
+#     signed by the operator-owned transport CA, so a public issuer can never supply it. Both
+#     TLS layers are operator-generated again. Dashboards keeps the platform cert — it
+#     terminates TLS itself, with no security plugin in the path.
 # 0.6.1 gives the mysql CR a backup image. Without it the Percona operator rejected the whole
 # object ("backup.image can't be empty") and no mysql database ever started — no pods, no
 # credentials, no CR status, while ArgoCD reported the manifests healthy.
@@ -34,4 +46,4 @@ type: application
 # 0.5.0 adds `scheduling` (nodeSelector + tolerations) so a provider can pin every pod a
 # database runs — engine, proxy, FerretDB frontend — onto a dedicated node pool. Additive: with
 # it unset the render is byte-identical to 0.4.5.
-version: 0.6.1
+version: 0.6.2

@@ -57,32 +57,37 @@ spec:
       {{- toYaml . | nindent 6 }}
       {{- end }}
   security:
-    # http-layer TLS precedence — the LB (service-lb.yaml) stays TCP
-    # passthrough in every case, clients speak HTTPS end to end:
-    #   1. customer BYO domain -> their cert (<id>-custom-tls, written by
-    #      SET_CUSTOM_DOMAIN — never via values)
-    #   2. platform DNS + issuer -> real cert (<id>-tls, certificate.yaml)
-    #   3. neither -> operator-generated self-signed (original posture)
-    # Transport layer ALWAYS stays operator-generated: it is node-to-node
-    # only, and the security plugin pins those certs (nodes_dn) — a public
-    # cert there breaks cluster formation, not hardens it.
-    # TODO-verify(drill): secret.name is the operator 3.x custom-cert shape
-    # for BOTH layers-of-use below (security.tls.http and dashboards.tls);
-    # the secret needs tls.crt/tls.key (+ ca.crt when a chain is split out).
+    # BOTH TLS layers are operator-generated, ALWAYS.
+    #
+    # This used to hand the http layer the platform cert (<id>-tls) or the
+    # customer's BYO cert (<id>-custom-tls). That never produced a cluster: the
+    # operator's validating webhook refuses the object outright —
+    #
+    #   admission webhook "vopensearchcluster.opensearch.org" denied the request:
+    #   admin secret name is not provided but http.tls generate is not true
+    #
+    # — and the CRD says why: security.config.adminSecret is "a client
+    # certificate (tls.key, tls.crt, ca.crt) with admin rights ... Must be set
+    # if http certificates are provided by user and not generated". So a custom
+    # http cert obliges us to supply an ADMIN CLIENT cert too, and that one
+    # cannot come from the same public issuer: securityadmin.sh presents it on
+    # the TRANSPORT layer, which is operator-generated and pinned by the
+    # security plugin (nodes_dn). Bringing a public cert there does not harden
+    # cluster formation, it breaks it. Supplying the http cert alone is
+    # therefore not a half-configured cluster, it is an invalid object — and
+    # since the production provider sets certIssuer AND dnsZone, EVERY
+    # opensearch create hit it. Live-caught on the 2026-08-06 engine drill.
+    #
+    # Public-trust TLS for the API needs its own design (terminate at the LB,
+    # which is TCP passthrough today) or a BYO CA feeding both layers. Neither
+    # is this key. certificate.yaml still issues <id>-tls — Dashboards below
+    # consumes it, and that half works: Dashboards terminates TLS itself, with
+    # no security plugin and no admin certificate involved.
+    #
     # NO security.config here — see header (admin secret generation).
     tls:
       http:
-        {{- if .Values.opensearch.customDomain }}
-        generate: false
-        secret:
-          name: {{ $name }}-custom-tls
-        {{- else if and .Values.opensearch.certIssuer .Values.network.dnsZone }}
-        generate: false
-        secret:
-          name: {{ $name }}-tls
-        {{- else }}
         generate: true
-        {{- end }}
       transport:
         generate: true
         perNode: true
