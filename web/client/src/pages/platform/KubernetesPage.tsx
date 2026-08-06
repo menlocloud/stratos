@@ -37,6 +37,7 @@ import {
 } from "@/lib/hooks"
 import { gpuCapacityViolations, serverQuotaViolations } from "@/lib/quota"
 import type { CloudResource, Location } from "@/lib/types"
+import { versionGt } from "@/lib/utils"
 import { isPrivateNetwork, networkName } from "../network/NetworksPage"
 import { serverName, serverStatus, serverIPs } from "../servers/ServersPage"
 
@@ -1526,7 +1527,10 @@ function ClusterDetail({
   // Opt-in platform update: offered only when the provider's pinned platform version is known
   // and this cluster sits on an older one. Applying is the customer's call, never automatic.
   const chartVersion = (c.chart_version as string) || ""
-  const updateAvailable = !!platformVersion && !!chartVersion && chartVersion !== platformVersion
+  // STRICTLY newer, not merely different. A cluster can legitimately sit AHEAD of the provider's
+  // pin — an operator rolls the pin back, or bumps one cluster past it — and `!==` then billed
+  // that as "a newer version is available", counting down to the older one and never clearing.
+  const updateAvailable = !!platformVersion && !!chartVersion && versionGt(platformVersion, chartVersion)
   const [platformOpen, setPlatformOpen] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [rotateOpen, setRotateOpen] = useState(false)

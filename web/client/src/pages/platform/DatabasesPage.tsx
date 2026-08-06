@@ -38,6 +38,7 @@ import { apiFetch, type CloudScope } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useCloudList, useLocations, useProjectId, useProjectServices } from "@/lib/hooks"
 import type { CloudResource, DatabaseEngineOffer, DatabaseLimits, Location } from "@/lib/types"
+import { versionGt } from "@/lib/utils"
 import { isPrivateNetwork, networkName } from "../network/NetworksPage"
 
 type Db = Record<string, any>
@@ -132,19 +133,6 @@ function sizeOf(d: Db): string {
 
 // Stable key for a location picker — the API array order is not stable, so never key by index.
 const locKeyOf = (l: Location) => `${l.serviceId ?? ""}::${l.region ?? ""}`
-
-// Dotted-numeric version compare, mirrors the server's upgrade-path check — "10.11" < "11.4",
-// "9.6" < "10". Missing segments count as 0.
-function versionGt(a: string, b: string): boolean {
-  const as = a.split(".").map(Number)
-  const bs = b.split(".").map(Number)
-  for (let i = 0; i < Math.max(as.length, bs.length); i++) {
-    const x = as[i] ?? 0
-    const y = bs[i] ?? 0
-    if (x !== y) return x > y
-  }
-  return false
-}
 
 async function copyText(value: string) {
   try {
@@ -1206,7 +1194,9 @@ function DatabaseDetail({
   // A database keeps the chart version it was created with; the provider pin moves on. Offer
   // the update, never force it — same opt-in posture as managed Kubernetes.
   const chartVersion = (d.chart_version as string) || ""
-  const updateAvailable = !!platformVersion && !!chartVersion && chartVersion !== platformVersion
+  // STRICTLY newer — a database that sits AHEAD of the provider's pin is not behind it, and `!==`
+  // offered the downgrade as an update that could never be satisfied.
+  const updateAvailable = !!platformVersion && !!chartVersion && versionGt(platformVersion, chartVersion)
 
   const act = (action: string, data?: Record<string, any>) =>
     apiFetch<{ result?: any }>(`/project/${pid}/cloud/${resource.id}/action`, {
