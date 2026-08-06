@@ -96,6 +96,15 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 			"subnetFilter":  map[string]any{"id": spec.SubnetID},
 		}
 	}
+	// Node resolvers (chart 0.10.0+). Omitted when empty so the render — and therefore every
+	// pool's KubeadmConfigTemplate checksum — is unchanged for a cluster that never set them.
+	if len(spec.DNSServers) > 0 {
+		out := make([]any, 0, len(spec.DNSServers))
+		for _, srv := range spec.DNSServers {
+			out = append(out, srv)
+		}
+		cn["dnsServers"] = out
+	}
 	if len(cn) > 0 {
 		values["clusterNetworking"] = cn
 	}

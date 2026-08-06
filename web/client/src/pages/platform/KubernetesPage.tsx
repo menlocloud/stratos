@@ -853,6 +853,7 @@ function ClusterFormDialog({
   const [oidcOpen, setOidcOpen] = useState(false)
   const [oidc, setOidc] = useState<OidcDraft>({ ...emptyOidc })
   const [allowedCidrs, setAllowedCidrs] = useState("")
+  const [dnsServers, setDnsServers] = useState("")
   const [networkId, setNetworkId] = useState("")
   const [subnetId, setSubnetId] = useState("")
   const selectedNetwork = networks.find((n) => n.id === networkId)
@@ -878,6 +879,9 @@ function ClusterFormDialog({
         ...(oidc.issuerUrl.trim() ? { oidc: oidcToBody(oidc) } : {}),
         ...(allowedCidrs.trim()
           ? { allowedCidrs: allowedCidrs.split(",").map((c) => c.trim()).filter(Boolean) }
+          : {}),
+        ...(dnsServers.trim()
+          ? { dnsServers: dnsServers.split(",").map((d) => d.trim()).filter(Boolean) }
           : {}),
       })
     } catch (e) {
@@ -1061,6 +1065,22 @@ function ClusterFormDialog({
               onChange={(e) => setAllowedCidrs(e.target.value)}
               placeholder="203.0.113.0/24, 198.51.100.7/32"
             />
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="k8s-dns">DNS servers (optional, comma-separated)</Label>
+            <Input
+              id="k8s-dns"
+              className="font-mono"
+              value={dnsServers}
+              onChange={(e) => setDnsServers(e.target.value)}
+              placeholder="10.0.0.53, 10.0.0.54"
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave empty and the nodes use whatever DNS your subnet hands out — that is what every
+              cluster does today. Addresses only, not hostnames. This also becomes the fallback the
+              cluster's own DNS forwards to.
+            </p>
           </div>
 
           <button type="button" className="text-left text-sm font-medium text-primary hover:underline" onClick={() => setOidcOpen(!oidcOpen)}>
@@ -1383,6 +1403,13 @@ function CloudResourcesCard({
             ) : null}
           </Row>
         ) : null}
+        <Row label="DNS servers">
+          {((cluster.dns_servers as string[]) ?? []).length > 0 ? (
+            <span className="font-mono text-xs">{((cluster.dns_servers as string[]) ?? []).join(", ")}</span>
+          ) : (
+            <span className="text-xs text-muted-foreground">inherited from your subnet</span>
+          )}
+        </Row>
         {chosen.length > 0 ? (
           <Row label="Security groups">
             {chosen.map((c) => (

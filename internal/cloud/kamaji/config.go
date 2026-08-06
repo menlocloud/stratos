@@ -8,6 +8,7 @@ package kamaji
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"slices"
 	"strings"
@@ -265,6 +266,18 @@ type ClusterSpec struct {
 	// crafted id would otherwise let a customer hang their nodes onto infrastructure networks.
 	NetworkID string
 	SubnetID  string
+	// DNSServers are the resolvers every node in the cluster is pointed at (a systemd-resolved
+	// drop-in written at bootstrap). Empty = the nodes inherit whatever DNS the customer's subnet
+	// hands out over DHCP, which is what every cluster did before this existed — the platform has
+	// never had a DNS default of its own.
+	//
+	// CoreDNS in the workload cluster forwards to the node resolver, so this is also the cluster's
+	// fallback DNS.
+	//
+	// CLUSTER-WIDE, and changing it replaces EVERY worker: the value lands in every pool's
+	// KubeadmConfigTemplate, whose checksum names the template. That is inherent to a setting
+	// applied at bootstrap, not a limitation of the plumbing.
+	DNSServers []string
 	// ExternalNetworkID overrides ClusterDefaults.ExternalNetworkID for THIS cluster. Stratos-owned,
 	// derived at create time (the external network the chosen subnet's router egresses through, via
 	// the admin allowlist) — never accepted from the client. CAPO treats spec.externalNetwork as
@@ -355,6 +368,9 @@ func (s ClusterSpec) Validate(d ClusterDefaults) error {
 			return fmt.Errorf("cluster: unknown add-on %q", name)
 		}
 	}
+	if err := ValidateDNSServers(s.DNSServers); err != nil {
+		return err
+	}
 	return s.ValidateNodeGroups(d)
 }
 
@@ -433,6 +449,46 @@ func (s ClusterSpec) ValidateNodeGroups(d ClusterDefaults) error {
 		}
 	}
 	return nil
+}
+
+// maxClusterDNSServers caps the resolver list. systemd-resolved itself accepts more; this is a
+// sanity bound on a value that is written into a file on every node.
+const maxClusterDNSServers = 4
+
+// ValidateDNSServers checks the resolver list a customer supplied. Shared by create and by the
+// edit action, so the two can never drift into different rules.
+//
+// Addresses only, never hostnames: the file is read by the resolver itself, so a name in there is
+// a chicken-and-egg that presents as a node which boots and cannot resolve anything.
+func ValidateDNSServers(servers []string) error {
+	if len(servers) > maxClusterDNSServers {
+		return fmt.Errorf("cluster: at most %d DNS servers", maxClusterDNSServers)
+	}
+	seen := map[string]bool{}
+	for _, srv := range servers {
+		srv = strings.TrimSpace(srv)
+		if srv == "" {
+			return fmt.Errorf("cluster: dnsServers contains an empty entry")
+		}
+		if net.ParseIP(srv) == nil {
+			return fmt.Errorf("cluster: dnsServers: %q is not an IP address (a hostname cannot be used to find a resolver)", srv)
+		}
+		if seen[srv] {
+			return fmt.Errorf("cluster: dnsServers contains %q twice", srv)
+		}
+		seen[srv] = true
+	}
+	return nil
+}
+
+// DNSServersSupported reports whether a chart pin renders clusterNetworking.dnsServers (0.10.0+).
+// Older pins ignore the key, which would leave a customer believing their resolvers are in use.
+func DNSServersSupported(chartVersion string) bool {
+	maj, min, _, err := ParseVersion(chartVersion)
+	if err != nil {
+		return false
+	}
+	return maj > 0 || min >= 10
 }
 
 // SecurityGroupsSupported reports whether a chart pin renders nodeGroups[].securityGroupIds.

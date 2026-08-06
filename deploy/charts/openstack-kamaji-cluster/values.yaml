@@ -390,6 +390,15 @@ kubeNetwork:
 # OpenStack Networking Configuration
 # =============================================================================
 clusterNetworking:
+  # -- DNS servers written onto every node in the cluster (systemd-resolved drop-in).
+  # Applies in BOTH network modes, unlike dnsNameservers below which CAPO only honours on a
+  # subnet it creates itself — with a bring-your-own subnet that key does nothing, and the nodes
+  # simply inherit whatever DNS the subnet hands out over DHCP. Empty = exactly that inheritance.
+  # CoreDNS forwards to the node resolver, so this is also the cluster's fallback DNS.
+  # Changing it rolls every worker node.
+  dnsServers: []
+  # -- DNS servers for the subnet CAPO CREATES (managed-subnet mode only — ignored when you bring
+  # your own network/subnet, which is what Stratos always does).
   dnsNameservers: []
   # -- Indicates if security groups should be managed by the cluster
   manageSecurityGroups: true

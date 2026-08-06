@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/menlocloud/stratos/internal/cloud"
@@ -81,6 +82,13 @@ func (h *Handler) kamajiCreate(w http.ResponseWriter, r *http.Request, u *user.U
 	// every id belongs to this project's tenant. Both before anything is minted.
 	if err := h.kamajiCheckSecurityGroups(r.Context(), proj, osSvcID, ks.Config().ChartVersion, spec.NodeGroups); err != nil {
 		h.fail(w, httpx.BadRequest(err.Error()))
+		return
+	}
+	// Same reasoning as the security groups: an older pin renders the values and ignores the key,
+	// which would hand back a cluster resolving through DNS the customer did not choose, with
+	// nothing anywhere saying so.
+	if len(spec.DNSServers) > 0 && !kamaji.DNSServersSupported(ks.Config().ChartVersion) {
+		h.fail(w, httpx.BadRequest(fmt.Sprintf("this provider's platform version (%s) cannot set cluster DNS servers", ks.Config().ChartVersion)))
 		return
 	}
 	// Network placement: BYO ids are verified against the live tenant and the external network is
@@ -367,6 +375,59 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 		httpx.OK(w, map[string]any{"result": "UPDATING"})
 		return true
 
+	case "SET_DNS_SERVERS":
+		// Cluster-wide resolvers. Replaces every worker node in the cluster: the value lands in
+		// every pool's KubeadmConfigTemplate, whose checksum names the template, so CAPI rolls
+		// each pool onto a new one. The confirm dialog says so — this is not a field edit.
+		servers := []string{}
+		if raw, ok := data["dnsServers"].([]any); ok {
+			for _, srv := range raw {
+				if v := strings.TrimSpace(strAny(srv)); v != "" {
+					servers = append(servers, v)
+				}
+			}
+		}
+		if err := kamaji.ValidateDNSServers(servers); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		// The CLUSTER's own pin, not the provider default — an existing cluster keeps its pin and
+		// that is the chart which will (or will not) render the key.
+		if len(servers) > 0 && !kamaji.DNSServersSupported(strAny(clusterField(cr, "chart_version"))) {
+			h.fail(w, httpx.BadRequest("this cluster's platform version cannot set DNS servers — apply the platform update first"))
+			return true
+		}
+		err := ks.PatchClusterValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+			cn, _ := values["clusterNetworking"].(map[string]any)
+			if cn == nil {
+				cn = map[string]any{}
+			}
+			if len(servers) == 0 {
+				// Back to inheriting the subnet's DHCP resolvers — delete rather than write an
+				// empty list, so the render matches a cluster that never set them and the
+				// checksum lands back where it started.
+				delete(cn, "dnsServers")
+			} else {
+				out := make([]any, 0, len(servers))
+				for _, srv := range servers {
+					out = append(out, srv)
+				}
+				cn["dnsServers"] = out
+			}
+			if len(cn) == 0 {
+				delete(values, "clusterNetworking")
+			} else {
+				values["clusterNetworking"] = cn
+			}
+			return nil
+		})
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
+		return true
+
 	case "ROTATE_KUBECONFIG":
 		if err := ks.RotateKubeconfig(r.Context(), proj.ID, cr.ExternalID); err != nil {
 			h.fail(w, err)
@@ -614,6 +675,13 @@ func kamajiSpecFromData(projectID string, d map[string]any) (kamaji.ClusterSpec,
 		for k, v := range oidc {
 			if s := strAny(v); s != "" {
 				spec.OIDC[k] = s
+			}
+		}
+	}
+	if servers, ok := d["dnsServers"].([]any); ok {
+		for _, srv := range servers {
+			if v := strings.TrimSpace(strAny(srv)); v != "" {
+				spec.DNSServers = append(spec.DNSServers, v)
 			}
 		}
 	}

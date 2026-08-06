@@ -122,6 +122,11 @@ func clusterData(app, tcp map[string]any, mds []map[string]any, osc map[string]a
 	if ext := digStr(values, "clusterNetworking", "externalNetworkId"); ext != "" {
 		c["external_network_id"] = ext
 	}
+	// Node resolvers. Absent = the cluster inherits the subnet's DHCP servers, which is what the
+	// UI must say rather than showing an empty list as if a choice had been made.
+	if dns, ok := dig(values, "clusterNetworking", "dnsServers").([]any); ok && len(dns) > 0 {
+		c["dns_servers"] = dns
+	}
 	// Customer add-on toggles, read back for the UI (absent block = chart defaults). Filtered to
 	// the curated menu: the stratos-owned `openstack` storage leg (and any operator hand-edit)
 	// must not surface as a customer toggle — it would round-trip into SET_ADDONS and be

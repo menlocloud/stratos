@@ -520,8 +520,8 @@ func TestCloudsYAML(t *testing.T) {
 
 // fakeAPI records calls and serves canned objects.
 type fakeAPI struct {
-	osc    map[string]any
-	oscErr error
+	osc        map[string]any
+	oscErr     error
 	namespaces map[string]map[string]string
 	secrets    map[string]map[string]string // ns/name → stringData
 	secretObjs map[string]map[string]any    // ns/name → full object (metadata for ListSecrets)
@@ -1313,6 +1313,57 @@ func TestSecurityGroupsSupported(t *testing.T) {
 	} {
 		if got := SecurityGroupsSupported(tc.pin); got != tc.want {
 			t.Errorf("SecurityGroupsSupported(%q) = %v, want %v", tc.pin, got, tc.want)
+		}
+	}
+}
+
+// Cluster DNS is addresses only and capped. A hostname in a resolver config is a chicken-and-egg
+// that presents as a node which boots and then cannot resolve anything.
+func TestValidateDNSServers(t *testing.T) {
+	if err := ValidateDNSServers(nil); err != nil {
+		t.Errorf("none set: %v", err)
+	}
+	if err := ValidateDNSServers([]string{"10.0.0.53", "2001:4860:4860::8888"}); err != nil {
+		t.Errorf("v4 + v6: %v", err)
+	}
+	for _, tc := range []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"dns.example.com"}, "not an IP address"},
+		{[]string{"10.0.0.53", "10.0.0.53"}, "twice"},
+		{[]string{"10.0.0.53", " "}, "empty entry"},
+		{[]string{"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9"}, "at most"},
+	} {
+		if err := ValidateDNSServers(tc.in); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("ValidateDNSServers(%v) = %v, want %q", tc.in, err, tc.want)
+		}
+	}
+}
+
+// The values key must be omitted when unset: it lands in every pool's KubeadmConfigTemplate, so
+// writing an empty list would change every checksum and roll a whole cluster for nothing.
+func TestBuildValuesDNSServers(t *testing.T) {
+	cfg := testCfg()
+	spec := testSpec()
+	if cn, _ := BuildValues(cfg, spec)["clusterNetworking"].(map[string]any); cn["dnsServers"] != nil {
+		t.Errorf("unset must omit the key, got %v", cn["dnsServers"])
+	}
+	spec.DNSServers = []string{"10.0.0.53", "10.0.0.54"}
+	cn, _ := BuildValues(cfg, spec)["clusterNetworking"].(map[string]any)
+	got, _ := cn["dnsServers"].([]any)
+	if len(got) != 2 || got[0] != "10.0.0.53" || got[1] != "10.0.0.54" {
+		t.Errorf("dnsServers = %v", cn["dnsServers"])
+	}
+}
+
+func TestDNSServersSupported(t *testing.T) {
+	for pin, want := range map[string]bool{
+		"0.10.0": true, "0.11.0": true, "1.0.0": true,
+		"0.9.0": false, "0.8.0": false, "": false, "latest": false,
+	} {
+		if got := DNSServersSupported(pin); got != want {
+			t.Errorf("DNSServersSupported(%q) = %v, want %v", pin, got, want)
 		}
 	}
 }

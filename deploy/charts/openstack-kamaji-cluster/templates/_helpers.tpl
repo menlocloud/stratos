@@ -186,6 +186,33 @@ Lists are merged by concatenating them rather than overwriting.
 {{/*
 Applies a list of templates to an input object sequentially.
 */}}
+{{/*
+Node DNS. Written as a systemd-resolved drop-in, NOT by overwriting /etc/resolv.conf: on the
+Ubuntu node images that file is a symlink into resolved's stub and DHCP rewrites it on every
+lease, so a plain `echo > /etc/resolv.conf` survives until the first renewal and then silently
+stops being true.
+
+`Domains=~.` makes these servers the default route for every query the node cannot answer from a
+more specific link. CoreDNS in the workload cluster forwards to the node's resolver, so setting
+this also sets what the cluster's own DNS falls back to.
+
+CLUSTER-WIDE by design: the value lands in every pool's KubeadmConfigTemplate, so changing it
+rolls every worker in the cluster. That is the honest cost of a setting applied at bootstrap, and
+the edit dialog says so.
+*/}}
+{{- define "openstack-kamaji-cluster.dnsKubeadmConfigSpec" -}}
+{{- $ctx := index . 0 }}
+{{- with $ctx.Values.clusterNetworking.dnsServers }}
+{{- $f := "/etc/systemd/resolved.conf.d/99-stratos-dns.conf" }}
+preKubeadmCommands:
+  - mkdir -p /etc/systemd/resolved.conf.d
+  - {{ printf "echo '[Resolve]' > %s" $f | quote }}
+  - {{ printf "echo 'DNS=%s' >> %s" (join " " .) $f | quote }}
+  - {{ printf "echo 'Domains=~.' >> %s" $f | quote }}
+  - systemctl restart systemd-resolved
+{{- end }}
+{{- end }}
+
 {{- define "openstack-kamaji-cluster.mergeConcatMany" -}}
 {{- $obj := first . }}
 {{- range $overrides := rest . }}

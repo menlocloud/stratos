@@ -16,6 +16,15 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.10.0 adds `clusterNetworking.dnsServers`: DNS servers written onto every node as a
+# systemd-resolved drop-in. Until now the chart's only DNS knob was `dnsNameservers`, which CAPO
+# honours ONLY on a subnet it creates itself — with a bring-your-own subnet, which is the only mode
+# Stratos uses, it does nothing and nodes silently inherit whatever DNS the customer's subnet hands
+# out over DHCP. CoreDNS forwards to the node resolver, so this also sets the cluster's fallback
+# DNS. Written as a resolved drop-in rather than to /etc/resolv.conf: on the Ubuntu node images that
+# file is a symlink into resolved's stub and DHCP rewrites it on every lease. Empty by default, so
+# an existing cluster renders byte-identically and no node rolls. CHANGING it rolls EVERY worker in
+# the cluster — the value lands in every pool's KubeadmConfigTemplate checksum.
 # 0.9.0 adds `machineSecurityGroupIds`: extra OpenStack security groups attached to every machine
 # in every node group, so a customer can bring their own groups instead of living with only the
 # ones CAPO manages. ADDITIVE, not a replacement — verified against CAPO v0.14.4
@@ -37,4 +46,4 @@ type: application
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.9.0
+version: 0.10.0
