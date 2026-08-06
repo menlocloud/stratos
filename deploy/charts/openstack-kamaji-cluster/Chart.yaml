@@ -16,6 +16,14 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.12.0 attaches a config drive to EVERY node, instead of only to node groups that asked for one.
+# User-data carries the kubeadm join, and without a config drive its only delivery path is the
+# Neutron metadata service. That service answered for exactly one of five nodes observed on
+# 2026-08-06: the other four finished cloud-init with `DataSourceNone`, kept the hostname
+# `localhost`, never ran kubeadm, and sat at "Waiting for a Node with spec.providerID ... to exist"
+# until the 45-minute startup health check failed them. Nothing in CAPI, CAPO or Kamaji reports the
+# real cause; it is only visible in the node's serial console. A config drive is a local block
+# device, so delivery no longer depends on DHCP, a route to 169.254.169.254, or a metadata agent.
 # 0.11.0 gives every node port the cluster's pod and service CIDRs as allowedAddressPairs, which
 # is what makes POD-TO-POD TRAFFIC BETWEEN NODES work at all. Cilium runs in native routing mode
 # here, so a pod's packets leave the node carrying the POD's source address; Neutron port security
@@ -56,4 +64,4 @@ type: application
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.11.0
+version: 0.12.0

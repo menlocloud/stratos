@@ -24,9 +24,16 @@ template:
     {{- with $ctx.Values.machineSSHKeyName }}
     sshKeyName: {{ . }}
     {{- end }}
-    {{- if or $nodeGroup.machineConfigDrive $nodeGroup.additionalBlockDevices }}
+    {{- /* ALWAYS, not opt-in. A node's whole reason to exist is the kubeadm join in its user-data,
+           and without a config drive the only way that data reaches the VM is the Neutron metadata
+           service — a network round trip cloud-init makes before it has an address, over an
+           infrastructure component the cluster does not control. When it does not answer,
+           cloud-init settles on DataSourceNone: the VM boots healthy, keeps the hostname
+           `localhost`, never runs kubeadm, and CAPI just reports "waiting for a Node to exist" for
+           45 minutes with nothing anywhere saying why. The config drive is a local block device, so
+           it needs no DHCP, no route and no agent. machineConfigDrive is now a no-op kept for
+           values compatibility. */}}
     configDrive: true
-    {{- end }}
     {{- with $nodeGroup.machineRootVolume }}
     {{- if .diskSize }}
     rootVolume:
