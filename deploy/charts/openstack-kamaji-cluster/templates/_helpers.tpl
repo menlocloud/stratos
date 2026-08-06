@@ -213,6 +213,45 @@ preKubeadmCommands:
 {{- end }}
 {{- end }}
 
+{{/*
+Wait for the control-plane endpoint to answer before running kubeadm join.
+
+The Kamaji control plane is a Service of type LoadBalancer, so its endpoint is an Octavia load
+balancer that Octavia builds — two amphora VMs, a VIP port and a floating IP — at the SAME time
+CAPI is booting the workers. The workers therefore race it. kubeadm's discovery gives up after
+about five minutes with
+
+  couldn't validate the identity of the API Server: failed to request the cluster-info ConfigMap
+
+and cloud-init marks the run failed. Nothing retries: the machine sits in Provisioned forever and
+only the 45-minute MachineHealthCheck eventually replaces it. Observed on two separate clusters —
+in each, one worker won the race and its sibling died, which is what makes it look like a flaky
+node rather than a startup ordering bug.
+
+The endpoint is not known at render time (Kamaji allocates it), so read it back out of the join
+config CAPI writes, and poll. Ten minutes of waiting costs nothing when the endpoint is already up
+— the first probe succeeds — and turns a permanently dead machine into a slow one when it is not.
+Falls through after the timeout rather than failing hard, so kubeadm still runs and still produces
+its own diagnostics.
+*/}}
+{{- define "openstack-kamaji-cluster.apiWaitKubeadmConfigSpec" -}}
+preKubeadmCommands:
+  - |
+    ep=$(awk '/apiServerEndpoint:/ {print $2}' /run/kubeadm/kubeadm-join-config.yaml 2>/dev/null)
+    if [ -n "$ep" ]; then
+      host=${ep%:*}; port=${ep##*:}
+      echo "waiting for control plane $host:$port"
+      i=0
+      while [ $i -lt 120 ]; do
+        if timeout 3 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null; then
+          echo "control plane $host:$port reachable after $((i*5))s"; break
+        fi
+        i=$((i+1)); sleep 5
+      done
+      [ $i -lt 120 ] || echo "control plane $host:$port still unreachable after 600s, joining anyway"
+    fi
+{{- end }}
+
 {{- define "openstack-kamaji-cluster.mergeConcatMany" -}}
 {{- $obj := first . }}
 {{- range $overrides := rest . }}

@@ -16,6 +16,15 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.15.0 makes a worker WAIT for the control-plane endpoint before running kubeadm join. The Kamaji
+# control plane is a Service of type LoadBalancer, so its endpoint is an Octavia load balancer that
+# Octavia builds at the same time CAPI boots the workers — the workers race it. kubeadm's discovery
+# gives up after ~5 minutes ("couldn't validate the identity of the API Server"), cloud-init marks
+# the run failed, and NOTHING retries: the machine sits Provisioned until the 45-minute health check
+# replaces it. Seen on two separate clusters, each time one worker won the race and its sibling died
+# — which reads as a flaky node rather than a startup ordering bug. The endpoint is not known at
+# render time, so the node reads it back out of the join config CAPI wrote and polls for up to 10
+# minutes, then joins anyway so kubeadm still produces its own diagnostics.
 # 0.14.0 finishes what 0.11.0 started: cross-node POD traffic needs the RECEIVING side opened too.
 # Every in-cluster rule CAPO writes matches on remoteGroupID, which ML2/OVN compiles to an address
 # set of the member ports' FIXED IPs — a pod-sourced packet matches nothing and is dropped on
@@ -77,4 +86,4 @@ type: application
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.14.0
+version: 0.15.0
