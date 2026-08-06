@@ -77,6 +77,12 @@ func (h *Handler) kamajiCreate(w http.ResponseWriter, r *http.Request, u *user.U
 		h.fail(w, httpx.BadRequest(err.Error()))
 		return
 	}
+	// Customer-named security groups: refuse an old chart pin that would ignore them, then prove
+	// every id belongs to this project's tenant. Both before anything is minted.
+	if err := h.kamajiCheckSecurityGroups(r.Context(), proj, osSvcID, ks.Config().ChartVersion, spec.NodeGroups); err != nil {
+		h.fail(w, httpx.BadRequest(err.Error()))
+		return
+	}
 	// Network placement: BYO ids are verified against the live tenant and the external network is
 	// derived from the chosen subnet's router (immutable after create — do it right here or never).
 	if err := h.kamajiResolveClusterNetwork(r.Context(), proj, osSvcID, ks.Config().Defaults, &spec); err != nil {
@@ -273,11 +279,24 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 		}
 		// GPU gate on the DELTA vs the cluster's current groups (their workers are already in
 		// the usage count once synced as servers). Fail-open when the OpenStack binding is gone.
-		if osSvcID := h.kamajiOpenStackServiceID(r.Context(), proj); osSvcID != "" {
+		osSvcID := h.kamajiOpenStackServiceID(r.Context(), proj)
+		if osSvcID != "" {
 			if err := h.enforceGPUQuotaForNodeGroups(r.Context(), proj, osSvcID, groups, nodeGroupsFromCache(cr)); err != nil {
 				h.fail(w, err)
 				return true
 			}
+		}
+		// Security groups get the SAME gate as create — an edit accepts a fresh list of ids every
+		// time, so validating only at create would leave the wider door open. The chart pin is
+		// THIS CLUSTER's (cached from the Application's targetRevision), not the provider default:
+		// an existing cluster keeps its own pin, and that is the chart that will render the key.
+		//
+		// Unlike the GPU gate this does NOT fail open on a missing OpenStack binding: without a
+		// tenant to check against there is no way to prove ownership, and unproven ids must not
+		// reach the values.
+		if err := h.kamajiCheckSecurityGroups(r.Context(), proj, osSvcID, strAny(clusterField(cr, "chart_version")), groups); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
 		}
 		// Server groups follow the node groups: new pools get one, removed pools lose theirs. Runs
 		// before the values patch so every group in the new values already carries its id.

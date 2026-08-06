@@ -54,6 +54,9 @@ type NodeGroupRow = {
   rootDisk: string // GiB — nodes always boot from a volume, see DEFAULT_ROOT_DISK_GIB
   labels: string // "k=v,k2=v2"
   taints: string // "key=val:NoSchedule,…"
+  // Extra OpenStack security groups for THIS pool. Additive — the platform's own group is always
+  // attached on top, so an empty list is the normal case and never leaves a node unreachable.
+  securityGroupIds: string[]
 }
 // LIST_FLAVORS rows come back in the same shape CreateServerPage consumes: the OpenStack
 // flavor document nested under `data`, with the nova id mirrored as `externalId`.
@@ -81,6 +84,8 @@ type FlavorOption = {
 // A pickable cluster network: one of the project's own VPCs plus its subnets. The pick is
 // REQUIRED — worker nodes land in the customer's own VPC, never on a platform-created network
 // they cannot route to or see. The external gateway is derived server-side and never shown.
+// A pickable security group: one of the project's own, offered per node group.
+type SecurityGroupOption = { id: string; name: string }
 type NetworkOption = {
   id: string
   name: string
@@ -115,7 +120,7 @@ const DEFAULT_ROOT_DISK_GIB = "120"
 
 const emptyGroup: NodeGroupRow = {
   name: "workers", flavorId: "", variant: "", az: "", publicIp: false, count: "3", autoscale: false, min: "1", max: "5",
-  rootDisk: DEFAULT_ROOT_DISK_GIB, labels: "", taints: "",
+  rootDisk: DEFAULT_ROOT_DISK_GIB, labels: "", taints: "", securityGroupIds: [],
 }
 
 // Curated add-on menu — keys mirror the backend's kamaji.ClusterAddons (an unknown key is a 400).
@@ -216,6 +221,7 @@ function groupsToData(groups: NodeGroupRow[]) {
       ? { autoscale: true, min: Number(g.min), max: Number(g.max) }
       : { count: Number(g.count) }),
     ...(Number(g.rootDisk) > 0 ? { rootVolumeGiB: Number(g.rootDisk) } : {}),
+    ...(g.securityGroupIds.length ? { securityGroupIds: g.securityGroupIds } : {}),
     ...(parseLabels(g.labels) ? { labels: parseLabels(g.labels) } : {}),
     ...(g.taints.trim() ? { taints: g.taints.split(",").map((t) => t.trim()).filter(Boolean) } : {}),
   }))
@@ -234,6 +240,9 @@ function rowsToSyncGroups(rows: NodeGroupRow[]): Cluster[] {
     // dataGroupsToRows falls back to 120 when this is absent — the patch must carry it, or
     // re-opening the editor before the next sync silently resizes every pool's root disk.
     ...(Number(g.rootDisk) > 0 ? { root_volume_gib: Number(g.rootDisk) } : {}),
+    // Same reason: SET_NODE_GROUPS is a full replace, so a field this patch forgets is a field
+    // the editor re-opens empty and then wipes off every pool on the next save.
+    ...(g.securityGroupIds.length ? { security_group_ids: g.securityGroupIds } : {}),
     ...(g.autoscale
       ? { autoscale: true, min: Number(g.min), max: Number(g.max) }
       : { count: Number(g.count) }),
@@ -285,6 +294,7 @@ function dataGroupsToRows(c: Cluster): NodeGroupRow[] {
       .map(([k, v]) => `${k}=${v}`)
       .join(","),
     taints: ((g.taints as string[]) ?? []).map(String).join(","),
+    securityGroupIds: ((g.security_group_ids as string[]) ?? []).map(String),
   }))
 }
 
@@ -435,9 +445,25 @@ function useKubernetesData(pid: string) {
     [qc, pid],
   )
 
+  // The project's own security groups. BOTH pages need them — the list page's create wizard for
+  // the per-pool picker, the detail page for the same picker plus the id→name lookup on the cloud
+  // resources card — so they live in the shared hook rather than being fetched twice. The data key
+  // is camelCase (`data.securityGroup`), the shape the neutron sync writes.
+  const securityGroupsQ = useCloudList(pid, "SECURITY_GROUP")
+  const securityGroupOptions = useMemo<SecurityGroupOption[]>(() => {
+    return (securityGroupsQ.data ?? [])
+      .map((r): SecurityGroupOption => {
+        const sg = (r.data?.securityGroup ?? {}) as Record<string, unknown>
+        return { id: ((sg.id as string) || r.externalId || ""), name: (sg.name as string) || "" }
+      })
+      .filter((g) => !!g.id)
+      .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
+  }, [securityGroupsQ.data])
+
   return {
     kLocs, kScope, osScope, clusters,
     versionsFor, variantsFor, platformVersionFor, storageFor, rowServiceId, rowScope, flavorOptionsFor,
+    securityGroupOptions,
     invalidate, patchCluster,
   }
 }
@@ -446,7 +472,8 @@ export default function KubernetesPage() {
   const pid = useProjectId()
   const navigate = useNavigate()
   const {
-    kLocs, kScope, clusters, versionsFor, variantsFor, storageFor, rowServiceId, rowScope, flavorOptionsFor, invalidate,
+    kLocs, kScope, clusters, versionsFor, variantsFor, storageFor, rowServiceId, rowScope, flavorOptionsFor,
+    securityGroupOptions, invalidate,
   } = useKubernetesData(pid)
   const { data, isLoading, isError, error, refetch, isFetching } = clusters
 
@@ -639,6 +666,7 @@ export default function KubernetesPage() {
           flavors={createFlavorOptions}
          
           networks={networkOptions}
+          securityGroups={securityGroupOptions}
           locations={kLocs}
           locKey={createLoc ? locKeyOf(createLoc) : ""}
           onLocKey={setCreateLocKey}
@@ -687,7 +715,8 @@ export function KubernetesClusterDetailPage() {
   const navigate = useNavigate()
   const { resourceId = "" } = useParams()
   const {
-    clusters, versionsFor, variantsFor, platformVersionFor, rowServiceId, rowScope, flavorOptionsFor, invalidate, patchCluster,
+    clusters, versionsFor, variantsFor, platformVersionFor, rowServiceId, rowScope, flavorOptionsFor,
+    securityGroupOptions, invalidate, patchCluster,
   } = useKubernetesData(pid)
   const resource = (clusters.data ?? []).find((r) => r.id === resourceId)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -753,7 +782,7 @@ export function KubernetesClusterDetailPage() {
           variantsForVersion={(v) => variantsFor(rowServiceId(resource), v)}
           platformVersion={platformVersionFor(rowServiceId(resource))}
           flavors={flavorOptionsFor(rowServiceId(resource))}
-         
+          securityGroups={securityGroupOptions}
           onDeleted={() => setDeleteOpen(true)}
           onPatch={(patch) => patchCluster(resource.id, patch)}
         />
@@ -782,7 +811,7 @@ export function KubernetesClusterDetailPage() {
 
 // ── create/edit form ─────────────────────────────────────────────────────────
 function ClusterFormDialog({
-  title, submitLabel, versions, variantsForVersion, storage, flavors, networks, locations, locKey, onLocKey, onClose, onSubmit,
+  title, submitLabel, versions, variantsForVersion, storage, flavors, networks, securityGroups, locations, locKey, onLocKey, onClose, onSubmit,
 }: {
   title: string
   submitLabel: string
@@ -791,6 +820,7 @@ function ClusterFormDialog({
   storage?: { className?: string; volumeType?: string }
   flavors: FlavorOption[]
   networks: NetworkOption[]
+  securityGroups: SecurityGroupOption[]
   locations: Location[]
   locKey: string
   onLocKey: (key: string) => void
@@ -931,7 +961,7 @@ function ClusterFormDialog({
             <Switch checked={ha} onCheckedChange={setHa} />
           </div>
 
-          <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
+          <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} securityGroups={securityGroups} />
 
           {storage?.className && (
             <p className="text-xs text-muted-foreground">
@@ -1085,13 +1115,16 @@ function OidcFields({
 }
 
 function NodeGroupsEditor({
-  groups, setGroups, flavors, variants,
+  groups, setGroups, flavors, variants, securityGroups = [],
 }: {
   groups: NodeGroupRow[]
   setGroups: (g: NodeGroupRow[]) => void
   flavors: FlavorOption[]
   // Image-variant names offered for the cluster's version ("" = default is always offered).
   variants: string[]
+  // The project's own security groups, offered per pool. Empty = the picker is hidden rather
+  // than shown as a dead control (a project with none, or a stale cache).
+  securityGroups?: SecurityGroupOption[]
 }) {
   const set = (i: number, patch: Partial<NodeGroupRow>) =>
     setGroups(groups.map((g, j) => (j === i ? { ...g, ...patch } : g)))
@@ -1212,6 +1245,38 @@ function NodeGroupsEditor({
               <Input id={`ng-taints-${i}`} className="font-mono text-xs" value={g.taints} onChange={(e) => set(i, { taints: e.target.value })} placeholder="gpu=true:NoSchedule" />
             </div>
           </div>
+          {securityGroups.length > 0 && (
+            <div className="grid gap-2">
+              <Label>Security groups (optional)</Label>
+              <div className="grid gap-1.5 rounded-md border p-3 sm:grid-cols-2">
+                {securityGroups.map((sg) => {
+                  const on = g.securityGroupIds.includes(sg.id)
+                  return (
+                    <label key={sg.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="size-4"
+                        checked={on}
+                        onChange={() =>
+                          set(i, {
+                            securityGroupIds: on
+                              ? g.securityGroupIds.filter((x) => x !== sg.id)
+                              : [...g.securityGroupIds, sg.id],
+                          })
+                        }
+                      />
+                      <span className="truncate">{sg.name || sg.id}</span>
+                    </label>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                The platform always attaches its own security group to this pool's nodes — anything you
+                pick here is added on top, so leaving this empty is the normal choice. Because these are
+                set when a node's port is created, changing them replaces this node group's nodes.
+              </p>
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -1220,7 +1285,7 @@ function NodeGroupsEditor({
 
 // ── cluster detail body (the manage surface, rendered by the detail page) ────
 function ClusterDetail({
-  pid, scope, resource, versions, variantsForVersion, platformVersion, flavors, onDeleted, onPatch,
+  pid, scope, resource, versions, variantsForVersion, platformVersion, flavors, securityGroups, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
@@ -1230,6 +1295,9 @@ function ClusterDetail({
   // The provider's pinned platform (chart) version; "" = unknown, no offer shown.
   platformVersion: string
   flavors: FlavorOption[]
+  // The project's own security groups — the per-pool picker feed, and the id→name lookup for the
+  // cloud-resources card.
+  securityGroups: SecurityGroupOption[]
   onDeleted: () => void
   // Optimistically applies a partial data.cluster patch to the cached row (and this sheet's
   // resource prop) — MUST be called after every successful mutating action, or the next
@@ -1737,7 +1805,7 @@ function ClusterDetail({
             initial={dataGroupsToRows(c)}
             flavors={flavors}
             variants={variantsForVersion(current)}
-           
+            securityGroups={securityGroups}
             onClose={() => setEditOpen(false)}
             onSubmit={async (rows) => {
               await act("SET_NODE_GROUPS", { nodeGroups: groupsToData(rows) })
@@ -1809,11 +1877,12 @@ function OidcEditDialog({
 }
 
 function EditNodeGroupsDialog({
-  initial, flavors, variants, onClose, onSubmit,
+  initial, flavors, variants, securityGroups, onClose, onSubmit,
 }: {
   initial: NodeGroupRow[]
   flavors: FlavorOption[]
   variants: string[]
+  securityGroups: SecurityGroupOption[]
   onClose: () => void
   onSubmit: (rows: NodeGroupRow[]) => Promise<void>
 }) {
@@ -1830,7 +1899,7 @@ function EditNodeGroupsDialog({
             remaining groups.
           </DialogDescription>
         </DialogHeader>
-        <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
+        <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} securityGroups={securityGroups} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button

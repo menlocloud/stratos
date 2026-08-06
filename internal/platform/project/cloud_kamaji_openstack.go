@@ -138,6 +138,13 @@ func kamajiNodeGroupImage(d kamaji.ClusterDefaults, version string, ng kamaji.No
 	return current[ng.Name]
 }
 
+// clusterField reads one field off the cluster's cached sync payload. "" when the cache has not
+// caught up yet — callers must treat that as "unknown", never as a permissive default.
+func clusterField(cr *cloud.CloudResource, key string) any {
+	cl, _ := cr.Data["cluster"].(map[string]any)
+	return cl[key]
+}
+
 // kamajiCachedImages reads a cluster's current k8s version and per-group boot image off the sync
 // cache — the fallback an EDIT resolves an unchanged group's image through, mirroring
 // applyNodeGroupImages.
@@ -155,6 +162,90 @@ func kamajiCachedImages(cr *cloud.CloudResource) (string, map[string]string) {
 		}
 	}
 	return strAny(cl["version"]), images
+}
+
+// kamajiCheckSecurityGroups is the whole gate for customer-named security groups: the chart pin
+// must be able to render them, and every id must belong to this project's tenant. Shared by
+// create and by SET_NODE_GROUPS so the edit path can never be the looser one.
+func (h *Handler) kamajiCheckSecurityGroups(ctx context.Context, p *Project, osSvcID, chartVersion string, groups []kamaji.NodeGroup) error {
+	named := false
+	for _, ng := range groups {
+		if len(ng.SecurityGroupIDs) > 0 {
+			named = true
+			break
+		}
+	}
+	if !named {
+		return nil
+	}
+	if !kamaji.SecurityGroupsSupported(chartVersion) {
+		return fmt.Errorf("this cluster's platform version (%s) cannot attach your own security groups — apply the platform update first, or create the node group without them", chartVersion)
+	}
+	return h.kamajiValidateSecurityGroups(ctx, p, osSvcID, groups)
+}
+
+// kamajiValidateSecurityGroups proves every customer-named security group belongs to the
+// project's OWN tenant before it can reach the chart values.
+//
+// Same hazard, same answer as the BYO network ids in kamajiResolveClusterNetwork: neutron shows
+// security groups belonging to other tenants to a token that can see them, so an id taken on
+// trust would let a customer pin their nodes behind somebody else's rules — rules they cannot
+// read, cannot change, and which someone else can widen at any time. ListSecurityGroups is
+// project_id-filtered on the wire AND the result is re-checked here, because a filter that
+// silently stops being applied is exactly how this class of bug comes back.
+//
+// FAIL CLOSED. An unreachable cloud refuses the request rather than letting the ids through
+// unproven — the whole point is that nothing unverified reaches the values.
+//
+// Runs on create AND on every node-group edit: a validated-once-at-create check is a hole,
+// because SET_NODE_GROUPS accepts a fresh list of ids every time.
+func (h *Handler) kamajiValidateSecurityGroups(ctx context.Context, p *Project, osSvcID string, groups []kamaji.NodeGroup) error {
+	wanted := map[string]bool{}
+	for _, ng := range groups {
+		for _, id := range ng.SecurityGroupIDs {
+			wanted[id] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	cc, ok := h.tryTenantClient(ctx, p, osSvcID)
+	if !ok {
+		return fmt.Errorf("Managed Kubernetes could not reach your cloud project to verify the security groups")
+	}
+	sgs, err := cc.ListSecurityGroups(ctx)
+	if err != nil {
+		return fmt.Errorf("Managed Kubernetes could not list your security groups: %w", err)
+	}
+	tenant := p.ExternalProjectID(osSvcID)
+	owned := map[string]bool{}
+	for _, sg := range sgs {
+		id := strAny(sg["id"])
+		if id == "" {
+			continue
+		}
+		// Belt and braces over the wire-level project_id filter. Resolve the owner field FIRST,
+		// then compare exactly once — an id whose owner neither key reports stays unowned, so a
+		// response shape we did not expect refuses the group instead of waving it through.
+		if tenant != "" {
+			owner := strAny(sg["project_id"])
+			if owner == "" {
+				owner = strAny(sg["tenant_id"])
+			}
+			if owner != tenant {
+				continue
+			}
+		}
+		owned[id] = true
+	}
+	for _, ng := range groups {
+		for _, id := range ng.SecurityGroupIDs {
+			if !owned[id] {
+				return fmt.Errorf("node group %q: security group %s is not one of this project's security groups", ng.Name, id)
+			}
+		}
+	}
+	return nil
 }
 
 // kamajiResolveClusterNetwork settles the cluster's network placement before anything is built.

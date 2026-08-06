@@ -10,7 +10,13 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 )
+
+// maxNodeGroupSecurityGroups caps how many extra groups one pool may name. Neutron's own limit is
+// far higher; this is a sanity bound so a malformed client cannot stuff a values document that
+// every machine in the pool then carries.
+const maxNodeGroupSecurityGroups = 10
 
 // Namespace / naming derivations — the ONE place these are derived (ceph RGWUIDFor precedent).
 // Customer-typed names are display-only; every k8s-side identifier is the generated cluster id
@@ -297,6 +303,21 @@ type NodeGroup struct {
 	RootVolumeGiB int               `json:"rootVolumeGiB,omitempty"` // 0 = ClusterDefaults.RootVolumeGiB
 	Labels        map[string]string `json:"labels,omitempty"`
 	Taints        []string          `json:"taints,omitempty"` // "key=value:Effect" / "key:Effect"
+	// SecurityGroupIDs are EXTRA OpenStack security groups attached to this pool's machines.
+	// Customer-supplied, so — like NetworkID/SubnetID and unlike ServerGroupID — every id MUST be
+	// proven to belong to the project's own tenant before it reaches the values
+	// (kamajiValidateSecurityGroups); security groups are visible cross-tenant to an
+	// admin-scoped token, so an unchecked id would let a customer pin their nodes behind
+	// somebody else's rules.
+	//
+	// ADDITIVE: CAPO appends the cluster's MANAGED group to whatever is listed here
+	// (v0.14.4 ConstructPorts), so a pool that names none still gets the platform's group and a
+	// pool that names some cannot drop it. Empty = the managed group alone, today's behaviour.
+	//
+	// Per POOL, not per cluster: the ids ride in the machine-template spec, which is what the
+	// template checksum covers — changing them replaces THIS pool's machines and leaves the
+	// others running.
+	SecurityGroupIDs []string `json:"securityGroupIds,omitempty"`
 	// ServerGroupID is the nova server group the pool's machines join (soft anti-affinity, one per
 	// node group). Stratos-owned: minted at create/update, never accepted from the client — hence
 	// json:"-", so a crafted request cannot pin machines into somebody else's server group.
@@ -384,6 +405,23 @@ func (s ClusterSpec) ValidateNodeGroups(d ClusterDefaults) error {
 		if ng.RootVolumeGiB == 0 && d.RootVolumeGiB == 0 {
 			return fmt.Errorf("cluster: node group %q: rootVolumeGiB is required (no provider default configured)", ng.Name)
 		}
+		// Shape only — OWNERSHIP is proven against the live tenant by
+		// kamajiValidateSecurityGroups, which is the check that actually matters. An empty or
+		// duplicated id here renders `- id: ""` into the machine template, which CAPO's webhook
+		// rejects: the pool then never provisions and nothing in the cluster's status says why.
+		seenSG := map[string]bool{}
+		for _, id := range ng.SecurityGroupIDs {
+			if strings.TrimSpace(id) == "" {
+				return fmt.Errorf("cluster: node group %q: securityGroupIds contains an empty id", ng.Name)
+			}
+			if seenSG[id] {
+				return fmt.Errorf("cluster: node group %q: securityGroupIds contains %q twice", ng.Name, id)
+			}
+			seenSG[id] = true
+		}
+		if len(ng.SecurityGroupIDs) > maxNodeGroupSecurityGroups {
+			return fmt.Errorf("cluster: node group %q: at most %d security groups per node group", ng.Name, maxNodeGroupSecurityGroups)
+		}
 		for _, t := range ng.Taints {
 			obj := taintToObject(t)
 			if obj == nil {
@@ -395,6 +433,23 @@ func (s ClusterSpec) ValidateNodeGroups(d ClusterDefaults) error {
 		}
 	}
 	return nil
+}
+
+// SecurityGroupsSupported reports whether a chart pin renders nodeGroups[].securityGroupIds.
+//
+// The key arrived in 0.9.0. On an older pin the values still carry it and the chart still
+// renders — it just ignores it, so a customer who picked groups would get a cluster with none of
+// them and no error anywhere. That is a security expectation quietly not met, which is worse than
+// a refusal, so the create path refuses instead.
+//
+// Unparseable or empty pin = NOT supported: a version we cannot read is not one we can promise
+// anything about.
+func SecurityGroupsSupported(chartVersion string) bool {
+	maj, min, _, err := ParseVersion(chartVersion)
+	if err != nil {
+		return false
+	}
+	return maj > 0 || min >= 9
 }
 
 // nodeGroupName mirrors the chart's own guard (templates/node-group/machine-deployment.yaml).

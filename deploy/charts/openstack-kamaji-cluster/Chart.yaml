@@ -16,6 +16,16 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.9.0 adds `machineSecurityGroupIds`: extra OpenStack security groups attached to every machine
+# in every node group, so a customer can bring their own groups instead of living with only the
+# ones CAPO manages. ADDITIVE, not a replacement — verified against CAPO v0.14.4
+# (pkg/cloud/services/networking/port.go ConstructPorts appends the managed group to the
+# machine-level list), so a chosen group can widen reachability but can never lock the cluster
+# out of itself. Refuses to render alongside nodeGroups[].machineNetworking.ports, where CAPO's
+# semantics flip to REPLACE and the managed group would be dropped without a word. Empty by
+# default, so an existing cluster upgrading to 0.9.0 renders byte-identically and no node rolls.
+# CHANGING the list later changes the machine-template checksum and therefore replaces every
+# worker node in the cluster.
 # 0.8.0 drops the inherited registryMirrors default (a third party's quay.io namespace) — the
 # chart now mirrors nothing until you configure it, so installing it never routes an operator's
 # image pulls through somebody else's cache. Stratos providers set `config.cluster.registryMirrors`;
@@ -27,4 +37,4 @@ type: application
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.8.0
+version: 0.9.0

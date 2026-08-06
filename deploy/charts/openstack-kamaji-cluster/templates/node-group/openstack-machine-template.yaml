@@ -78,7 +78,35 @@ template:
       {{- end }}
     {{- end }}
     {{- with $nodeGroup.machineNetworking.ports }}
+    {{- if $nodeGroup.securityGroupIds }}
+    {{- fail "nodeGroups[].securityGroupIds cannot be combined with machineNetworking.ports: CAPO REPLACES the default group list with a port's own securityGroups (normalizePorts), so the machine-level groups — including the cluster's managed one — would be silently dropped. Put the groups on the port instead." }}
+    {{- end }}
     ports: {{ include "openstack-kamaji-cluster.convert.neutronPortsFilter" . | nindent 6 }}
+    {{- end }}
+    {{- /*
+      Extra security groups on this pool's machines. ADDITIVE, verified against CAPO v0.14.4
+      pkg/cloud/services/networking/port.go ConstructPorts:
+
+        defaultSecurityGroupIDs, err := s.GetSecurityGroups(instanceSecurityGroups)
+        if managedSecurityGroup != nil {
+          defaultSecurityGroupIDs = append(defaultSecurityGroupIDs, *managedSecurityGroup)
+        }
+
+      — the machine-level list and the cluster's managed group both land on the port, so a
+      customer's group can only widen reachability, never lock the cluster out of itself. The
+      REPLACE semantics live one level down, on a port's own securityGroups, which is why the
+      guard above refuses the combination rather than quietly preferring one.
+
+      Per NODE GROUP, not per cluster: this key rides in the machine-template spec, so it is
+      already what the template checksum is computed over. Changing it rolls THIS pool's machines
+      and leaves the others alone — which is both the smaller blast radius and the honest thing to
+      tell the customer in the edit dialog.
+    */}}
+    {{- with $nodeGroup.securityGroupIds }}
+    securityGroups:
+      {{- range . }}
+      - id: {{ . | quote }}
+      {{- end }}
     {{- end }}
     {{- with $nodeGroup.serverGroupId }}
     serverGroup:

@@ -272,6 +272,16 @@ func NodeGroupValues(d ClusterDefaults, version string, groups []NodeGroup) []an
 		if ng.ServerGroupID != "" {
 			g["serverGroupId"] = ng.ServerGroupID
 		}
+		// Extra customer security groups for this pool (chart 0.9.0+). Omitted when empty so the
+		// render is byte-identical to a pre-0.9.0 cluster — which is what keeps an upgrade from
+		// rotating the machine template and rolling every node for nothing.
+		if len(ng.SecurityGroupIDs) > 0 {
+			ids := make([]any, 0, len(ng.SecurityGroupIDs))
+			for _, id := range ng.SecurityGroupIDs {
+				ids = append(ids, id)
+			}
+			g["securityGroupIds"] = ids
+		}
 		// The variant rides in the values so it survives round-trips: the sync reads it back for
 		// the UI, and UPGRADE re-resolves each group onto the target version's image of the same
 		// variant. The chart reads only the keys it knows — an extra key is inert there.
@@ -343,6 +353,13 @@ func NodeGroupsFromValues(values map[string]any) []map[string]any {
 		}
 		if v, ok := ng["serverGroupId"]; ok {
 			g["server_group_id"] = v
+		}
+		// Read back so the UI can show what a pool actually runs with, and — more importantly —
+		// so an edit that does not touch security groups can carry them forward. SET_NODE_GROUPS
+		// replaces the whole nodeGroups value, so anything absent from the round-trip is silently
+		// dropped from every pool the customer did not re-state.
+		if sgs, ok := ng["securityGroupIds"].([]any); ok && len(sgs) > 0 {
+			g["security_group_ids"] = sgs
 		}
 		if v, _ := ng["imageVariant"].(string); v != "" {
 			g["image_variant"] = v

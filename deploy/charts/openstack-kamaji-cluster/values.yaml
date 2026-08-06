@@ -500,6 +500,13 @@ nodeGroupDefaults:
   kubernetesVersion:
   machineNetworking:
     ports:
+  # -- Extra OpenStack security group IDs (UUIDs) attached to this pool's machines.
+  # ADDITIVE: CAPO appends the cluster's managed group to this list, so groups named here can
+  # only widen what reaches a node — they never replace the rules that make the cluster work.
+  # Mutually exclusive with machineNetworking.ports, which REPLACES the whole list (the template
+  # fails the render on that combination rather than silently dropping one). Changing the list
+  # rolls THIS pool's machines.
+  securityGroupIds: []
   machineRootVolume:
     diskSize:
   machineMetadata: {}

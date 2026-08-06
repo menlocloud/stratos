@@ -2,6 +2,7 @@ package kamaji
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -1230,5 +1231,82 @@ func TestValidateNodeGroupsIsIndependentOfCreateRules(t *testing.T) {
 	spec.NetworkID, spec.SubnetID = "", ""
 	if err := spec.Validate(d); err == nil {
 		t.Error("create without a network must still fail")
+	}
+}
+
+// Customer-named security groups ride per NODE GROUP and are shape-checked before they can reach
+// a machine template — an empty or duplicated id renders `- id: ""`, which CAPO's webhook rejects
+// with nothing in the cluster status to say why.
+func TestValidateNodeGroupSecurityGroups(t *testing.T) {
+	d := ClusterDefaults{RootVolumeGiB: 120, Versions: map[string]string{"1.35.4": "img"}}
+	spec := func(ids ...string) ClusterSpec {
+		return ClusterSpec{Version: "1.35.4", NodeGroups: []NodeGroup{
+			{Name: "workers", FlavorID: "f", Count: 1, SecurityGroupIDs: ids},
+		}}
+	}
+	if err := spec("sg-a", "sg-b").ValidateNodeGroups(d); err != nil {
+		t.Errorf("two distinct ids: %v", err)
+	}
+	if err := spec().ValidateNodeGroups(d); err != nil {
+		t.Errorf("none named: %v", err)
+	}
+	if err := spec("sg-a", "sg-a").ValidateNodeGroups(d); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("duplicate id = %v", err)
+	}
+	if err := spec("sg-a", "  ").ValidateNodeGroups(d); err == nil || !strings.Contains(err.Error(), "empty id") {
+		t.Errorf("blank id = %v", err)
+	}
+	many := make([]string, maxNodeGroupSecurityGroups+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("sg-%d", i)
+	}
+	if err := spec(many...).ValidateNodeGroups(d); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Errorf("over the cap = %v", err)
+	}
+}
+
+// The ids must survive the values round-trip. SET_NODE_GROUPS replaces the whole nodeGroups
+// value, so a field the read-back drops is a field silently wiped from every pool the customer
+// did not re-state on an unrelated edit.
+func TestNodeGroupValuesCarriesSecurityGroups(t *testing.T) {
+	d := ClusterDefaults{RootVolumeGiB: 120, Versions: map[string]string{"1.35.4": "img"}}
+	rendered := NodeGroupValues(d, "1.35.4", []NodeGroup{
+		{Name: "with", FlavorID: "f", Count: 1, SecurityGroupIDs: []string{"sg-a", "sg-b"}},
+		{Name: "without", FlavorID: "f", Count: 1},
+	})
+	with, _ := rendered[0].(map[string]any)
+	if got, _ := with["securityGroupIds"].([]any); len(got) != 2 || got[0] != "sg-a" || got[1] != "sg-b" {
+		t.Fatalf("rendered = %v", with["securityGroupIds"])
+	}
+	// A pool that named none must not carry the key at all: an empty list would change the
+	// machine-template checksum and roll every node of a cluster that upgraded for no reason.
+	without, _ := rendered[1].(map[string]any)
+	if _, present := without["securityGroupIds"]; present {
+		t.Errorf("pool with no groups must omit the key entirely, got %v", without)
+	}
+
+	back := NodeGroupsFromValues(map[string]any{"nodeGroups": rendered})
+	if got, _ := back[0]["security_group_ids"].([]any); len(got) != 2 {
+		t.Errorf("read-back = %v", back[0]["security_group_ids"])
+	}
+	if _, present := back[1]["security_group_ids"]; present {
+		t.Errorf("read-back invented groups for a pool that has none: %v", back[1])
+	}
+}
+
+// A chart pin that predates the key renders the values and ignores them, so the customer would
+// get a cluster with none of the groups they picked and no error. Refuse instead.
+func TestSecurityGroupsSupported(t *testing.T) {
+	for _, tc := range []struct {
+		pin  string
+		want bool
+	}{
+		{"0.9.0", true}, {"0.9.1", true}, {"0.10.0", true}, {"1.0.0", true},
+		{"0.8.0", false}, {"0.8.9", false}, {"0.5.0", false},
+		{"", false}, {"latest", false}, {"garbage", false},
+	} {
+		if got := SecurityGroupsSupported(tc.pin); got != tc.want {
+			t.Errorf("SecurityGroupsSupported(%q) = %v, want %v", tc.pin, got, tc.want)
+		}
 	}
 }
