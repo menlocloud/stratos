@@ -16,6 +16,11 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.13.0 resolves the health check's maxUnhealthy PERCENTAGE against the node group's own size and
+# floors it at 1. CAPI remediates nothing once the unhealthy count exceeds the budget, so 40% of a
+# 2-node group is 0.8 and one dead node (50%) was already over it — the pool sizes customers
+# actually run could never replace a failed node, and the machine sat Provisioned forever. Large
+# pools keep the storm guard; a plain number is still honoured verbatim.
 # 0.12.0 attaches a config drive to EVERY node, instead of only to node groups that asked for one.
 # User-data carries the kubeadm join, and without a config drive its only delivery path is the
 # Neutron metadata service. That service answered for exactly one of five nodes observed on
@@ -64,4 +69,4 @@ type: application
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.12.0
+version: 0.13.0

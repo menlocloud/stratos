@@ -559,9 +559,11 @@ nodeGroupDefaults:
   healthCheck:
     enabled: true
     spec:
-      # 40% allows MHC to remediate single-node failures while protecting
-      # against mass-failure storms (would not remediate if >40% unhealthy).
-      # Set to 100% to disable remediation entirely.
+      # A percentage is resolved against the node group's own size and floored at 1, so a single
+      # dead node is always remediable (40% of a 2-node group would otherwise be 0.8 — one failure
+      # is 50%, over budget, and that group could never heal itself) while a mass-failure storm on
+      # a large pool is still held back. A plain number is passed through verbatim; set it to the
+      # group's size to disable the storm guard, or healthCheck.enabled=false for no remediation.
       maxUnhealthy: 40%
       # Increased from upstream 30m: with Kamaji the CCM runs on workers,
       # so first nodes need extra time to bootstrap before going Ready.
