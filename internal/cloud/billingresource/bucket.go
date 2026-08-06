@@ -39,7 +39,9 @@ func (p *BucketProvider) GetBillingInformation(_ context.Context, _ billingapi.B
 }
 
 func bucketType() *billingapi.BillingResourceType {
-	n := func(nm string) billingapi.ResourceAttribute { return billingapi.ResourceAttribute{Name: nm, Type: "number"} }
+	n := func(nm string) billingapi.ResourceAttribute {
+		return billingapi.ResourceAttribute{Name: nm, Type: "number"}
+	}
 	return &billingapi.BillingResourceType{ResourceType: "bucket", Attributes: []billingapi.ResourceAttribute{
 		{Name: "display_name", Type: "string"}, n("size_gb"), n("object_count"),
 	}}

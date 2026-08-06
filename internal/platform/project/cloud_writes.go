@@ -45,16 +45,16 @@ func (h *Handler) resolveServiceID(r *http.Request, p *Project) string {
 		return ""
 	}
 	// No explicit service → prefer an OpenStack one. A ceph-s3 provider serves ONLY object-store
-	// (and a kamaji provider ONLY kubernetes clusters), so the generic cloud reads that fall
-	// through here (images, flavors, ports, security groups) would get ErrNotOpenStack from them.
-	// Object-store/k8s callers either send x-service-id (from the Location picker) or resolve the
-	// service from the resource itself.
+	// (a kamaji provider ONLY kubernetes clusters, a dbaas provider ONLY databases), so the
+	// generic cloud reads that fall through here (images, flavors, ports, security groups) would
+	// get ErrNotOpenStack from them. Object-store/k8s/database callers either send x-service-id
+	// (from the Location picker) or resolve the service from the resource itself.
 	for _, id := range ids {
-		if es, err := h.esSvc.Get(r.Context(), id); err == nil && es != nil && !es.IsCephS3() && !es.IsKamaji() {
+		if es, err := h.esSvc.Get(r.Context(), id); err == nil && es != nil && !es.IsCephS3() && !es.IsKamaji() && !es.IsDbaas() {
 			return id
 		}
 	}
-	return ids[0] // ceph/kamaji-only project
+	return ids[0] // ceph/kamaji/dbaas-only project
 }
 
 // tenantWriteService builds a WriteService over a cloud client scoped to the project's provisioned
@@ -148,6 +148,9 @@ func (h *Handler) cloudResourceList(w http.ResponseWriter, r *http.Request) {
 		// a provisioning cluster (ArgoCD already Healthy while the UI still shows Degraded /
 		// 0 ready nodes). Best-effort — the cache below is the answer either way.
 		h.refreshKamajiClusters(r.Context(), proj)
+	case cloud.TypeDatabaseCluster:
+		// Same read-through for provisioning databases (endpoint appears minutes after create).
+		h.refreshDbaasClusters(r.Context(), proj)
 	case cloud.TypeImage:
 		h.listImages(w, r, proj)
 		return
@@ -775,6 +778,17 @@ func (h *Handler) cloudCreate(w http.ResponseWriter, r *http.Request) {
 		h.kamajiCreate(w, r, u, proj, es, req)
 		return
 	}
+	// dbaas managed databases: same no-tenant rule — DATABASE_CLUSTER creates go through the
+	// dbaas service (Application CR on the DB cluster), not the OpenStack WriteService.
+	if es, err := h.esSvc.Get(r.Context(), svcID); err == nil && es != nil && es.IsDbaas() {
+		var req providers.CreateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			h.fail(w, httpx.BadRequest("invalid request body"))
+			return
+		}
+		h.dbaasCreate(w, r, u, proj, es, req)
+		return
+	}
 	ws, region, ok := h.tenantWriteService(r.Context(), w, proj, svcID)
 	if !ok {
 		return
@@ -971,6 +985,19 @@ func (h *Handler) cloudDelete(w http.ResponseWriter, r *http.Request) {
 		if cr.Type == cloud.TypeKubernetesCluster {
 			if es, err := h.esSvc.Get(r.Context(), svcID); err == nil && es != nil && es.IsKamaji() {
 				if err := h.kamajiDelete(r.Context(), es, proj, cr); err != nil {
+					h.fail(w, err)
+					return
+				}
+				h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_DELETE", "", cr)
+				httpx.Accepted(w)
+				return
+			}
+		}
+		// dbaas managed database: same Application-delete cascade (the LB Service delete tears
+		// down the tenant-side Octavia LB); the neutron share is revoked by the orphan sweep.
+		if cr.Type == cloud.TypeDatabaseCluster {
+			if es, err := h.esSvc.Get(r.Context(), svcID); err == nil && es != nil && es.IsDbaas() {
+				if err := h.dbaasDelete(r.Context(), es, proj, cr); err != nil {
 					h.fail(w, err)
 					return
 				}
@@ -1413,6 +1440,15 @@ func (h *Handler) cloudAction(w http.ResponseWriter, r *http.Request) {
 	if cr.Type == cloud.TypeKubernetesCluster {
 		if es, err := h.esSvc.Get(r.Context(), svcID); err == nil && es != nil {
 			if h.kamajiAction(w, r, proj, es, cr, req.Action, req.Data) {
+				return
+			}
+		}
+	}
+
+	// dbaas managed database actions (GET_CONNECTION_INFO, RESIZE, SCALE_REPLICAS, …).
+	if cr.Type == cloud.TypeDatabaseCluster {
+		if es, err := h.esSvc.Get(r.Context(), svcID); err == nil && es != nil {
+			if h.dbaasAction(w, r, proj, es, cr, req.Action, req.Data) {
 				return
 			}
 		}

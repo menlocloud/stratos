@@ -21,6 +21,8 @@ export const sections: DocSection[] = [
       { slug: "guides/networks", title: "Networking" },
       { slug: "guides/volumes", title: "Volumes & snapshots" },
       { slug: "guides/object-storage", title: "Object storage buckets" },
+      { slug: "guides/kubernetes", title: "Managed Kubernetes" },
+      { slug: "guides/databases", title: "Managed Databases" },
       { slug: "guides/team-members", title: "Teammates & invitations" },
       { slug: "guides/savings-plans", title: "Savings plans" },
       { slug: "guides/ai-agents", title: "AI agent access (MCP)" },

@@ -28,6 +28,7 @@ import (
 	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/billingresource"
 	"github.com/menlocloud/stratos/internal/cloud/cephcred"
+	"github.com/menlocloud/stratos/internal/cloud/dbaas"
 	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/metrics"
@@ -254,6 +255,11 @@ func run() error {
 	// surface (Application CRs on the provider's management cluster).
 	projectH.SetKamaji(func(es *externalservice.ExternalService) (*kamaji.Service, error) {
 		return kamaji.New(es.KamajiConfig(), es.ID)
+	})
+	// Dbaas Managed Databases — enables dbaas provisioning + the DATABASE_CLUSTER write surface
+	// (Application CRs on the provider's DB cluster).
+	projectH.SetDbaas(func(es *externalservice.ExternalService) (*dbaas.Service, error) {
+		return dbaas.New(es.DbaasConfig(), es.ID)
 	})
 
 	// Promotion (deposit config) + Affiliate (cfy check + project config/log) — client reads.
@@ -487,6 +493,9 @@ func run() error {
 	adminH.SetKamaji(func(es *externalservice.ExternalService) (*kamaji.Service, error) {
 		return kamaji.New(es.KamajiConfig(), es.ID)
 	})
+	adminH.SetDbaas(func(es *externalservice.ExternalService) (*dbaas.Service, error) {
+		return dbaas.New(es.DbaasConfig(), es.ID)
+	})
 	// Public Admin API (/admin-api/v1 — SigV4 hmac_keys or the admin-api OIDC realm).
 	adminAPIH := adminapi.NewHandler(pg, orgRepo, users, esSvc, auditSvc, cfg.Auth.AdminAPI.IssuerURI, cfg.Auth.AdminAPI.ClientID)
 	// MCP endpoint (/mcp): client toolset for clients-realm JWTs, admin toolset for
@@ -508,6 +517,7 @@ func run() error {
 			cloud.TypeFloatingIP:        billingresource.NewFloatingIPProvider(),
 			cloud.TypeLoadBalancer:      billingresource.NewLoadBalancerProvider(),
 			cloud.TypeKubernetesCluster: billingresource.NewKubernetesClusterProvider(),
+			cloud.TypeDatabaseCluster:   billingresource.NewDatabaseClusterProvider(),
 			cloud.TypeBucket:            billingresource.NewBucketProvider(),
 		},
 	})
@@ -692,6 +702,7 @@ func run() error {
 		// branch is the dormant Magnum path and would fail every sweep).
 		esGet:     esSvc.Get,
 		kamajiFor: func(es *externalservice.ExternalService) (*kamaji.Service, error) { return kamaji.New(es.KamajiConfig(), es.ID) },
+		dbaasFor:  func(es *externalservice.ExternalService) (*dbaas.Service, error) { return dbaas.New(es.DbaasConfig(), es.ID) },
 	}, log)
 	sched := scheduler.New(lock.New(pg))
 	// Which engine charges bills. NATIVE (the default) rates in-process with the billing engine in
@@ -1214,6 +1225,7 @@ type projectCloudDeleter struct {
 	client    func() *client.Client
 	esGet     func(ctx context.Context, id string) (*externalservice.ExternalService, error)
 	kamajiFor func(es *externalservice.ExternalService) (*kamaji.Service, error)
+	dbaasFor  func(es *externalservice.ExternalService) (*dbaas.Service, error)
 }
 
 func (d projectCloudDeleter) DeleteProjectResources(ctx context.Context, projectID string) error {
@@ -1243,8 +1255,31 @@ func (d projectCloudDeleter) DeleteProjectResources(ctx context.Context, project
 		for i := range resources {
 			res := &resources[i]
 			es, gerr := d.esGet(ctx, res.ServiceID)
-			if gerr != nil || es == nil || !es.IsKamaji() {
+			if gerr != nil || es == nil || (!es.IsKamaji() && !es.IsDbaas()) {
 				kept = append(kept, *res)
+				continue
+			}
+			// dbaas rows: same Application-delete route on the DB cluster; the service-level
+			// sweep (syncjob.sweepDbaasOrphans) later revokes the neutron network share and
+			// reaps the marker/auth secrets, which keeps working after this project's doc is
+			// gone.
+			if es.IsDbaas() {
+				if d.dbaasFor == nil {
+					kept = append(kept, *res)
+					continue
+				}
+				ds, derr := d.dbaasFor(es)
+				if derr != nil {
+					kamajiErr = fmt.Errorf("dbaas service %s: %w", res.ServiceID, derr)
+					continue
+				}
+				if derr := ds.DeleteDatabase(ctx, projectID, res.ExternalID); derr != nil {
+					kamajiErr = fmt.Errorf("dbaas database %s: %w", res.ExternalID, derr)
+					continue
+				}
+				if aerr := d.cloudRepo.DeleteAndArchive(ctx, res, now); aerr != nil {
+					kamajiErr = fmt.Errorf("archive dbaas database %s: %w", res.ExternalID, aerr)
+				}
 				continue
 			}
 			ks, kerr := d.kamajiFor(es)

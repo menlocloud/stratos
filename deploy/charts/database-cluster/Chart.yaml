@@ -1,0 +1,70 @@
+apiVersion: v2
+appVersion: "0.1.0"
+description: >-
+  Helm chart for a single Stratos-managed database cluster on the ops-built
+  DBaaS Kubernetes cluster. One chart, seven engines: values.engine selects
+  which operator CR is rendered (CloudNativePG Cluster, Percona
+  PerconaServerMySQL, mariadb-operator MariaDB + a chart-owned HAProxy,
+  valkey-operator Valkey, FerretDB = CNPG backend + frontend Deployment,
+  opensearch-k8s-operator OpenSearchCluster, or Strimzi Kafka + KafkaNodePool
+  + KafkaUser). Every engine additionally gets an Octavia internal
+  LoadBalancer Service into the tenant network (EXCEPT kafka, where Strimzi
+  creates the bootstrap + per-broker LBs itself) and a NetworkPolicy.
+name: database-cluster
+type: application
+# THE VALUES CONTRACT IS OWNED JOINTLY WITH internal/cloud/dbaas/values.go.
+# Stratos never templates this chart itself: BuildValues produces the values
+# document and writes it into an ArgoCD Application (spec.source.helm.valuesObject)
+# pointing at the published chart. TestBuildValues pins every key this chart
+# reads — change a key here and you MUST change BuildValues (and its test) in
+# the same PR, then release a new chart version and move the provider pin
+# (config.argocd.chartVersion). Secrets NEVER travel through values: the
+# Application CR is readable by anyone with argocd access.
+#
+# engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
+# per chart release (bump images -> bump version -> re-pin).
+# 0.6.5 fixes the valkey selectors, the same defect as 0.6.4 in a different engine. The NetworkPolicy
+# and the LB Service selected app.kubernetes.io/instance: <cluster>, but valkey-operator stamps that
+# label PER NODE as <cluster>-<shard>-<node> (std-abc12345-0-0). Neither selector matched a pod: the
+# LB had zero endpoints, and the unmatched NetworkPolicy left the namespace default-deny to block the
+# cluster bus, so the node logged "Cluster is currently down: I am part of a minority partition" and
+# the operator sat at MissingShards forever. Both now select valkey.io/cluster, the operator's own
+# cluster label. Drill-caught 2026-08-06.
+# 0.6.4 fixes the opensearch pod-label selectors: they were opster.io/*, but on operator 3.0.2 the
+# labels moved WITH the api group and pods carry opensearch.org/* only. The NetworkPolicy podSelector
+# therefore matched nothing — and a podSelector that matches nothing grants nothing, while the
+# namespace-wide stratos-default-deny still applies. The node pods could not reach the bootstrap pod
+# on transport 9300, the cluster never formed ("cluster-manager not discovered yet"), and the node
+# CrashLoopBackOffed while the operator reported RUNNING. Same key fixed in the LB service selector
+# (now opensearch.org/opensearch-cluster + opensearch.org/opensearch-nodepool) and the dash-lb.
+# 0.6.3 moves valkey onto 9.x ONLY (9.0, 9.1) and drops 7.2/8.0/8.1. valkey-operator v0.4.0 writes
+# `shutdown-on-sigterm failover` into every server config unconditionally and its own docs say that
+# directive "requires Valkey 9.0+"; on 7.2, 8.0 and 8.1 the server refuses the config file outright
+# and CrashLoopBackOffs forever while the operator sits at Reconciling. All three were verified dead
+# on the 2026-08-06 drill. Not a deprecation — those versions cannot start under this operator, so
+# offering them only bought a database that never boots. BREAKING for any existing valkey database
+# pinned to 7.2/8.0/8.1, but there can be no working one.
+# 0.6.2 unblocks valkey and opensearch — both were 100% uncreatable, and both failed quietly.
+#   valkey: the user's passwordSecret said `key: password`, a field the CRD does not have. The
+#     API server pruned it silently and the operator fell back to its documented default ("keys
+#     defaults to username"), hunting for a key called `default`. Result: UsersACLError, zero
+#     pods, ArgoCD still green. Now `keys: [password]`, plural and an array.
+#   opensearch: handing the security plugin a custom http cert (the platform cert-manager one,
+#     which EVERY provider with certIssuer + dnsZone gets — including production) made the
+#     operator's validating webhook reject the object outright: it demands security.config
+#     .adminSecret whenever http certs are user-provided, and that admin CLIENT cert must be
+#     signed by the operator-owned transport CA, so a public issuer can never supply it. Both
+#     TLS layers are operator-generated again. Dashboards keeps the platform cert — it
+#     terminates TLS itself, with no security plugin in the path.
+# 0.6.1 gives the mysql CR a backup image. Without it the Percona operator rejected the whole
+# object ("backup.image can't be empty") and no mysql database ever started — no pods, no
+# credentials, no CR status, while ArgoCD reported the manifests healthy.
+# 0.6.0 hands the customer the engine's OWN admin account: postgresql now runs with
+# enableSuperuserAccess (stratos serves `<id>-superuser`, the real `postgres` role) and mariadb's
+# exposed `app` user gets ALL PRIVILEGES ON *.* WITH GRANT OPTION. Upgrading an existing database
+# is additive — CNPG mints the superuser Secret on sync, the Grant is applied by the operator —
+# but it DOES widen what a customer can do to their own instance.
+# 0.5.0 adds `scheduling` (nodeSelector + tolerations) so a provider can pin every pod a
+# database runs — engine, proxy, FerretDB frontend — onto a dedicated node pool. Additive: with
+# it unset the render is byte-identical to 0.4.5.
+version: 0.6.5

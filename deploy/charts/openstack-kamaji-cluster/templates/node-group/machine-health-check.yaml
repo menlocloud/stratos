@@ -15,6 +15,19 @@ spec:
     matchLabels:
       {{- include "openstack-kamaji-cluster.componentSelectorLabels" (list $ "worker") | nindent 6 }}
       {{ $.Values.projectPrefix }}/node-group: {{ $nodeGroup.name }}
-  {{- toYaml $nodeGroup.healthCheck.spec | nindent 2 }}
+  {{- /* maxUnhealthy as a PERCENTAGE cannot express "remediate one bad node" on a small pool:
+         CAPI remediates nothing once the unhealthy count EXCEEDS the budget, so 40% of a 2-node
+         group is 0.8 and a single dead node (50%) is already over it — that group can never heal
+         itself, which is exactly the size most clusters run. Resolve the percentage against the
+         group's own size and floor it at 1, so one failure is always remediable while a
+         mass-failure storm on a large pool is still held back. An operator who writes a plain
+         number keeps it verbatim. */}}
+  {{- $hc := deepCopy $nodeGroup.healthCheck.spec }}
+  {{- $mu := $hc.maxUnhealthy | toString }}
+  {{- if hasSuffix "%" $mu }}
+  {{- $desired := int (default $nodeGroup.machineCountMin $nodeGroup.machineCount) }}
+  {{- $_ := set $hc "maxUnhealthy" (max 1 (div (mul $desired (int (trimSuffix "%" $mu))) 100)) }}
+  {{- end }}
+  {{- toYaml $hc | nindent 2 }}
 {{- end }}
 {{- end }}

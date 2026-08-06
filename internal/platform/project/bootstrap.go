@@ -42,7 +42,7 @@ func (h *Handler) enableAndBootstrap(ctx context.Context, p *Project) error {
 		return err
 	}
 	var osES *externalservice.ExternalService
-	var cephES, kamajiES []*externalservice.ExternalService
+	var cephES, kamajiES, dbaasES []*externalservice.ExternalService
 	for i := range services {
 		if services[i].IsDisabled() {
 			continue
@@ -54,9 +54,11 @@ func (h *Handler) enableAndBootstrap(ctx context.Context, p *Project) error {
 			cephES = append(cephES, &services[i])
 		case services[i].IsKamaji():
 			kamajiES = append(kamajiES, &services[i])
+		case services[i].IsDbaas():
+			dbaasES = append(dbaasES, &services[i])
 		}
 	}
-	if osES == nil && len(cephES) == 0 && len(kamajiES) == 0 {
+	if osES == nil && len(cephES) == 0 && len(kamajiES) == 0 && len(dbaasES) == 0 {
 		return nil // no cloud provider configured → nothing to provision
 	}
 	p.Status = StatusEnabled
@@ -78,7 +80,44 @@ func (h *Handler) enableAndBootstrap(ctx context.Context, p *Project) error {
 			return err
 		}
 	}
+	// Dbaas managed-database bootstrap (no Keystone) — ensure the project's DB-cluster namespace.
+	for _, es := range dbaasES {
+		if err := h.BootstrapDbaasOnto(ctx, p, es); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// BootstrapDbaasOnto provisions the project onto a dbaas Managed-Database service: ensure the
+// project's namespace on the DB cluster (labelled for the sync/AppProject scoping) and append
+// the binding {serviceId, provider:"dbaas", region}. No credential store — connection info is
+// fetched on demand from operator secrets, never persisted (kamaji kubeconfig discipline).
+// Idempotent: a project already attached to this service is saved as-is.
+func (h *Handler) BootstrapDbaasOnto(ctx context.Context, p *Project, es *externalservice.ExternalService) error {
+	if p.HasService(es.ID) {
+		return h.svc.Save(ctx, p)
+	}
+	if h.dbaasFor == nil {
+		return fmt.Errorf("bootstrap dbaas: managed-database service not configured")
+	}
+	ds, err := h.dbaasFor(es)
+	if err != nil {
+		return fmt.Errorf("bootstrap dbaas: build db-cluster client: %w", err)
+	}
+	if err := ds.EnsureProjectNamespace(ctx, p.ID); err != nil {
+		return fmt.Errorf("bootstrap dbaas: ensure namespace: %w", err)
+	}
+	region := es.DbaasRegion()
+	if region == "" {
+		region = h.cloudRegion
+	}
+	p.Services = append(p.Services, map[string]any{
+		"serviceId": es.ID,
+		"provider":  "dbaas",
+		"region":    region,
+	})
+	return h.svc.Save(ctx, p)
 }
 
 // BootstrapKamajiOnto provisions the project onto a kamaji Managed-Kubernetes service: ensure the
@@ -168,6 +207,10 @@ func (h *Handler) BootstrapOnto(ctx context.Context, p *Project, es *externalser
 	// Same for kamaji: no Keystone — the management-cluster namespace leg.
 	if es.IsKamaji() {
 		return h.BootstrapKamajiOnto(ctx, p, es)
+	}
+	// And for dbaas: no Keystone — the DB-cluster namespace leg.
+	if es.IsDbaas() {
+		return h.BootstrapDbaasOnto(ctx, p, es)
 	}
 	if p.HasService(es.ID) {
 		return h.svc.Save(ctx, p)

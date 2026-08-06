@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -296,6 +297,27 @@ func (p *Prometheus) CountTrafficSeries(ctx context.Context, at time.Time, lookb
 		return 0, fmt.Errorf("prometheus: parse count %q: %w", samples[0].value(), err)
 	}
 	return int(d.IntPart()), nil
+}
+
+// InstantValues runs an instant vector query and returns value-by-label: one entry per sample,
+// keyed by the sample's keyLabel value (samples without the label are skipped). The dbaas disk
+// autoscale leg uses it for kubelet volume-stats ratios keyed by persistentvolumeclaim.
+func (p *Prometheus) InstantValues(ctx context.Context, promql, keyLabel string) (map[string]float64, error) {
+	samples, err := p.queryVector(ctx, promql, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]float64, len(samples))
+	for _, s := range samples {
+		key := s.Metric[keyLabel]
+		if key == "" {
+			continue
+		}
+		if v, err := strconv.ParseFloat(s.value(), 64); err == nil {
+			out[key] = v
+		}
+	}
+	return out, nil
 }
 
 // ---- HTTP + PromQL plumbing ----

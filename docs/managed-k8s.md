@@ -118,6 +118,16 @@ One-time, per management cluster (details + apply order: [`deploy/mgmt-cluster/R
    OCI registry at pinned versions. Never `latest`, never `0.0.0+latest` (plan §9) — the
    provider config and every existing cluster pin an exact version, and the registry must
    retain every pinned version.
+5. **On the OpenStack cloud itself — `force_config_drive = True` in nova.** Worker user-data
+   carries the kubeadm join. Without a config drive its only delivery path is the Neutron
+   metadata service, and a node that cannot reach it boots perfectly healthy, keeps the
+   hostname `localhost`, never runs kubeadm, and reports nothing in CAPI beyond "Waiting for
+   a Node with spec.providerID … to exist". Chart 0.12.0 forces a config drive on every node
+   the chart creates, which covers managed clusters; the nova setting is what protects
+   ordinary customer VMs on the same cloud. Observed 2026-08-06: the metadata service
+   answered for one of five nodes because `neutron-ovn-metadata-agent` had torn down the
+   `ovnmeta-<network>` namespace on the chassis while VMs of that network were still running
+   on it.
 
 ## 2. Provider setup (admin → Cloud providers → Add provider → Kubernetes)
 
@@ -141,6 +151,8 @@ worker VMs land in the customer's keystone tenant of the project's **openstack**
 | Image variants | `config.cluster.imageVariants` | Alternative node-image builds of the SAME version, keyed by name — e.g. an `nvidia` GPU build. Textarea grammar: `1.35.4@nvidia=<image-id>`. Customers pick a variant per node group ("Node image"); upgrades keep each pool on its variant and refuse a target the variant doesn't cover. A variant line needs its version's default line too. |
 | Flavors allowlist | `config.cluster.flavors` | Flavor ids offered in the cluster-create wizard. **Empty array = no restriction** (full region flavor catalog). Use it to keep GPU/baremetal flavors out of node groups. |
 | Storage volume type | `config.cluster.storageVolumeType` | The Cinder volume type behind every cluster's default StorageClass. The class is **named after the type** (e.g. `multiattach`); unset = class `csi-cinder` on the cloud's default type. Shown to customers in the create wizard. |
+| Registry mirrors | `config.cluster.registryMirrors` | Optional containerd pull-through map, `host → [mirror endpoints]`, rendered by the chart into `/etc/containerd/certs.d/<host>/hosts.toml` on every node. Covers **every** pull the node makes — CNI/CSI/add-ons at bootstrap and the customer's own images — and falls back to the upstream registry on a miss. This is the lever against public-registry rate limits (the difference between a 10-minute create and an hour of `ImagePullBackOff`). Endpoints are registry **API roots**: a Harbor proxy-cache project is `https://<harbor>/v2/<project>`. Textarea grammar: `docker.io=https://harbor.example.com/v2/dockerhub` per line; repeat a host for a fallback endpoint. The chart ships **no** mirrors of its own (0.8.0 dropped the inherited Azimuth default), so a registry you don't list is pulled from directly — list every one you want cached. Include `registry-1.docker.io`: containerd treats it as a namespace of its own and Bitnami-style charts write it literally. Applied at create; existing clusters keep the mirrors on their Application. |
+| Pod placement | `config.cluster.scheduling` | Optional `{nodeSelector, tolerations}` for everything a cluster runs **on the management cluster**: the hosted control-plane pods, the per-cluster OpenStack CCM, the Cinder CSI controller and the autoscaler (all four — one left off the pool makes "dedicated" a half-truth). Worker VMs are Nova servers and are unaffected. Use it to give the management cluster a dedicated node pool that scales on tenant-cluster demand alone: label + taint the pool and set BOTH halves — a selector alone still lets other workloads on, a toleration alone does not keep control planes there. Form grammar: `label=value` per line; tolerations as `key=value:Effect` / `key:Effect` / `key`. Applied at create; existing clusters keep the placement on their Application. |
 | Browse provider | `config.cluster.openstackServiceId` | Optional QoL: link the paired OpenStack provider and the form's flavor / node-image / volume-type fields become live-catalog pickers instead of hand-pasted UUIDs. |
 
 ### Management-cluster extras the features assume
@@ -254,13 +266,16 @@ the stored desired spec → stratos re-applies the Application (plan §9, one re
 
 ### Cluster networking (create-time, immutable)
 
-The create wizard offers, per cluster, either a **dedicated** network (the default — CAPO
-creates an isolated network + subnet + router from `nodeCidr`) or one of the project's **own**
-networks + subnets (EKS-style "pick your VPC subnet"). The customer never sees an external
-network id:
+Every cluster is **bring-your-own VPC**: the create wizard requires one of the project's own
+networks + subnets (EKS-style "pick your VPC subnet"), and `ClusterSpec.Validate` rejects a spec
+without both. The customer never sees an external network id.
 
-- **Dedicated**: `clusterNetworking.externalNetworkId` = the provider default (or CAPO
-  auto-discovery when there is exactly one external network).
+A cluster used to be creatable with no pick at all, which meant CAPO built a dedicated network +
+subnet + router from `nodeCidr`. That was removed: those nodes sat on a network the customer did
+not own, could not route to from the rest of their estate, and could not see in their own network
+list — and it was the one create path that skipped the tenant-ownership proof below, since a
+platform-created network has nothing to prove.
+
 - **Bring-your-own**: stratos verifies the network + subnet belong to the project's tenant,
   then **derives** the external network from the router that already egresses the chosen
   subnet (falling back to any project router, then the provider default). That derived id
@@ -343,6 +358,9 @@ kubectl get application <stc-id> -n argocd -o jsonpath='{.status.health}{"\n"}{.
 | Cluster stuck `PROGRESSING`, no endpoint | `kubectl get tcp -n st-<projectId>` → TCP status. Kamaji CP pods pending → mgmt capacity/datastore; endpoint absent → Octavia LB creation (`kubectl describe svc` in the namespace; floating network id wrong?). |
 | Workers not appearing | `kubectl get machinedeployments,machines -n st-<projectId>`; `kubectl describe` a stuck Machine → CAPO events. Usual causes: quota in the customer tenant, wrong Glance image id in the versions matrix, appcred invalid/revoked (check the `<stc-id>-cloud-config` secret exists and the appcred is alive in keystone). |
 | MachineDeployment stuck mid-rotation | Old machines not draining / new not joining: `kubectl get machinehealthchecks -n st-<projectId>`; verify the new image id boots (nova console of the new VM in the customer tenant). |
+| Machine `Provisioned` forever, "Waiting for a Node with spec.providerID … to exist" | **Read the node's serial console** — nothing else reports the cause. `Datasource DataSourceNone` + hostname `localhost` means cloud-init never got user-data: config drive missing (chart < 0.12.0, or nova without `force_config_drive`) or the chassis' `ovnmeta-<net>` namespace is gone. A kubeadm `couldn't validate the identity of the API Server … cluster-info` means the node could not reach the control-plane endpoint; chart ≥ 0.15.0 logs `waiting for control plane <host>:<port>` and polls for 10 minutes first, so the console says which of the two it was. |
+| One dead node in a small pool is never replaced | `maxUnhealthy` as a percentage cannot express "remediate one node" below 3 replicas — 40% of a 2-node group is 0.8, and one dead node is already over budget, so CAPI remediates nothing. Chart ≥ 0.13.0 resolves the percentage against the group size and floors it at 1. Check `kubectl get machinehealthcheck -n st-<projectId> -o jsonpath='{.items[*].spec.remediation}'`. |
+| Cross-node pod traffic blackholed (one-node cluster fine, two-node broken) | Both halves are needed and they are separate: the SENDING port needs the pod/service CIDRs as `allowedAddressPairs` (chart ≥ 0.11.0), and the RECEIVING node needs security-group rules admitting those CIDRs by `remoteIPPrefix` (chart ≥ 0.14.0) — CAPO's in-cluster rules match on `remoteGroupID`, which ML2/OVN compiles to an address set of FIXED IPs only, so a pod-sourced packet matches nothing on arrival. Discriminator: from a pod, cross-node fails; from `hostNetwork: true` on the same node, the same destination works. |
 | Delete hangs | Application stays with finalizer while the cascade runs — inspect what's left in the tree (`argocd app get`). Nova VMs refusing to delete block CAPI → fix in the customer tenant. Only remove the finalizer by hand if you accept orphaning the rendered objects, then GC per §3 above. |
 | Orphaned namespaces/secrets after teardown | §3 orphan-finalization check. |
 

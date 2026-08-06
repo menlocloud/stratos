@@ -16,6 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { useAdminList } from "@/lib/hooks"
 
+import { SchedulingFields, schedulingBlock, schedulingFromConfig, schedulingValid } from "./scheduling"
+
 export type KamajiFormState = {
   name: string
   region: string
@@ -36,6 +38,13 @@ export type KamajiFormState = {
   flavors: string // optional allowlist, one Nova flavor id per line (empty = all tenant flavors)
   // Cinder volume type behind every cluster's default StorageClass ("" = cloud default).
   storageVolumeType: string
+  // Containerd pull-through mirrors for cluster nodes, one "docker.io=https://…/v2/<project>"
+  // per line. Empty = the chart's own default mirrors.
+  registryMirrors: string
+  // Management-cluster pod placement for everything a cluster runs there (hosted control plane,
+  // CCM, CSI controller, autoscaler). Empty = schedule anywhere.
+  nodeSelector: string
+  tolerations: string
   // The OpenStack provider whose live catalog feeds the flavor/image PICKERS below — a browsing
   // aid only (worker placement stays per-project). Stored so the edit page reopens with the
   // pickers wired; blank = type ids by hand.
@@ -61,6 +70,9 @@ export const emptyKamajiForm: KamajiFormState = {
   versions: "",
   flavors: "",
   storageVolumeType: "",
+  registryMirrors: "",
+  nodeSelector: "",
+  tolerations: "",
   openstackServiceId: "",
 }
 
@@ -113,10 +125,51 @@ export function parseVersions(raw: string): ParsedVersions | null {
 
 const splitCsv = (s: string) => s.split(",").map((v) => v.trim()).filter(Boolean)
 
+// parseRegistryMirrors turns the mirrors textarea into config.cluster.registryMirrors
+// (`docker.io=https://registry.example.com/v2/dockerhub`, one per line; repeat a host to give it
+// a second endpoint, tried in order). null = a malformed line, which must block the save rather
+// than silently drop a mirror — a half-applied mirror map is a cluster that bootstraps against
+// the public registries again.
+//
+// The endpoint is a registry API ROOT (Harbor proxy cache = `https://<host>/v2/<project>`), so a
+// bare host or a repo path is rejected: containerd appends the repository itself, and either
+// mistake only surfaces as ImagePullBackOff on a customer's cluster.
+const MIRROR_HOST_RE = /^[a-z0-9.-]+(:\d+)?$/
+export function parseRegistryMirrors(raw: string): Record<string, string[]> | null {
+  const out: Record<string, string[]> = Object.create(null)
+  for (const line of raw.split("\n")) {
+    const t = line.trim()
+    if (!t) continue
+    const eq = t.indexOf("=")
+    if (eq <= 0 || eq === t.length - 1) return null
+    const host = t.slice(0, eq).trim()
+    const url = t.slice(eq + 1).trim()
+    if (!MIRROR_HOST_RE.test(host)) return null
+    if (!/^https?:\/\/[^/]+\/.+/.test(url)) return null
+    ;(out[host] ??= []).push(url)
+  }
+  return out
+}
+
+// The mirror set worth having on day one: the registries a cluster pulls from during bootstrap
+// (CNI, CSI, add-ons) plus the two Docker Hub spellings, since containerd treats
+// `registry-1.docker.io` as a namespace of its own and Bitnami-style charts write it literally.
+export const REGISTRY_MIRROR_HOSTS = [
+  "docker.io",
+  "registry-1.docker.io",
+  "ghcr.io",
+  "quay.io",
+  "registry.k8s.io",
+  "gcr.io",
+  "nvcr.io",
+]
+
 export const kamajiFormValid = (f: KamajiFormState, requireKubeconfig = true) => {
   const parsed = parseVersions(f.versions)
   const required = [f.name, f.region, f.chartRepo, f.chartVersion]
   if (requireKubeconfig) required.push(f.kubeconfig)
+  if (parseRegistryMirrors(f.registryMirrors) === null) return false
+  if (!schedulingValid(f.nodeSelector, f.tolerations)) return false
   return (
     required.every((v) => v.trim() !== "") &&
     Number(f.rootVolumeGiB) >= 1 &&
@@ -152,6 +205,10 @@ export function kamajiConfigBlocks(f: KamajiFormState) {
       // empty {} so deleting the last variant line actually removes the stored variants.
       imageVariants: parseVersions(f.versions)?.variants ?? {},
       ...(f.storageVolumeType.trim() ? { storageVolumeType: f.storageVolumeType.trim() } : {}),
+      // Sent complete (the update route replaces whole blocks): {} when the textarea is emptied,
+      // which is how an operator falls back to the chart's default mirrors.
+      registryMirrors: parseRegistryMirrors(f.registryMirrors) ?? {},
+      ...schedulingBlock(f.nodeSelector, f.tolerations),
       ...(f.openstackServiceId ? { openstackServiceId: f.openstackServiceId } : {}),
     },
   }
@@ -212,6 +269,12 @@ export function kamajiFormFromService(svc: {
     versions: versionLines.join("\n"),
     flavors: ((cluster.flavors as string[]) ?? []).join("\n"),
     storageVolumeType: String(cluster.storageVolumeType ?? ""),
+    registryMirrors: Object.entries(
+      (cluster.registryMirrors as Record<string, string[] | string>) ?? {},
+    )
+      .flatMap(([host, urls]) => (Array.isArray(urls) ? urls : [urls]).map((u) => `${host}=${u}`))
+      .join("\n"),
+    ...schedulingFromConfig(cluster.scheduling as Record<string, any> | undefined),
     openstackServiceId: String(cluster.openstackServiceId ?? ""),
   }
 }
@@ -504,6 +567,45 @@ export function KamajiProviderForm({
           upgrades keep each pool on its variant. A variant needs its version's default line too.
         </p>
       </div>
+      <div className="grid gap-2">
+        <Label htmlFor="km-mirrors">Registry mirrors (optional, one “host=mirror-url” per line)</Label>
+        <Textarea
+          id="km-mirrors"
+          className="min-h-20 font-mono text-xs"
+          value={form.registryMirrors}
+          onChange={(e) => setForm({ ...form, registryMirrors: e.target.value })}
+          placeholder={REGISTRY_MIRROR_HOSTS.map(
+            (h) => `${h}=https://registry.example.com/v2/${h === "registry-1.docker.io" ? "dockerhub" : h.split(".")[0]}`,
+          ).join("\n")}
+        />
+        <p className="text-xs text-muted-foreground">
+          Pull-through cache for every node of every cluster created here — cluster bootstrap
+          (CNI, CSI, add-ons) <em>and</em> the customer's own images. Without one, a create runs at
+          the mercy of public-registry rate limits, which is what turns a 10-minute cluster into an
+          hour of <code>ImagePullBackOff</code>. Empty = no mirror, pulls go straight upstream.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          The URL is a registry <strong>API root</strong>, not a repository path: a Harbor
+          proxy-cache project is <code>https://harbor.example.com/v2/&lt;project&gt;</code>.
+          containerd appends the repository itself and falls back to the upstream registry when the
+          mirror misses, so a wrong mirror slows pulls rather than breaking them. Worth covering:
+          <code> {REGISTRY_MIRROR_HOSTS.join(", ")}</code> — <code>registry-1.docker.io</code> is a
+          separate entry on purpose, containerd does not treat it as <code>docker.io</code>. Repeat
+          a host on another line to add a fallback endpoint.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Per host: a registry you don't list here has no mirror and is pulled from directly — the
+          chart ships none of its own — so list every registry you want cached. Applies to clusters
+          created from now on; existing clusters keep the mirrors they were built with.
+        </p>
+      </div>
+      <SchedulingFields
+        nodeSelector={form.nodeSelector}
+        tolerations={form.tolerations}
+        onChange={(next) => setForm({ ...form, ...next })}
+        what="a cluster's management-side pods — the hosted control plane, its OpenStack cloud-controller-manager, the Cinder CSI controller and the autoscaler — on THIS management cluster (worker VMs are Nova servers and are unaffected)"
+        idPrefix="km"
+      />
       <p className="text-xs text-muted-foreground">
         The kubeconfig belongs to a stratos service account on the Kamaji management cluster (ArgoCD +
         AppProject installed there). Only versions listed here are offered to customers. The support

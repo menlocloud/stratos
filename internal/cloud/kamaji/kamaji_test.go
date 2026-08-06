@@ -2,6 +2,8 @@ package kamaji
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +35,7 @@ func testCfg() Config {
 func testSpec() ClusterSpec {
 	return ClusterSpec{
 		ID: "stc-abcd1234", DisplayName: "prod cluster", ProjectID: "p1", Version: "1.35.4", HA: true,
+		NetworkID: "net-1", SubnetID: "sub-1",
 		OIDC:         map[string]string{"issuerUrl": "https://idp.example.com", "clientId": "kube"},
 		AllowedCIDRs: []string{"10.0.0.0/8", "1.2.3.4/32"},
 		NodeGroups: []NodeGroup{
@@ -96,21 +99,23 @@ func TestSpecValidate(t *testing.T) {
 	if err := testSpec().Validate(noDisk); err == nil {
 		t.Error("no root volume size anywhere: want error")
 	}
-	// BYO network needs BOTH ids or neither — a lone one is a half-configured cluster.
+	// The network pick is REQUIRED, and needs both halves. Leaving both empty used to mean "build
+	// a dedicated per-cluster network" — that path is gone, so absent must fail exactly like a
+	// half-configured one, and it must fail HERE rather than at CAPO.
 	half := testSpec()
-	half.NetworkID = "net-1"
+	half.SubnetID = ""
 	if err := half.Validate(d); err == nil {
 		t.Error("networkId without subnetId: want error")
 	}
 	half = testSpec()
-	half.SubnetID = "sub-1"
+	half.NetworkID = ""
 	if err := half.Validate(d); err == nil {
 		t.Error("subnetId without networkId: want error")
 	}
-	both := testSpec()
-	both.NetworkID, both.SubnetID = "net-1", "sub-1"
-	if err := both.Validate(d); err != nil {
-		t.Errorf("networkId+subnetId together: %v", err)
+	none := testSpec()
+	none.NetworkID, none.SubnetID = "", ""
+	if err := none.Validate(d); err == nil {
+		t.Error("no network at all: want error (bring-your-own VPC is mandatory)")
 	}
 }
 
@@ -155,13 +160,16 @@ func TestBuildValues(t *testing.T) {
 	if v["machineSSHKeyName"] != "stratos-support" {
 		t.Errorf("machineSSHKeyName = %v", v["machineSSHKeyName"])
 	}
-	// Dedicated network (no BYO ids): only the provider-default external network, no internalNetwork.
+	// The provider-default external network, plus the customer's own network as internalNetwork.
 	cn := v["clusterNetworking"].(map[string]any)
 	if cn["externalNetworkId"] != "ext-1" {
 		t.Errorf("default externalNetworkId = %v", cn["externalNetworkId"])
 	}
-	if _, has := cn["internalNetwork"]; has {
-		t.Error("dedicated cluster must not carry an internalNetwork")
+	in, _ := cn["internalNetwork"].(map[string]any)
+	nf, _ := in["networkFilter"].(map[string]any)
+	sf, _ := in["subnetFilter"].(map[string]any)
+	if nf["id"] != "net-1" || sf["id"] != "sub-1" {
+		t.Errorf("internalNetwork = %v", in)
 	}
 	groups := v["nodeGroups"].([]any)
 	if len(groups) != 2 {
@@ -330,7 +338,11 @@ func TestClusterAddons(t *testing.T) {
 		t.Errorf("addons = %v", addons)
 	}
 	// The openstack credential-push toggle must never be client-reachable.
-	if err := (func() error { s := testSpec(); s.Addons = map[string]bool{"openstack": true}; return s.Validate(testCfg().Defaults) })(); err == nil || !strings.Contains(err.Error(), "add-on") {
+	if err := (func() error {
+		s := testSpec()
+		s.Addons = map[string]bool{"openstack": true}
+		return s.Validate(testCfg().Defaults)
+	})(); err == nil || !strings.Contains(err.Error(), "add-on") {
 		t.Errorf("unknown addon: err = %v", err)
 	}
 	if err := spec.Validate(testCfg().Defaults); err != nil {
@@ -382,6 +394,34 @@ func TestClusterAddons(t *testing.T) {
 		if got, ok := ClusterAddons[k]; !ok || got != v {
 			t.Errorf("ClusterAddons[%s] = %v/%v, want %v", k, got, ok, v)
 		}
+	}
+}
+
+// Registry mirrors reach the chart's own registryMirrors key, and — the part that matters — stay
+// OFF the values entirely when the provider configures none, so the chart default stands instead
+// of being overridden with an empty map.
+func TestBuildValuesRegistryMirrors(t *testing.T) {
+	cfg := testCfg()
+	if v := BuildValues(cfg, testSpec()); v["registryMirrors"] != nil {
+		t.Errorf("unconfigured mirrors must not emit the key: %v", v["registryMirrors"])
+	}
+
+	cfg.Defaults.RegistryMirrors = map[string][]string{
+		"docker.io": {"https://harbor.example.com/v2/dockerhub", " "},
+		"ghcr.io":   {"https://harbor.example.com/v2/ghcr-io"},
+		"quay.io":   {""}, // nothing usable → dropped, not rendered as an empty mirror list
+	}
+	v := BuildValues(cfg, testSpec())
+	mirrors, ok := v["registryMirrors"].(map[string]any)
+	if !ok || len(mirrors) != 2 {
+		t.Fatalf("registryMirrors = %#v", v["registryMirrors"])
+	}
+	urls, _ := mirrors["docker.io"].([]any)
+	if len(urls) != 1 || urls[0] != "https://harbor.example.com/v2/dockerhub" {
+		t.Errorf("docker.io mirrors = %#v", mirrors["docker.io"])
+	}
+	if _, dropped := mirrors["quay.io"]; dropped {
+		t.Error("host with no usable endpoint must be dropped")
 	}
 }
 
@@ -480,6 +520,8 @@ func TestCloudsYAML(t *testing.T) {
 
 // fakeAPI records calls and serves canned objects.
 type fakeAPI struct {
+	osc        map[string]any
+	oscErr     error
 	namespaces map[string]map[string]string
 	secrets    map[string]map[string]string // ns/name → stringData
 	secretObjs map[string]map[string]any    // ns/name → full object (metadata for ListSecrets)
@@ -593,6 +635,7 @@ func (f *fakeAPI) ApplyApplication(_ context.Context, app map[string]any) error 
 func (f *fakeAPI) GetApplication(_ context.Context, ns, name string) (map[string]any, error) {
 	return f.apps[ns+"/"+name], nil
 }
+
 // matchSelector applies a "k=v[,k2=v2…]" label selector against metadata.labels.
 func matchSelector(obj map[string]any, selector string) bool {
 	if selector == "" {
@@ -636,6 +679,10 @@ func (f *fakeAPI) ListTenantControlPlanes(_ context.Context, ns, labelSelector s
 }
 func (f *fakeAPI) ListMachineDeployments(_ context.Context, _, _ string) ([]map[string]any, error) {
 	return f.mds, nil
+}
+
+func (f *fakeAPI) GetOpenStackCluster(_ context.Context, _, _ string) (map[string]any, error) {
+	return f.osc, f.oscErr
 }
 
 func TestServiceCreateDelete(t *testing.T) {
@@ -932,11 +979,14 @@ func TestRotateKubeconfig(t *testing.T) {
 	if err := svc.RotateKubeconfig(ctx, "p1", "stc-x"); err != nil {
 		t.Fatalf("RotateKubeconfig: %v", err)
 	}
-	// Kamaji watches for this annotation and regenerates the secret; anything else is a no-op that
-	// would look like it worked.
-	ann := api.annotated["st-p1/"+AdminKubeconfigSecretName("stc-x")]
-	if _, ok := ann["certs.kamaji.clastix.io/rotate"]; !ok {
-		t.Errorf("rotate annotation = %v", ann)
+	// Deleting the Secret is the trigger Kamaji actually honours: its controller recreates it with
+	// a fresh client certificate within a second. This test used to assert the
+	// `certs.kamaji.clastix.io/rotate` annotation instead — which the operator ignores on 26.7.5,
+	// so the action reported success while the credential never changed, and the test kept the
+	// wrong assumption alive. Verified against a live cluster before changing it.
+	want := "secret:st-p1/" + AdminKubeconfigSecretName("stc-x")
+	if !slices.Contains(api.deleted, want) {
+		t.Errorf("rotation must delete the admin kubeconfig secret; deleted = %v", api.deleted)
 	}
 }
 
@@ -1087,8 +1137,16 @@ func TestSyncProviderList(t *testing.T) {
 	if c["status"] != "READY" || c["sync_status"] != "Synced" {
 		t.Errorf("status = %v / %v", c["status"], c["sync_status"])
 	}
-	if c["endpoint"] != "10.0.0.5:6443" {
+	// The cluster's DNS name, not the Octavia VIP — the address moves when the LB is rebuilt and
+	// the apiserver cert is issued for the name. The VIP stays available as endpoint_ip.
+	if c["endpoint"] != "stc-abcd1234.k8s.example.com:6443" {
 		t.Errorf("endpoint = %v", c["endpoint"])
+	}
+	if c["endpoint_url"] != "https://stc-abcd1234.k8s.example.com:6443" {
+		t.Errorf("endpoint_url = %v", c["endpoint_url"])
+	}
+	if c["endpoint_ip"] != "10.0.0.5" {
+		t.Errorf("endpoint_ip = %v", c["endpoint_ip"])
 	}
 	if c["created_at"] != "2026-07-12T00:00:00Z" {
 		t.Errorf("created_at = %v", c["created_at"])
@@ -1097,5 +1155,261 @@ func TestSyncProviderList(t *testing.T) {
 	g0 := groups[0].(map[string]any)
 	if g0["ready_replicas"] != float64(2) || g0["phase"] != "ScalingUp" {
 		t.Errorf("live merge = %v", g0)
+	}
+}
+
+// Placement has to reach ALL FOUR management-side workloads a cluster brings with it. Missing one
+// leaves that pod off the dedicated pool, which is the failure this feature exists to prevent —
+// and it is invisible until somebody runs `kubectl get pods -o wide` on the management cluster.
+func TestBuildValuesPlacement(t *testing.T) {
+	cfg := testCfg()
+	v := BuildValues(cfg, testSpec())
+	if cp := v["kamajiControlPlane"].(map[string]any); cp["deployment"] != nil {
+		t.Errorf("unconfigured placement must not emit deployment: %v", cp["deployment"])
+	}
+
+	cfg.Defaults.NodeSelector = map[string]string{"node-role": "kamaji"}
+	cfg.Defaults.Tolerations = []map[string]any{
+		{"key": "dedicated", "operator": "Equal", "value": "kamaji", "effect": "NoSchedule"},
+	}
+	v = BuildValues(cfg, testSpec())
+	cp := v["kamajiControlPlane"].(map[string]any)
+	for _, key := range []string{"deployment", "cloudControllerManager", "cinderCSI"} {
+		block, ok := cp[key].(map[string]any)
+		if !ok {
+			t.Fatalf("kamajiControlPlane.%s missing: %#v", key, cp[key])
+		}
+		sel, _ := block["nodeSelector"].(map[string]any)
+		if sel["node-role"] != "kamaji" {
+			t.Errorf("%s nodeSelector = %#v", key, block["nodeSelector"])
+		}
+		if tol, _ := block["tolerations"].([]any); len(tol) != 1 {
+			t.Errorf("%s tolerations = %#v", key, block["tolerations"])
+		}
+	}
+	// Separate maps, not aliases of one — a shared map would make a later edit of one block
+	// silently rewrite the other three.
+	if sameMap(cp["deployment"], cp["cinderCSI"]) {
+		t.Error("placement blocks must not alias the same map")
+	}
+	autoscaler := v["autoscaler"].(map[string]any)
+	if autoscaler["nodeSelector"] == nil || autoscaler["tolerations"] == nil {
+		t.Errorf("autoscaler placement = %#v", autoscaler)
+	}
+	// The version-matched image tag must survive alongside the placement keys.
+	if img, _ := autoscaler["image"].(map[string]any); img["tag"] != "v1.35.0" {
+		t.Errorf("autoscaler image tag = %#v", autoscaler["image"])
+	}
+}
+
+func sameMap(a, b any) bool {
+	am, aok := a.(map[string]any)
+	bm, bok := b.(map[string]any)
+	if !aok || !bok {
+		return false
+	}
+	am["__probe"] = true
+	_, aliased := bm["__probe"]
+	delete(am, "__probe")
+	return aliased
+}
+
+// The node-group rules must stand alone: SET_NODE_GROUPS edits an EXISTING cluster and sends
+// only pools, so anything the create path requires — a picked network above all — cannot be a
+// precondition for validating them. It was, and every resize/add/remove/relabel 400'd with
+// "networkId and subnetId are required" on clusters that had both.
+func TestValidateNodeGroupsIsIndependentOfCreateRules(t *testing.T) {
+	d := testCfg().Defaults
+	groups := []NodeGroup{{Name: "workers", FlavorID: "m5.large", Count: 3, RootVolumeGiB: 120}}
+
+	// The shape the edit path builds: node groups and nothing else.
+	if err := (ClusterSpec{NodeGroups: groups}).ValidateNodeGroups(ClusterDefaults{}); err != nil {
+		t.Fatalf("edit-path validation must not need create-time fields: %v", err)
+	}
+	// And it still rejects what it is there to reject.
+	for name, bad := range map[string][]NodeGroup{
+		"no groups":       {},
+		"missing flavor":  {{Name: "workers", Count: 1, RootVolumeGiB: 120}},
+		"bad name":        {{Name: "Workers_1", FlavorID: "m5.large", Count: 1, RootVolumeGiB: 120}},
+		"duplicate name":  {{Name: "w", FlavorID: "m5.large", Count: 1, RootVolumeGiB: 120}, {Name: "w", FlavorID: "m5.large", Count: 1, RootVolumeGiB: 120}},
+		"autoscale range": {{Name: "workers", FlavorID: "m5.large", Autoscale: true, Min: 3, Max: 1, RootVolumeGiB: 120}},
+		"no disk":         {{Name: "workers", FlavorID: "m5.large", Count: 1}},
+		"bad taint":       {{Name: "workers", FlavorID: "m5.large", Count: 1, RootVolumeGiB: 120, Taints: []string{"gpu=true"}}},
+	} {
+		if err := (ClusterSpec{NodeGroups: bad}).ValidateNodeGroups(ClusterDefaults{}); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+	// Create-time validation still enforces the network pick.
+	spec := testSpec()
+	spec.NetworkID, spec.SubnetID = "", ""
+	if err := spec.Validate(d); err == nil {
+		t.Error("create without a network must still fail")
+	}
+}
+
+// Customer-named security groups ride per NODE GROUP and are shape-checked before they can reach
+// a machine template — an empty or duplicated id renders `- id: ""`, which CAPO's webhook rejects
+// with nothing in the cluster status to say why.
+func TestValidateNodeGroupSecurityGroups(t *testing.T) {
+	d := ClusterDefaults{RootVolumeGiB: 120, Versions: map[string]string{"1.35.4": "img"}}
+	spec := func(ids ...string) ClusterSpec {
+		return ClusterSpec{Version: "1.35.4", NodeGroups: []NodeGroup{
+			{Name: "workers", FlavorID: "f", Count: 1, SecurityGroupIDs: ids},
+		}}
+	}
+	if err := spec("sg-a", "sg-b").ValidateNodeGroups(d); err != nil {
+		t.Errorf("two distinct ids: %v", err)
+	}
+	if err := spec().ValidateNodeGroups(d); err != nil {
+		t.Errorf("none named: %v", err)
+	}
+	if err := spec("sg-a", "sg-a").ValidateNodeGroups(d); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("duplicate id = %v", err)
+	}
+	if err := spec("sg-a", "  ").ValidateNodeGroups(d); err == nil || !strings.Contains(err.Error(), "empty id") {
+		t.Errorf("blank id = %v", err)
+	}
+	many := make([]string, maxNodeGroupSecurityGroups+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("sg-%d", i)
+	}
+	if err := spec(many...).ValidateNodeGroups(d); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Errorf("over the cap = %v", err)
+	}
+}
+
+// The ids must survive the values round-trip. SET_NODE_GROUPS replaces the whole nodeGroups
+// value, so a field the read-back drops is a field silently wiped from every pool the customer
+// did not re-state on an unrelated edit.
+func TestNodeGroupValuesCarriesSecurityGroups(t *testing.T) {
+	d := ClusterDefaults{RootVolumeGiB: 120, Versions: map[string]string{"1.35.4": "img"}}
+	rendered := NodeGroupValues(d, "1.35.4", []NodeGroup{
+		{Name: "with", FlavorID: "f", Count: 1, SecurityGroupIDs: []string{"sg-a", "sg-b"}},
+		{Name: "without", FlavorID: "f", Count: 1},
+	})
+	with, _ := rendered[0].(map[string]any)
+	if got, _ := with["securityGroupIds"].([]any); len(got) != 2 || got[0] != "sg-a" || got[1] != "sg-b" {
+		t.Fatalf("rendered = %v", with["securityGroupIds"])
+	}
+	// A pool that named none must not carry the key at all: an empty list would change the
+	// machine-template checksum and roll every node of a cluster that upgraded for no reason.
+	without, _ := rendered[1].(map[string]any)
+	if _, present := without["securityGroupIds"]; present {
+		t.Errorf("pool with no groups must omit the key entirely, got %v", without)
+	}
+
+	back := NodeGroupsFromValues(map[string]any{"nodeGroups": rendered})
+	if got, _ := back[0]["security_group_ids"].([]any); len(got) != 2 {
+		t.Errorf("read-back = %v", back[0]["security_group_ids"])
+	}
+	if _, present := back[1]["security_group_ids"]; present {
+		t.Errorf("read-back invented groups for a pool that has none: %v", back[1])
+	}
+}
+
+// A chart pin that predates the key renders the values and ignores them, so the customer would
+// get a cluster with none of the groups they picked and no error. Refuse instead.
+func TestSecurityGroupsSupported(t *testing.T) {
+	for _, tc := range []struct {
+		pin  string
+		want bool
+	}{
+		{"0.9.0", true}, {"0.9.1", true}, {"0.10.0", true}, {"1.0.0", true},
+		{"0.8.0", false}, {"0.8.9", false}, {"0.5.0", false},
+		{"", false}, {"latest", false}, {"garbage", false},
+	} {
+		if got := SecurityGroupsSupported(tc.pin); got != tc.want {
+			t.Errorf("SecurityGroupsSupported(%q) = %v, want %v", tc.pin, got, tc.want)
+		}
+	}
+}
+
+// Cluster DNS is addresses only and capped. A hostname in a resolver config is a chicken-and-egg
+// that presents as a node which boots and then cannot resolve anything.
+func TestValidateDNSServers(t *testing.T) {
+	if err := ValidateDNSServers(nil); err != nil {
+		t.Errorf("none set: %v", err)
+	}
+	if err := ValidateDNSServers([]string{"10.0.0.53", "2001:4860:4860::8888"}); err != nil {
+		t.Errorf("v4 + v6: %v", err)
+	}
+	for _, tc := range []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"dns.example.com"}, "not an IP address"},
+		{[]string{"10.0.0.53", "10.0.0.53"}, "twice"},
+		{[]string{"10.0.0.53", " "}, "empty entry"},
+		{[]string{"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9"}, "at most"},
+	} {
+		if err := ValidateDNSServers(tc.in); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("ValidateDNSServers(%v) = %v, want %q", tc.in, err, tc.want)
+		}
+	}
+}
+
+// The values key must be omitted when unset: it lands in every pool's KubeadmConfigTemplate, so
+// writing an empty list would change every checksum and roll a whole cluster for nothing.
+func TestBuildValuesDNSServers(t *testing.T) {
+	cfg := testCfg()
+	spec := testSpec()
+	if cn, _ := BuildValues(cfg, spec)["clusterNetworking"].(map[string]any); cn["dnsServers"] != nil {
+		t.Errorf("unset must omit the key, got %v", cn["dnsServers"])
+	}
+	spec.DNSServers = []string{"10.0.0.53", "10.0.0.54"}
+	cn, _ := BuildValues(cfg, spec)["clusterNetworking"].(map[string]any)
+	got, _ := cn["dnsServers"].([]any)
+	if len(got) != 2 || got[0] != "10.0.0.53" || got[1] != "10.0.0.54" {
+		t.Errorf("dnsServers = %v", cn["dnsServers"])
+	}
+}
+
+func TestDNSServersSupported(t *testing.T) {
+	for pin, want := range map[string]bool{
+		"0.10.0": true, "0.11.0": true, "1.0.0": true,
+		"0.9.0": false, "0.8.0": false, "": false, "latest": false,
+	} {
+		if got := DNSServersSupported(pin); got != want {
+			t.Errorf("DNSServersSupported(%q) = %v, want %v", pin, got, want)
+		}
+	}
+}
+
+// The console must show the cluster's DNS NAME, not the Octavia VIP: the address moves if the load
+// balancer is rebuilt, and a URL built from it fails certificate validation because the apiserver
+// cert carries the name as its SAN. The name is read back off the cluster's OWN values, so a
+// cluster created under a different DNS zone keeps reporting what it actually answers to.
+func TestClusterDataEndpointPrefersTheDNSName(t *testing.T) {
+	app := func(fqdn string) map[string]any {
+		values := map[string]any{"kubernetesVersion": "1.36.3"}
+		if fqdn != "" {
+			values["kamajiControlPlane"] = map[string]any{"network": map[string]any{
+				"serviceAnnotations": map[string]any{"external-dns.alpha.kubernetes.io/hostname": fqdn},
+			}}
+		}
+		return map[string]any{
+			"metadata": map[string]any{"name": "stc-abcd1234"},
+			"spec":     map[string]any{"source": map[string]any{"helm": map[string]any{"valuesObject": values}}},
+		}
+	}
+	tcp := map[string]any{"status": map[string]any{"controlPlaneEndpoint": "10.200.40.199:6443"}}
+
+	got, _ := clusterData(app("stc-abcd1234.k8s.example.com"), tcp, nil, nil)["cluster"].(map[string]any)
+	if got["endpoint"] != "stc-abcd1234.k8s.example.com:6443" {
+		t.Errorf("endpoint = %v", got["endpoint"])
+	}
+	if got["endpoint_url"] != "https://stc-abcd1234.k8s.example.com:6443" {
+		t.Errorf("endpoint_url = %v", got["endpoint_url"])
+	}
+	// The VIP is still reported, because a customer whose DNS is not yet propagated needs it.
+	if got["endpoint_ip"] != "10.200.40.199" {
+		t.Errorf("endpoint_ip = %v", got["endpoint_ip"])
+	}
+
+	// No DNS zone on the provider: fall back to the address rather than inventing a name.
+	bare, _ := clusterData(app(""), tcp, nil, nil)["cluster"].(map[string]any)
+	if bare["endpoint"] != "10.200.40.199:6443" || bare["endpoint_url"] != "https://10.200.40.199:6443" {
+		t.Errorf("no-zone fallback = %v / %v", bare["endpoint"], bare["endpoint_url"])
 	}
 }

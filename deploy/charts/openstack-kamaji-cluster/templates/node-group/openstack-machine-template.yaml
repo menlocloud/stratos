@@ -24,9 +24,16 @@ template:
     {{- with $ctx.Values.machineSSHKeyName }}
     sshKeyName: {{ . }}
     {{- end }}
-    {{- if or $nodeGroup.machineConfigDrive $nodeGroup.additionalBlockDevices }}
+    {{- /* ALWAYS, not opt-in. A node's whole reason to exist is the kubeadm join in its user-data,
+           and without a config drive the only way that data reaches the VM is the Neutron metadata
+           service — a network round trip cloud-init makes before it has an address, over an
+           infrastructure component the cluster does not control. When it does not answer,
+           cloud-init settles on DataSourceNone: the VM boots healthy, keeps the hostname
+           `localhost`, never runs kubeadm, and CAPI just reports "waiting for a Node to exist" for
+           45 minutes with nothing anywhere saying why. The config drive is a local block device, so
+           it needs no DHCP, no route and no agent. machineConfigDrive is now a no-op kept for
+           values compatibility. */}}
     configDrive: true
-    {{- end }}
     {{- with $nodeGroup.machineRootVolume }}
     {{- if .diskSize }}
     rootVolume:
@@ -77,8 +84,72 @@ template:
               {{- end }}
       {{- end }}
     {{- end }}
-    {{- with $nodeGroup.machineNetworking.ports }}
-    ports: {{ include "openstack-kamaji-cluster.convert.neutronPortsFilter" . | nindent 6 }}
+    {{- /*
+      The node port.
+
+      An EXPLICIT machineNetworking.ports wins outright — that is the operator escape hatch, and
+      it is the caller's job to get right. It is refused only when it ALSO carries its own
+      securityGroups alongside nodeGroups[].securityGroupIds, because THAT is the combination CAPO
+      resolves by replacement (normalizePorts: a port's own securityGroups replace the default
+      list, machine-level AND the cluster's managed group included) — so the customer's groups
+      would win and the managed one would vanish without a word. A port that only sets
+      allowedAddressPairs keeps the defaults and is perfectly safe to combine.
+
+      Otherwise the chart builds the port itself, for ONE reason: allowedAddressPairs.
+
+      Cilium runs in NATIVE routing mode here (addons.cni.cilium ... routingMode: native), so a
+      pod's packets leave the node with the POD's source address, not the node's. Neutron port
+      security drops every frame whose source is neither the port's fixed IP nor an allowed
+      address pair — so without these, pod-to-pod traffic BETWEEN NODES is silently blackholed
+      while everything on a single node keeps working, which is exactly how it presents: a
+      one-node cluster looks healthy and the problem appears the moment a second node exists.
+
+      The pairs are the cluster's own pod and service CIDRs, read from kubeNetwork so they cannot
+      drift from what Cilium and kube-proxy actually use.
+    */}}
+    {{- if $nodeGroup.machineNetworking.ports }}
+    {{- range $nodeGroup.machineNetworking.ports }}
+    {{- if and .securityGroups $nodeGroup.securityGroupIds }}
+    {{- fail "nodeGroups[].securityGroupIds cannot be combined with a machineNetworking.ports entry that sets its own securityGroups: CAPO REPLACES the default group list with the port's (normalizePorts), so the machine-level groups — including the cluster's managed one — would be silently dropped. Put every group on the port, or none." }}
+    {{- end }}
+    {{- end }}
+    ports: {{ include "openstack-kamaji-cluster.convert.neutronPortsFilter" $nodeGroup.machineNetworking.ports | nindent 6 }}
+    {{- else if $ctx.Values.clusterNetworking.internalNetwork.networkFilter.id }}
+    ports:
+      - network:
+          id: {{ $ctx.Values.clusterNetworking.internalNetwork.networkFilter.id | quote }}
+        allowedAddressPairs:
+          {{- range $ctx.Values.kubeNetwork.pods.cidrBlocks }}
+          - ipAddress: {{ . | quote }}
+          {{- end }}
+          {{- range $ctx.Values.kubeNetwork.services.cidrBlocks }}
+          - ipAddress: {{ . | quote }}
+          {{- end }}
+    {{- end }}
+    {{- /*
+      Extra security groups on this pool's machines. ADDITIVE, verified against CAPO v0.14.4
+      pkg/cloud/services/networking/port.go ConstructPorts:
+
+        defaultSecurityGroupIDs, err := s.GetSecurityGroups(instanceSecurityGroups)
+        if managedSecurityGroup != nil {
+          defaultSecurityGroupIDs = append(defaultSecurityGroupIDs, *managedSecurityGroup)
+        }
+
+      — the machine-level list and the cluster's managed group both land on the port, so a
+      customer's group can only widen reachability, never lock the cluster out of itself. The
+      REPLACE semantics live one level down, on a port's own securityGroups, which is why the
+      guard above refuses the combination rather than quietly preferring one.
+
+      Per NODE GROUP, not per cluster: this key rides in the machine-template spec, so it is
+      already what the template checksum is computed over. Changing it rolls THIS pool's machines
+      and leaves the others alone — which is both the smaller blast radius and the honest thing to
+      tell the customer in the edit dialog.
+    */}}
+    {{- with $nodeGroup.securityGroupIds }}
+    securityGroups:
+      {{- range . }}
+      - id: {{ . | quote }}
+      {{- end }}
     {{- end }}
     {{- with $nodeGroup.serverGroupId }}
     serverGroup:

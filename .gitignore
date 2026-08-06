@@ -30,3 +30,6 @@ dist/
 # Internal migration working notes — not for the public repo.
 /MIGRATION_PLAN.md
 /_audit/
+
+# locally packaged helm charts (helm package -d dist-charts)
+dist-charts/

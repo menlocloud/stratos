@@ -23,6 +23,7 @@ const (
 	TypeKeypair              = "KEYPAIR"
 	TypeDNSZone              = "DNS_ZONE"
 	TypeKubernetesCluster    = "KUBERNETES_CLUSTER"
+	TypeDatabaseCluster      = "DATABASE_CLUSTER"
 	TypeLoadBalancer         = "LOAD_BALANCER"
 	TypeFloatingIP           = "FLOATING_IP"
 	TypeNetwork              = "NETWORK"

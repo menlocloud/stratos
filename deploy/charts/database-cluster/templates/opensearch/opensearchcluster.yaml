@@ -1,0 +1,200 @@
+{{- if eq .Values.engine "opensearch" }}
+{{/*
+opensearch-k8s-operator OpenSearchCluster (operator 3.0.2, pinned in
+deploy/dbaas-cluster/README.md).
+
+API GROUP: opensearch.org/v1. Settled at the live drill — operator 3.0.2
+serves BOTH groups, but its validating webhooks REFUSE creation on the old
+opensearch.opster.io group ("API group is deprecated. Please use
+opensearch.org/v1 instead"), for clusters, users and role bindings alike.
+
+The pod LABELS moved WITH the api group. This header used to claim the opposite
+— that pods still carried opster.io/* — and networkpolicy.yaml and
+dashboards-lb.yaml selected on that, which matched nothing: a podSelector that
+matches nothing grants nothing, the namespace default-deny then blocked the node
+pods from reaching the bootstrap pod on 9300, and the cluster never formed. A
+live 3.0.2 node pod carries opensearch.org/opensearch-cluster and
+opensearch.org/opensearch-nodepool, and no opster.io key at all.
+
+Auth: NO spec.security.config on purpose — with the operator's DEFAULT
+securityconfig init, the operator generates the admin credential Secret
+<id>-admin-password (the ConnectionSecret tuple internal/cloud/dbaas/engines.go
+reads; keys username/password). Rendering a custom securityConfigSecret would
+disable exactly that. TODO-verify(drill): the generated Secret's exact name on
+operator 3.x.
+*/}}
+{{- $name := include "database-cluster.name" . }}
+{{/* JVM heap = half the pod memory, in MB — the OpenSearch sizing rule of
+     thumb (leave the other half to the OS page cache / Lucene mmaps). */}}
+{{- $halfMemMi := div (mul (int .Values.resources.memoryGi) 1024) 2 }}
+apiVersion: opensearch.org/v1
+kind: OpenSearchCluster
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "database-cluster.labels" . | nindent 4 }}
+  annotations:
+    {{- include "database-cluster.annotations" . | nindent 4 }}
+spec:
+  general:
+    httpPort: 9200
+    # serviceName drives every operator-generated Service name (<id>, <id>-discovery, ...).
+    serviceName: {{ $name }}
+    version: {{ .Values.engineVersion | quote }}
+    setVMMaxMapCount: true
+    drainDataNodes: true
+    {{/*
+    opensearch.yml settings for every node, bootstrap pod included. The two
+    security defaults are NOT optional:
+      * clientauth_mode NONE — clients present no certificate against the
+        generated http chain, so demanding one is a handshake failure.
+      * allow_default_init_securityindex — lets the plugin seed the security
+        index from the image's default config on first boot, which is what
+        makes the operator's generated admin credential work.
+    They live here rather than under spec.bootstrap because THIS OPERATOR HAS
+    NO spec.bootstrap.additionalConfig — sending one is a strict-decoding
+    rejection from the API server, i.e. the cluster never gets created.
+    values.opensearch.parameters is merged last so an operator can override.
+    */}}
+    additionalConfig:
+      plugins.security.ssl.http.clientauth_mode: "NONE"
+      plugins.security.allow_default_init_securityindex: "true"
+      {{- with .Values.opensearch.parameters }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  security:
+    # BOTH TLS layers are operator-generated, ALWAYS.
+    #
+    # This used to hand the http layer the platform cert (<id>-tls) or the
+    # customer's BYO cert (<id>-custom-tls). That never produced a cluster: the
+    # operator's validating webhook refuses the object outright —
+    #
+    #   admission webhook "vopensearchcluster.opensearch.org" denied the request:
+    #   admin secret name is not provided but http.tls generate is not true
+    #
+    # — and the CRD says why: security.config.adminSecret is "a client
+    # certificate (tls.key, tls.crt, ca.crt) with admin rights ... Must be set
+    # if http certificates are provided by user and not generated". So a custom
+    # http cert obliges us to supply an ADMIN CLIENT cert too, and that one
+    # cannot come from the same public issuer: securityadmin.sh presents it on
+    # the TRANSPORT layer, which is operator-generated and pinned by the
+    # security plugin (nodes_dn). Bringing a public cert there does not harden
+    # cluster formation, it breaks it. Supplying the http cert alone is
+    # therefore not a half-configured cluster, it is an invalid object — and
+    # since the production provider sets certIssuer AND dnsZone, EVERY
+    # opensearch create hit it. Live-caught on the 2026-08-06 engine drill.
+    #
+    # Public-trust TLS for the API needs its own design (terminate at the LB,
+    # which is TCP passthrough today) or a BYO CA feeding both layers. Neither
+    # is this key. certificate.yaml still issues <id>-tls — Dashboards below
+    # consumes it, and that half works: Dashboards terminates TLS itself, with
+    # no security plugin and no admin certificate involved.
+    #
+    # NO security.config here — see header (admin secret generation).
+    tls:
+      http:
+        generate: true
+      transport:
+        generate: true
+        perNode: true
+  {{- if .Values.opensearch.dashboards.enabled }}
+  {{/*
+  =============================================================================
+  TODO-verify(drill) — SSO IS DASHBOARDS-SIDE ONLY IN THIS MVP: the block
+  below configures the Dashboards (opensearch_dashboards.yml) half of OIDC.
+  The API-side half — an `openid` authc domain in the security plugin's
+  config.yml (a securityconfig update) — is NOT wired, because rendering a
+  custom securityConfigSecret would disable the operator's default admin
+  secret generation (see header). Browser SSO therefore needs the
+  securityconfig leg verified/decided at the drill: either the operator 3.x
+  securityconfig-merge path, or a post-provision securityadmin.sh run.
+  Until then dashboards SSO values render but logins may fall back to basic
+  auth against the internal user database.
+  =============================================================================
+  */}}
+  dashboards:
+    enable: true
+    replicas: 1
+    version: {{ .Values.engineVersion | quote }}
+    {{- include "database-cluster.podPlacement" . | nindent 4 }}
+    # Same cert precedence as security.tls.http above (the platform cert's
+    # SAN list carries <id>-dash.<zone> for exactly this).
+    tls:
+      enable: true
+      {{- if .Values.opensearch.customDomain }}
+      generate: false
+      secret:
+        name: {{ $name }}-custom-tls
+      {{- else if and .Values.opensearch.certIssuer .Values.network.dnsZone }}
+      generate: false
+      secret:
+        name: {{ $name }}-tls
+      {{- else }}
+      generate: true
+      {{- end }}
+    # Fixed small size: Dashboards is a stateless UI, not the product the
+    # customer sizes — resources.cpu/memoryGi buy DB nodes only.
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    {{- if .Values.opensearch.sso.enabled }}
+    additionalConfig:
+      opensearch_security.auth.type: "openid"
+      # PUBLIC IdP client — deliberately NO opensearch_security.openid.client_secret
+      # (no secrets in values, ever; the values doc rides an Application CR).
+      opensearch_security.openid.connect_url: {{ .Values.opensearch.sso.connectUrl | quote }}
+      opensearch_security.openid.client_id: {{ .Values.opensearch.sso.clientId | quote }}
+      opensearch_security.openid.scope: {{ .Values.opensearch.sso.scope | quote }}
+      opensearch_security.openid.base_redirect_url: {{ .Values.opensearch.sso.baseRedirectUrl | quote }}
+      opensearch_security.openid.logout_url: {{ .Values.opensearch.sso.logoutUrl | quote }}
+      opensearch_security.cookie.secure: "true"
+    {{- end }}
+  {{- end }}
+  nodePools:
+    # ponytail: ONE combined pool (cluster_manager+data+ingest) — split
+    # dedicated-manager/data pools when a customer outgrows it; the values
+    # contract stays a single `instances` knob until then.
+    - component: nodes
+      replicas: {{ int .Values.instances }}
+      roles:
+        - cluster_manager
+        - data
+        - ingest
+      {{- include "database-cluster.podPlacement" . | nindent 6 }}
+      # NOTE: diskSize is a SIBLING of persistence in this CRD — the pvc block
+      # carries class/accessModes only, NOT the size.
+      diskSize: {{ .Values.storage.sizeGi }}Gi
+      persistence:
+        pvc:
+          {{- with .Values.storage.storageClassName }}
+          storageClass: {{ . }}
+          {{- end }}
+          accessModes:
+            - ReadWriteOnce
+      resources:
+        {{- include "database-cluster.resources" . | nindent 8 }}
+      jvm: -Xms{{ $halfMemMi }}m -Xmx{{ $halfMemMi }}m
+      # Generous probes: security-index init + shard recovery on a fresh or
+      # restarted node routinely exceed default probe windows (startup alone
+      # gets 60s + 30x10s = 6.5 minutes).
+      probes:
+        startup:
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+        readiness:
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        liveness:
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+{{- end }}

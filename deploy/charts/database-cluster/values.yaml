@@ -1,0 +1,373 @@
+---
+# =============================================================================
+# Stratos Managed Database (database-cluster) — Helm Chart Values
+# =============================================================================
+# FULL values contract. Mirrored 1:1 by internal/cloud/dbaas/values.go
+# (BuildValues / SpecFromValues) — see Chart.yaml header for the change
+# discipline. NO SECRETS EVER: the values document is embedded in an ArgoCD
+# Application CR, which is readable by anyone with argocd read access.
+# Passwords are generated/owned by the operators (or by stratos via
+# ApplySecret on RESET_PASSWORD) and only ever live in Secrets.
+#
+# Bare defaults DO NOT render by design: `engine` (and the rest of the
+# required keys) fail the render fast rather than producing a half-formed
+# database. CI renders examples/values-<engine>.yaml instead — one per
+# engine, all seven must template cleanly.
+# =============================================================================
+
+# -- Engine discriminator. REQUIRED. One of:
+#      postgresql | mysql | mariadb | valkey | ferretdb | opensearch | kafka
+# Selects which operator CR (and LB selector / port) is rendered. Unknown or
+# empty values fail the render (templates/_helpers.tpl).
+engine: ""
+
+# -- Engine version, as offered by the provider catalog
+# (config.database.engines in the stratos provider doc). REQUIRED.
+# Resolved to a concrete image via the per-engine maps in _helpers.tpl;
+# a version with no mapping fails the render. EXCEPTION: opensearch/kafka
+# have NO image map — both operators resolve images from the version field
+# natively (spec.general.version / spec.kafka.version).
+#   postgresql: "16" | "17" | "18"
+#   mysql:      "8.0" | "8.4"
+#   mariadb:    "10.11" | "11.4"
+#   valkey:     "8.0" | "8.1"
+#   ferretdb:   "2.5" (frontend; the CNPG backend image is ferretdb.postgresImage)
+#   opensearch: "3.3.0"
+#   kafka:      "4.2.0" | "4.2.1" | "4.3.0" (Strimzi 1.1.0 support matrix)
+engineVersion: ""
+
+# -- Number of database instances. REQUIRED.
+# postgresql/mariadb: 1 or 3. mysql: group replication formally wants 3 (a
+# single-node cluster renders the operator's unsafe-size override). ferretdb:
+# this is the CNPG BACKEND instance count; the stateless frontend scales via
+# ferretdb.replicas. opensearch: node-pool replicas (combined
+# cluster_manager+data+ingest roles). kafka: KafkaNodePool replicas
+# (dual-role controller+broker) — ALSO the per-broker Octavia LB count, see
+# templates/kafka/kafka.yaml.
+instances: 1
+
+# -- Per-instance compute. REQUIRED. requests == limits (Guaranteed QoS) — the
+# customer pays for the full size, so the full size is reserved.
+resources:
+  # -- CPU per instance, a Kubernetes quantity ("2", "500m").
+  cpu: ""
+  # -- Memory per instance in Gi (number; rendered as "<n>Gi").
+  memoryGi: ""
+
+# -- Pod placement for everything this chart runs: the engine pods, their
+# proxies (haproxy for mysql/mariadb) and the FerretDB frontend. Optional —
+# empty means "schedule anywhere", which is the DBaaS cluster's default.
+#
+# The point is a dedicated node pool for databases: label + taint those nodes
+# and set both keys here, and the pool can then scale on database demand alone
+# without platform workloads landing on it (or database pods drifting off it).
+# Set BOTH — a nodeSelector alone still lets other pods onto the pool, and a
+# toleration alone does not keep database pods on it.
+#
+# Kafka is the exception in shape only: Strimzi's pod template has no
+# nodeSelector, so the selector is rendered as an equivalent required
+# nodeAffinity. Same effect, different field.
+scheduling:
+  # -- Node labels a database pod must match, e.g. {node-role: database}.
+  nodeSelector: {}
+  # -- Tolerations for the taints on those nodes, in the standard k8s shape:
+  # [{key: dedicated, operator: Equal, value: database, effect: NoSchedule}].
+  tolerations: []
+
+# -- Persistent storage per instance.
+storage:
+  # -- Volume size in Gi. REQUIRED for every engine (for ferretdb it sizes the
+  # CNPG backend — one knob, so RESIZE_STORAGE works uniformly). Grow-only:
+  # RESIZE_STORAGE re-applies values with a bigger number, never smaller.
+  sizeGi: ""
+  # -- StorageClass for the data volumes. Empty = cluster default.
+  storageClassName: ""
+
+# -- Octavia LB wiring into the tenant VPC. All three ids REQUIRED — they come
+# from the stratos create call (tenant network/subnet, ownership-proven) and
+# the provider config (config.database.memberSubnetId, the DBaaS-cluster-side
+# subnet the amphora reaches members on).
+network:
+  # -- Tenant network the LB VIP lands on (loadbalancer.openstack.org/network-id).
+  networkId: ""
+  # -- Tenant subnet for the VIP (loadbalancer.openstack.org/subnet-id).
+  subnetId: ""
+  # -- DBaaS-cluster member subnet (loadbalancer.openstack.org/member-subnet-id).
+  memberSubnetId: ""
+  # -- Client source CIDRs allowed through the LB (Octavia ACL via
+  # spec.loadBalancerSourceRanges). Empty = no restriction. These are
+  # deliberately NOT mirrored into the NetworkPolicy — see
+  # templates/networkpolicy.yaml.
+  allowedCidrs: []
+  # -- Extra annotations merged onto the LB Service (escape hatch for
+  # provider-specific Octavia knobs).
+  extraAnnotations: {}
+  # -- Platform DNS zone (provider config.database.dnsZone). When set, every
+  # LB Service is annotated for external-dns: `<resourceId>.<zone>` (main),
+  # `<resourceId>-dash.<zone>` (Dashboards) and `<resourceId>-b<N>.<zone>` per
+  # kafka broker (also its advertisedHost). internal/cloud/dbaas/config.go
+  # HostnameFor is the derivation twin — change both together.
+  dnsZone: ""
+
+# -- Customer-managed logical databases inside this instance (MANAGE_ACCESS).
+# postgresql -> one CNPG Database CR each; mariadb -> one mariadb Database CR
+# each. Ignored by every other engine. `owner` must be one of `users` below;
+# omitted = the engine's built-in app user.
+# [{name: orders, owner: alice}]
+databases: []
+
+# -- Customer-managed logins (MANAGE_ACCESS). NEVER carries a password: the
+# engine CR references Secret <resourceId>-u-<name>, which stratos writes
+# directly (values ride an argocd-readable Application).
+#   databases  postgresql/mariadb: the logical databases this user may use.
+#   inRoles    postgresql only, derived by stratos: membership of each listed
+#              database's owner role, which is how postgres grants access.
+#   roles      opensearch only: built-in role names, allowlisted server-side.
+# [{name: alice, databases: [orders], inRoles: [], roles: []}]
+users: []
+
+# -- Stratos identity of this database. projectId + resourceId REQUIRED.
+# resourceId (std-xxxxxxxx) is the base name of EVERY object this chart
+# renders — not the release name, which is an ArgoCD implementation detail.
+stratos:
+  # -- Owning stratos project id (also the stdb-<projectId> namespace suffix).
+  projectId: ""
+  # -- The DATABASE_CLUSTER resource id, e.g. std-1a2b3c4d.
+  resourceId: ""
+  # -- Human display name (annotation only; free-form).
+  displayName: ""
+
+# -- Monitoring toggles. postgresql/ferretdb use CNPG-native
+# monitoring.enablePodMonitor; the other engines get a chart PodMonitor
+# (templates/monitoring/podmonitor.yaml). Requires prometheus-operator CRDs
+# on the DBaaS cluster.
+monitoring:
+  enabled: false
+
+# -- Object-store backup. The STORE is operator config (provider-level); the
+# POSTURE below is the customer's. postgresql/ferretdb use the barman-cloud
+# CNPG plugin (which must be installed on the cluster), mariadb a
+# PhysicalBackup, mysql the Percona in-CR storages. valkey/opensearch/kafka
+# ignore this block entirely.
+backup:
+  enabled: false
+  # -- 5-FIELD cron (minute hour dom month dow). ONE canonical arity across the
+  # platform: CNPG's ScheduledBackup wants six fields and misreads a five-field
+  # string as seconds-first — it runs at the wrong time instead of failing — so
+  # _backup.tpl converts, and nothing else may. Empty = on-demand only.
+  schedule: ""
+  # -- mysql ONLY: cron for INCREMENTAL runs, on the days `schedule` leaves free.
+  # Percona is the one operator here that can take an incremental base backup;
+  # stratos derives this from `schedule` (values.go IncrementalSchedule) and
+  # leaves it empty when the base already runs daily or oftener. Increments
+  # chain onto the latest full and are pruned with it.
+  incrementalSchedule: ""
+  # -- Keep backups this many days. 0 = keep forever. Used as-is by the operators
+  # whose retention IS a duration (barman "30d", mariadb hours).
+  retentionDays: 0
+  # -- The same retention expressed as a COUNT, which is what Percona's `keep`
+  # means. Derived from retentionDays and the schedule's cadence by stratos
+  # (values.go keepBackups) — the two only coincide at a daily cron, and passing
+  # days straight through would keep 30 WEEKS of full copies on a weekly one.
+  keepBackups: 0
+  # -- Stamp written by the CREATE_BACKUP action. A CHANGED value produces one
+  # extra backup (new CR name, or mariadb's schedule.onDemand); unchanged is a
+  # no-op re-apply, so "back up now" stays declarative.
+  runAt: ""
+  s3:
+    # -- Endpoint WITH scheme (https://rgw.example). mariadb wants host:port and
+    # a separate TLS flag — _backup.tpl strips and derives, do not pre-strip.
+    endpoint: ""
+    bucket: ""
+    # -- Folder inside the bucket; the chart always appends /<resourceId> so one
+    # database's retention can never reach a sibling's data.
+    prefix: ""
+    region: ""
+    # -- Path-style addressing. ON for Ceph RGW: a virtual-host request makes the
+    # gateway parse the bucket out of the Host header.
+    pathStyle: true
+    # -- Optional Secret (key ca.crt) holding the endpoint's CA.
+    caCertSecret: ""
+    # -- Name of a pre-existing Secret holding the S3 credentials (never the
+    # credentials themselves — no secrets in values). Stratos writes it with all
+    # four key aliases the operators expect: ACCESS_KEY_ID/ACCESS_SECRET_KEY
+    # (CNPG) and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (Percona, mariadb).
+    credsSecret: ""
+
+# -- Recovery source, stamped by the create path when a database is restored
+# from another one's backups (internal/cloud/dbaas/values.go restoreValues).
+# Empty sourceId = a normal, empty database. Restore is create-time by nature:
+# these engines take PHYSICAL backups, which can only be laid on a fresh data
+# directory, so recovery produces a NEW database and leaves the damaged one
+# untouched. postgresql/ferretdb recover via CNPG bootstrap.recovery, mariadb
+# via bootstrapFrom; mysql is not offered (its restore CR targets a running
+# cluster, which is a different shape).
+restore:
+  # -- The database id whose object-store folder is read.
+  sourceId: ""
+  # -- RFC3339 instant to recover to. Empty = replay everything available.
+  targetTime: ""
+  # -- mariadb only, decided server-side: replay the source's archived binlogs
+  # to targetTime instead of landing on the nearest physical backup. Requires
+  # the SOURCE to have run replication, the only topology 26.6.0 archives
+  # binlogs on.
+  pitr: false
+  # -- The specific backup object to restore from. Required for mysql, whose
+  # restore CR names a backup rather than searching the object store; the other
+  # engines find their own base backup.
+  backupName: ""
+  # -- Secret holding the object-store credentials (written before the
+  # Application, because the bootstrap reads S3 immediately).
+  credsSecret: ""
+  s3:
+    endpoint: ""
+    bucket: ""
+    prefix: ""
+    region: ""
+    pathStyle: true
+    caCertSecret: ""
+
+# -- RESTART lever: an RFC3339 timestamp stamped by stratos on the RESTART
+# action. A changed value rolls the database pods via each engine's documented
+# restart mechanism (CNPG cluster annotation, Deployment/pod-template
+# annotation). Empty = never restarted.
+restartedAt: ""
+
+# -- Vertical autoscale, stamped by the SET_AUTOSCALE action (absent in real
+# values documents until the customer opts in; enabled:false here so the bare
+# default renders nothing). When enabled the chart renders ONLY a
+# VerticalPodAutoscaler in updateMode "Off" (templates/autoscale/vpa.yaml) —
+# recommendation-only, it must NEVER evict database pods itself. Stratos is
+# the actuator: each autoscale tick reads .status.recommendation off the VPA,
+# clamps it into the max* ceilings below and applies the scale-up through this
+# very values document (resources/storage), so the operator performs its own
+# safe rolling change. Grow-only; the max* keys are the customer's ceilings.
+autoscale:
+  enabled: false
+  # -- Ceiling for resources.cpu (whole vCPUs).
+  maxCpu: 0
+  # -- Ceiling for resources.memoryGi.
+  maxMemoryGi: 0
+  # -- Ceiling for storage.sizeGi. 0 = disk leg off (also implied for engines
+  # without RESIZE_STORAGE: valkey, opensearch). Read by the stratos tick
+  # only, never by a template.
+  maxStorageGi: 0
+
+# =============================================================================
+# Per-engine sub-blocks. Only the block matching `engine` is read.
+# =============================================================================
+
+postgresql:
+  # -- postgresql.conf parameters (string map), passed to CNPG
+  # spec.postgresql.parameters verbatim.
+  parameters: {}
+  # -- CNPG enableSuperuserAccess: when true the operator maintains the
+  # <id>-superuser Secret (the real `postgres` role).
+  #
+  # ON by default: the product hands the customer their database, not a sandbox
+  # inside it. The `app` role CNPG creates cannot install most extensions, create
+  # roles or read another role's objects, which is exactly the set of things a
+  # customer opens a ticket about. Stratos serves this Secret as the connection
+  # credential (internal/cloud/dbaas/engines.go ConnectionSecret).
+  #
+  # The trade is real and accepted: a superuser can ALTER SYSTEM, drop the
+  # replication role, or otherwise break what CNPG manages, and the platform still
+  # owns the resulting page. Set this to false per-database to hand out the scoped
+  # `app` role instead.
+  superuserAccess: true
+
+mysql:
+  # -- my.cnf [mysqld] parameters (string map), rendered into the Percona CR's
+  # spec.mysql.configuration.
+  parameters: {}
+  # -- Operator-managed HAProxy in front of group replication (write port
+  # 3306). Size is derived: 2 when instances > 1, else 1.
+  haproxy:
+    cpu: "250m"
+    memoryGi: 1
+
+mariadb:
+  # -- my.cnf [mariadb] parameters (string map), rendered into MariaDB spec.myCnf.
+  parameters: {}
+  # -- The CHART-OWNED HAProxy deployment (the operator's <id>-primary Service
+  # is pod-name-pinned and not LB-selectable, so the chart runs its own TCP
+  # proxy for the LB to target). Replicas forced to 1 when instances == 1.
+  haproxy:
+    replicas: 2
+    image: docker.io/library/haproxy:3.0-alpine
+    cpu: "250m"
+    memoryGi: 1
+
+valkey:
+  # -- Customer-tunable valkey.conf settings, rendered into ValkeyCluster
+  # spec.config (a free-form string map on the CR). maxmemory-policy, timeout,
+  # and friends; stratos allowlists which keys may land here.
+  parameters: {}
+
+ferretdb:
+  # -- Stateless FerretDB frontend replicas (Deployment <id>).
+  replicas: 1
+  # -- FerretDB frontend image. Empty = resolved from engineVersion via the
+  # map in _helpers.tpl.
+  image: ""
+  # -- CNPG backend image (PostgreSQL + the DocumentDB extension). EMPTY BY
+  # DEFAULT: FerretDB publishes matched frontend/backend pairs, so the tag is
+  # derived from engineVersion in _helpers.tpl and both halves move together
+  # on UPGRADE. Set this only to pin a specific backend during an incident —
+  # a mismatched pair is unsupported.
+  postgresImage: ""
+
+opensearch:
+  # -- opensearch.yml settings (string map), passed to the OpenSearchCluster's
+  # spec.general.additionalConfig verbatim.
+  parameters: {}
+  # -- OpenSearch Dashboards (1 replica, operator-managed, HTTPS). Off by
+  # default; enabling also renders the chart-owned <id>-dash-lb Service
+  # (templates/opensearch/dashboards-lb.yaml).
+  dashboards:
+    enabled: false
+  # -- cert-manager ClusterIssuer for a REAL certificate on the platform DNS
+  # name (provider config.database.certIssuer; must solve DNS-01 for
+  # network.dnsZone — the VIP is private, HTTP-01 cannot reach it). Set
+  # together with network.dnsZone it renders Certificate <id>-tls and swaps
+  # the operator's self-signed http/Dashboards certs for it.
+  certIssuer: ""
+  # -- Customer BYO domain (SET_CUSTOM_DOMAIN action). Set together with the
+  # stratos-written secret <id>-custom-tls (their certificate + key); wins
+  # over certIssuer on the http layer + Dashboards. DNS stays customer-side
+  # (CNAME to the platform name or an A record to the VIP).
+  customDomain: ""
+  # -- Customer-defined roles (MANAGE_ACCESS, opensearch only). Each renders an
+  # OpensearchRole CR named <resourceId>-r-<name> — that prefixed name IS the
+  # role name in OpenSearch, and users.yaml resolves it. `actions` are built-in
+  # ACTION GROUPS from a server-side allowlist; cluster-level permissions are
+  # deliberately not a customer knob.
+  # [{name: logs_reader, indexPatterns: ["logs-*"], actions: [read, search]}]
+  roles: []
+
+  # -- Index retention (SET_INDEX_POLICIES, opensearch only). Four numbers, not
+  # the full ISM state machine: templates/opensearch/ismpolicy.yaml expands each
+  # entry into a hot->delete policy bound to the patterns. rolloverGiB /
+  # rolloverDays are optional; deleteAfterDays is required.
+  # [{name: logs30, indexPatterns: ["logs-*"], deleteAfterDays: 30, rolloverGiB: 50}]
+  indexPolicies: []
+
+  # -- Dashboards OIDC SSO, written by the SET_SSO action
+  # (internal/cloud/dbaas/engines.go). PUBLIC IdP client ONLY — there is
+  # deliberately no clientSecret key here and never will be (no secrets in
+  # values, see header). Read only when dashboards.enabled.
+  sso:
+    enabled: false
+    # -- The IdP's OIDC discovery URL (opensearch_security.openid.connect_url).
+    connectUrl: ""
+    clientId: ""
+    scope: "openid profile email"
+    # -- Dashboards external base URL the IdP redirects back to.
+    baseRedirectUrl: ""
+    logoutUrl: ""
+
+kafka:
+  # -- Kafka broker config overrides (string map), merged ON TOP of the
+  # instance-count-derived replication defaults in templates/kafka/kafka.yaml
+  # (spec.kafka.config).
+  parameters: {}

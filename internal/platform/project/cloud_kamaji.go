@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/menlocloud/stratos/internal/cloud"
@@ -69,6 +70,25 @@ func (h *Handler) kamajiCreate(w http.ResponseWriter, r *http.Request, u *user.U
 	// not slip past a limit that blocks the equivalent instances.
 	if err := h.enforceGPUQuotaForNodeGroups(r.Context(), proj, osSvcID, spec.NodeGroups, nil); err != nil {
 		h.fail(w, err)
+		return
+	}
+	// Root disks big enough for the node image each pool boots — refuse here, where the customer
+	// can read the number, instead of at a Cinder 400 nobody outside the management cluster sees.
+	if err := h.kamajiCheckNodeGroupDisks(r.Context(), proj, ks.Config().Defaults, spec.Version, spec.NodeGroups, nil); err != nil {
+		h.fail(w, httpx.BadRequest(err.Error()))
+		return
+	}
+	// Customer-named security groups: refuse an old chart pin that would ignore them, then prove
+	// every id belongs to this project's tenant. Both before anything is minted.
+	if err := h.kamajiCheckSecurityGroups(r.Context(), proj, osSvcID, ks.Config().ChartVersion, spec.NodeGroups); err != nil {
+		h.fail(w, httpx.BadRequest(err.Error()))
+		return
+	}
+	// Same reasoning as the security groups: an older pin renders the values and ignores the key,
+	// which would hand back a cluster resolving through DNS the customer did not choose, with
+	// nothing anywhere saying so.
+	if len(spec.DNSServers) > 0 && !kamaji.DNSServersSupported(ks.Config().ChartVersion) {
+		h.fail(w, httpx.BadRequest(fmt.Sprintf("this provider's platform version (%s) cannot set cluster DNS servers", ks.Config().ChartVersion)))
 		return
 	}
 	// Network placement: BYO ids are verified against the live tenant and the external network is
@@ -136,12 +156,16 @@ func (h *Handler) kamajiCreate(w http.ResponseWriter, r *http.Request, u *user.U
 		Type: cloud.TypeKubernetesCluster, ExternalID: spec.ID,
 		Data: data, CreatedAt: &now, UpdatedAt: &now,
 	}
-	if _, err := h.cloud.Insert(r.Context(), cr); err != nil {
+	// Respond with the STORED resource, not the struct we built: the id is generated on insert,
+	// and callers navigate to it. Dropping it here shipped the client to `/kubernetes/undefined`
+	// straight after a successful create.
+	saved, err := h.cloud.Insert(r.Context(), cr)
+	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_CREATE", "", cr)
-	httpx.OK(w, *cr)
+	h.cloudResourceAudit(u, proj, "CLOUD_RESOURCE_CREATE", "", saved)
+	httpx.OK(w, *saved)
 }
 
 // kamajiDelete handles the KUBERNETES_CLUSTER leg of cloudDelete: Application delete (ArgoCD's
@@ -253,13 +277,34 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 			h.fail(w, httpx.BadRequest(err.Error()))
 			return true
 		}
+		// Same root-disk rule as create. The cluster's version and each group's CURRENT image come
+		// off the sync cache: that is the exact fallback applyNodeGroupImages uses below for a group
+		// whose variant is unchanged, so an untouched pool is weighed against the image it runs.
+		cachedVersion, cachedImages := kamajiCachedImages(cr)
+		if err := h.kamajiCheckNodeGroupDisks(r.Context(), proj, d, cachedVersion, groups, cachedImages); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
 		// GPU gate on the DELTA vs the cluster's current groups (their workers are already in
 		// the usage count once synced as servers). Fail-open when the OpenStack binding is gone.
-		if osSvcID := h.kamajiOpenStackServiceID(r.Context(), proj); osSvcID != "" {
+		osSvcID := h.kamajiOpenStackServiceID(r.Context(), proj)
+		if osSvcID != "" {
 			if err := h.enforceGPUQuotaForNodeGroups(r.Context(), proj, osSvcID, groups, nodeGroupsFromCache(cr)); err != nil {
 				h.fail(w, err)
 				return true
 			}
+		}
+		// Security groups get the SAME gate as create — an edit accepts a fresh list of ids every
+		// time, so validating only at create would leave the wider door open. The chart pin is
+		// THIS CLUSTER's (cached from the Application's targetRevision), not the provider default:
+		// an existing cluster keeps its own pin, and that is the chart that will render the key.
+		//
+		// Unlike the GPU gate this does NOT fail open on a missing OpenStack binding: without a
+		// tenant to check against there is no way to prove ownership, and unproven ids must not
+		// reach the values.
+		if err := h.kamajiCheckSecurityGroups(r.Context(), proj, osSvcID, strAny(clusterField(cr, "chart_version")), groups); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
 		}
 		// Server groups follow the node groups: new pools get one, removed pools lose theirs. Runs
 		// before the values patch so every group in the new values already carries its id.
@@ -320,6 +365,59 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 				values["oidc"] = block
 			} else {
 				delete(values, "oidc")
+			}
+			return nil
+		})
+		if err != nil {
+			h.fail(w, err)
+			return true
+		}
+		httpx.OK(w, map[string]any{"result": "UPDATING"})
+		return true
+
+	case "SET_DNS_SERVERS":
+		// Cluster-wide resolvers. Replaces every worker node in the cluster: the value lands in
+		// every pool's KubeadmConfigTemplate, whose checksum names the template, so CAPI rolls
+		// each pool onto a new one. The confirm dialog says so — this is not a field edit.
+		servers := []string{}
+		if raw, ok := data["dnsServers"].([]any); ok {
+			for _, srv := range raw {
+				if v := strings.TrimSpace(strAny(srv)); v != "" {
+					servers = append(servers, v)
+				}
+			}
+		}
+		if err := kamaji.ValidateDNSServers(servers); err != nil {
+			h.fail(w, httpx.BadRequest(err.Error()))
+			return true
+		}
+		// The CLUSTER's own pin, not the provider default — an existing cluster keeps its pin and
+		// that is the chart which will (or will not) render the key.
+		if len(servers) > 0 && !kamaji.DNSServersSupported(strAny(clusterField(cr, "chart_version"))) {
+			h.fail(w, httpx.BadRequest("this cluster's platform version cannot set DNS servers — apply the platform update first"))
+			return true
+		}
+		err := ks.PatchClusterValues(r.Context(), cr.ExternalID, func(values map[string]any) error {
+			cn, _ := values["clusterNetworking"].(map[string]any)
+			if cn == nil {
+				cn = map[string]any{}
+			}
+			if len(servers) == 0 {
+				// Back to inheriting the subnet's DHCP resolvers — delete rather than write an
+				// empty list, so the render matches a cluster that never set them and the
+				// checksum lands back where it started.
+				delete(cn, "dnsServers")
+			} else {
+				out := make([]any, 0, len(servers))
+				for _, srv := range servers {
+					out = append(out, srv)
+				}
+				cn["dnsServers"] = out
+			}
+			if len(cn) == 0 {
+				delete(values, "clusterNetworking")
+			} else {
+				values["clusterNetworking"] = cn
 			}
 			return nil
 		})
@@ -395,8 +493,10 @@ func (h *Handler) kamajiAction(w http.ResponseWriter, r *http.Request, proj *Pro
 // (name/flavor required, count/min/max sanity) — allowlist enforcement happens inside the
 // values patch where the cluster's current groups are known.
 func validateNodeGroupShapes(groups []kamaji.NodeGroup) error {
-	spec := kamaji.ClusterSpec{ID: "x", ProjectID: "x", Version: "x", NodeGroups: groups}
-	return spec.Validate(kamaji.ClusterDefaults{})
+	// ONLY the node-group rules: this is an edit of an existing cluster, so the create-time
+	// checks (version offered, BYO network picked, add-on names) have nothing to say about it —
+	// and one of them, the required network, used to fail every edit here.
+	return kamaji.ClusterSpec{NodeGroups: groups}.ValidateNodeGroups(kamaji.ClusterDefaults{})
 }
 
 // prevGroupIndex indexes the live values' nodeGroups by name → flavor / imageId / imageVariant.
@@ -575,6 +675,13 @@ func kamajiSpecFromData(projectID string, d map[string]any) (kamaji.ClusterSpec,
 		for k, v := range oidc {
 			if s := strAny(v); s != "" {
 				spec.OIDC[k] = s
+			}
+		}
+	}
+	if servers, ok := d["dnsServers"].([]any); ok {
+		for _, srv := range servers {
+			if v := strings.TrimSpace(strAny(srv)); v != "" {
+				spec.DNSServers = append(spec.DNSServers, v)
 			}
 		}
 	}

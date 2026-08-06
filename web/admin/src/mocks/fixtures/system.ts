@@ -72,6 +72,39 @@ export const services: Doc[] = [
       services: { "object-storage": { "us-east-1": true } },
     },
   },
+  {
+    id: "svc-dbaas-01",
+    name: "Managed Databases AZ1",
+    type: "CLOUD",
+    status: "ACTIVE",
+    config: {
+      provider: "dbaas",
+      region: "az1",
+      regions: { az1: { name: "az1", country: "", displayName: "az1" } },
+      services: { database: { az1: true } },
+      argocd: {
+        namespace: "argocd",
+        project: "stratos-dbaas",
+        chartRepo: "ghcr.io/menlocloud/stratos-charts",
+        chartName: "database-cluster",
+        chartVersion: "0.1.0",
+      },
+      database: {
+        osServiceId: "svc-openstack-01",
+        osProjectId: "db44a5000000000000000000000000aa",
+        memberSubnetId: "5f0e1d2c-3b4a-5968-8776-655443322110",
+        storageClasses: ["csi-cinder"],
+        limits: { maxCpu: 32, maxMemoryGiB: 128, maxStorageGiB: 2048 },
+        engines: {
+          postgresql: { versions: ["16", "17", "18"], default: "17", replicas: [1, 3] },
+          mysql: { versions: ["8.4"], default: "8.4", replicas: [1, 3] },
+          mariadb: { versions: ["11.4"], default: "11.4", replicas: [1, 3] },
+          valkey: { versions: ["8"], default: "8", replicas: [1, 3], beta: true },
+          ferretdb: { versions: ["2"], default: "2", replicas: [1, 3] },
+        },
+      },
+    },
+  },
 ]
 
 // GPU placement capacity per service (GET /admin/service/{id}/gpu-info).

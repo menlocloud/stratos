@@ -186,6 +186,72 @@ Lists are merged by concatenating them rather than overwriting.
 {{/*
 Applies a list of templates to an input object sequentially.
 */}}
+{{/*
+Node DNS. Written as a systemd-resolved drop-in, NOT by overwriting /etc/resolv.conf: on the
+Ubuntu node images that file is a symlink into resolved's stub and DHCP rewrites it on every
+lease, so a plain `echo > /etc/resolv.conf` survives until the first renewal and then silently
+stops being true.
+
+`Domains=~.` makes these servers the default route for every query the node cannot answer from a
+more specific link. CoreDNS in the workload cluster forwards to the node's resolver, so setting
+this also sets what the cluster's own DNS falls back to.
+
+CLUSTER-WIDE by design: the value lands in every pool's KubeadmConfigTemplate, so changing it
+rolls every worker in the cluster. That is the honest cost of a setting applied at bootstrap, and
+the edit dialog says so.
+*/}}
+{{- define "openstack-kamaji-cluster.dnsKubeadmConfigSpec" -}}
+{{- $ctx := index . 0 }}
+{{- with $ctx.Values.clusterNetworking.dnsServers }}
+{{- $f := "/etc/systemd/resolved.conf.d/99-stratos-dns.conf" }}
+preKubeadmCommands:
+  - mkdir -p /etc/systemd/resolved.conf.d
+  - {{ printf "echo '[Resolve]' > %s" $f | quote }}
+  - {{ printf "echo 'DNS=%s' >> %s" (join " " .) $f | quote }}
+  - {{ printf "echo 'Domains=~.' >> %s" $f | quote }}
+  - systemctl restart systemd-resolved
+{{- end }}
+{{- end }}
+
+{{/*
+Wait for the control-plane endpoint to answer before running kubeadm join.
+
+The Kamaji control plane is a Service of type LoadBalancer, so its endpoint is an Octavia load
+balancer that Octavia builds — two amphora VMs, a VIP port and a floating IP — at the SAME time
+CAPI is booting the workers. The workers therefore race it. kubeadm's discovery gives up after
+about five minutes with
+
+  couldn't validate the identity of the API Server: failed to request the cluster-info ConfigMap
+
+and cloud-init marks the run failed. Nothing retries: the machine sits in Provisioned forever and
+only the 45-minute MachineHealthCheck eventually replaces it. Observed on two separate clusters —
+in each, one worker won the race and its sibling died, which is what makes it look like a flaky
+node rather than a startup ordering bug.
+
+The endpoint is not known at render time (Kamaji allocates it), so read it back out of the join
+config CAPI writes, and poll. Ten minutes of waiting costs nothing when the endpoint is already up
+— the first probe succeeds — and turns a permanently dead machine into a slow one when it is not.
+Falls through after the timeout rather than failing hard, so kubeadm still runs and still produces
+its own diagnostics.
+*/}}
+{{- define "openstack-kamaji-cluster.apiWaitKubeadmConfigSpec" -}}
+preKubeadmCommands:
+  - |
+    ep=$(awk '/apiServerEndpoint:/ {print $2}' /run/kubeadm/kubeadm-join-config.yaml 2>/dev/null)
+    if [ -n "$ep" ]; then
+      host=${ep%:*}; port=${ep##*:}
+      echo "waiting for control plane $host:$port"
+      i=0
+      while [ $i -lt 120 ]; do
+        if timeout 3 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null; then
+          echo "control plane $host:$port reachable after $((i*5))s"; break
+        fi
+        i=$((i+1)); sleep 5
+      done
+      [ $i -lt 120 ] || echo "control plane $host:$port still unreachable after 600s, joining anyway"
+    fi
+{{- end }}
+
 {{- define "openstack-kamaji-cluster.mergeConcatMany" -}}
 {{- $obj := first . }}
 {{- range $overrides := rest . }}

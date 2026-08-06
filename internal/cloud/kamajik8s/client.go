@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -21,7 +22,14 @@ const (
 	pathApplications        = "/apis/argoproj.io/v1alpha1/namespaces/%s/applications"
 	pathTenantControlPlanes = "/apis/kamaji.clastix.io/v1alpha1/namespaces/%s/tenantcontrolplanes"
 	pathMachineDeployments  = "/apis/cluster.x-k8s.io/v1beta1/namespaces/%s/machinedeployments"
+	// CAPO's infrastructure object. Read-only here: its status carries the ids and names of the
+	// security groups CAPO manages for the cluster, which is the only authoritative source for
+	// "what did the platform create for me".
+	pathOpenStackClusters = "/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/%s/openstackclusters"
 	pathSecrets             = "/api/v1/namespaces/%s/secrets"
+	pathServices            = "/api/v1/namespaces/%s/services"
+	pathNetworkPolicies     = "/apis/networking.k8s.io/v1/namespaces/%s/networkpolicies"
+	pathVPAs                = "/apis/autoscaling.k8s.io/v1/namespaces/%s/verticalpodautoscalers"
 	pathNamespaces          = "/api/v1/namespaces"
 	fieldManager            = "stratos"
 )
@@ -59,6 +67,36 @@ func (e *APIError) Error() string { return fmt.Sprintf("kubernetes api: %d: %s",
 // application/json (server-side apply needs application/apply-patch+yaml — JSON is valid YAML,
 // so the payload stays JSON). 2xx with a body decodes into map[string]any; 404 on GET/DELETE
 // returns (nil, *APIError{404}).
+// raw performs a request whose response is NOT JSON — the pods/log subresource returns plain
+// text. Same auth and transport as do(), and the same 8 MiB read cap, which doubles as the
+// bound on how much log one call can pull through stratos.
+func (c *Client) raw(ctx context.Context, method, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.rc.server, "/")+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	// NO Accept header. The apiserver content-negotiates even on pods/log and answers
+	// `Accept: text/plain` with 406 "only the following media types are accepted:
+	// application/json, application/yaml, application/vnd.kubernetes.protobuf" — the log body
+	// itself is plain text regardless, so asking for it is what breaks the read.
+	if c.rc.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.rc.token)
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode >= 300 {
+		return nil, &APIError{Status: res.StatusCode, Message: strings.TrimSpace(string(body))}
+	}
+	return body, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, contentType string) (map[string]any, error) {
 	u := strings.TrimRight(c.rc.server, "/") + path
 	if len(query) > 0 {
@@ -240,6 +278,31 @@ func (c *Client) AnnotateSecret(ctx context.Context, ns, name string, annotation
 	return err
 }
 
+// PatchSecretData overwrites individual data keys on an EXISTING secret, leaving type, metadata
+// and every other key alone — the AnnotateSecret discipline for payload: an SSA apply onto an
+// operator-created secret would both fight its immutable `type` (CNPG mints basic-auth, ApplySecret
+// hardcodes Opaque → 422) and retract labels this field manager applied earlier. A merge-patch
+// touches only the named keys and never changes owner. 404 (secret not minted yet) surfaces as
+// the *APIError so callers can say "not ready".
+func (c *Client) PatchSecretData(ctx context.Context, ns, name string, stringData map[string]string) error {
+	patch := map[string]any{"stringData": toAny(stringData)}
+	_, err := c.do(ctx, http.MethodPatch, fmt.Sprintf(pathSecrets, ns)+"/"+name, nil, patch, "application/merge-patch+json")
+	return err
+}
+
+// ApplyNetworkPolicy applies a networking.k8s.io/v1 NetworkPolicy (create-or-update; name and
+// namespace from its metadata) — the dbaas namespace default-deny leg.
+func (c *Client) ApplyNetworkPolicy(ctx context.Context, np map[string]any) error {
+	meta, _ := np["metadata"].(map[string]any)
+	name, _ := meta["name"].(string)
+	ns, _ := meta["namespace"].(string)
+	if name == "" || ns == "" {
+		return fmt.Errorf("networkpolicy: metadata.name/namespace required")
+	}
+	_, err := c.apply(ctx, fmt.Sprintf(pathNetworkPolicies, ns), name, np)
+	return err
+}
+
 // DeleteSecret removes a secret (absent = success).
 func (c *Client) DeleteSecret(ctx context.Context, ns, name string) error {
 	return c.delete(ctx, fmt.Sprintf(pathSecrets, ns), name)
@@ -273,6 +336,53 @@ func (c *Client) DeleteApplication(ctx context.Context, ns, name string) error {
 	return c.delete(ctx, fmt.Sprintf(pathApplications, ns), name)
 }
 
+// ListPods lists pods in ns filtered by labelSelector.
+func (c *Client) ListPods(ctx context.Context, ns, labelSelector string) ([]map[string]any, error) {
+	return c.list(ctx, fmt.Sprintf("/api/v1/namespaces/%s/pods", ns), labelSelector)
+}
+
+// PodLogs returns the tail of one container's stdout. Bounded by design: tailLines caps what
+// the apiserver sends, so a chatty database cannot stream unbounded output through stratos into
+// a browser. Returns raw text, not JSON — this subresource does not speak it.
+func (c *Client) PodLogs(ctx context.Context, ns, pod, container string, tailLines int) (string, error) {
+	if tailLines <= 0 || tailLines > 5000 {
+		tailLines = 500
+	}
+	q := url.Values{}
+	q.Set("container", container)
+	q.Set("tailLines", strconv.Itoa(tailLines))
+	q.Set("timestamps", "true")
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/log?%s", ns, pod, q.Encode())
+	body, err := c.raw(ctx, http.MethodGet, path)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+// ListCRs lists any namespaced custom resource by group/version/plural, filtered by
+// labelSelector. Read-only escape hatch for CRs that need no typed helper — the dbaas backup
+// list, where the kind differs per engine and a dedicated method each would be four copies of
+// the same line. A missing CRD 404s the same way an empty list does, which is the right
+// behaviour: an operator that is not installed simply has no backups.
+func (c *Client) ListCRs(ctx context.Context, group, version, plural, ns, labelSelector string) ([]map[string]any, error) {
+	return c.list(ctx, fmt.Sprintf("/apis/%s/%s/namespaces/%s/%s", group, version, ns, plural), labelSelector)
+}
+
+// GetService returns a core/v1 Service, or nil when absent. Read-only: the dbaas provider reads
+// the Octavia VIP back off .status.loadBalancer.ingress of chart-rendered LoadBalancer Services.
+func (c *Client) GetService(ctx context.Context, ns, name string) (map[string]any, error) {
+	return c.get(ctx, fmt.Sprintf(pathServices, ns), name)
+}
+
+// GetVPA returns an autoscaling.k8s.io/v1 VerticalPodAutoscaler, or nil when absent (also nil
+// when the VPA CRD is not installed — the 404 shape is identical). Read-only: the dbaas
+// autoscale tick consumes .status.recommendation; the VPA runs in updateMode Off and never
+// mutates pods itself.
+func (c *Client) GetVPA(ctx context.Context, ns, name string) (map[string]any, error) {
+	return c.get(ctx, fmt.Sprintf(pathVPAs, ns), name)
+}
+
 // GetTenantControlPlane returns the Kamaji TCP, or nil when absent.
 func (c *Client) GetTenantControlPlane(ctx context.Context, ns, name string) (map[string]any, error) {
 	return c.get(ctx, fmt.Sprintf(pathTenantControlPlanes, ns), name)
@@ -281,6 +391,12 @@ func (c *Client) GetTenantControlPlane(ctx context.Context, ns, name string) (ma
 // ListTenantControlPlanes lists TCPs in ns (labelSelector optional).
 func (c *Client) ListTenantControlPlanes(ctx context.Context, ns, labelSelector string) ([]map[string]any, error) {
 	return c.list(ctx, fmt.Sprintf(pathTenantControlPlanes, ns), labelSelector)
+}
+
+// GetOpenStackCluster reads the CAPO OpenStackCluster for a cluster. nil when absent — a cluster
+// mid-create has none yet, and the caller must treat that as "not known yet", never as "none".
+func (c *Client) GetOpenStackCluster(ctx context.Context, ns, name string) (map[string]any, error) {
+	return c.get(ctx, fmt.Sprintf(pathOpenStackClusters, ns), name)
 }
 
 // ListMachineDeployments lists CAPI MachineDeployments in ns filtered by labelSelector

@@ -85,6 +85,8 @@ export default function App() {
           {/* Platform */}
           <Route path="kubernetes" element={lazyPage(() => import("@/pages/platform/KubernetesPage"))} />
           <Route path="kubernetes/:resourceId" element={lazyPage(() => import("@/pages/platform/KubernetesClusterDetailPage"))} />
+          <Route path="databases" element={lazyPage(() => import("@/pages/platform/DatabasesPage"))} />
+          <Route path="databases/:resourceId" element={lazyPage(() => import("@/pages/platform/DatabaseDetailPage"))} />
           <Route path="stacks" element={lazyPage(() => import("@/pages/platform/StacksPage"))} />
           <Route path="secrets" element={lazyPage(() => import("@/pages/platform/SecretsPage"))} />
 

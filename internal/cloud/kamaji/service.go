@@ -34,6 +34,7 @@ type K8sAPI interface {
 	GetTenantControlPlane(ctx context.Context, ns, name string) (map[string]any, error)
 	ListTenantControlPlanes(ctx context.Context, ns, labelSelector string) ([]map[string]any, error)
 	ListMachineDeployments(ctx context.Context, ns, labelSelector string) ([]map[string]any, error)
+	GetOpenStackCluster(ctx context.Context, ns, name string) (map[string]any, error)
 }
 
 // defaultFinalizeGrace: a cloud-config secret younger than this is never treated as an orphan.
@@ -118,7 +119,7 @@ func (s *Service) CreateCluster(ctx context.Context, spec ClusterSpec, osCfg cli
 	if err := s.api.ApplyApplication(ctx, app); err != nil {
 		return nil, fmt.Errorf("kamaji: apply application: %w", err)
 	}
-	return clusterData(app, nil, nil), nil
+	return clusterData(app, nil, nil, nil), nil
 }
 
 // DeleteCluster removes the cluster: Application delete only (the resources-finalizer cascades
@@ -135,7 +136,7 @@ func (s *Service) DeleteCluster(ctx context.Context, projectID, clusterID string
 		return err
 	}
 	if app != nil {
-		if !managedBy(app) {
+		if !s.owns(app) {
 			return fmt.Errorf("kamaji: cluster %s is not managed by stratos — refusing to delete", clusterID)
 		}
 		if err := s.api.DeleteApplication(ctx, s.cfg.ArgoNamespace, clusterID); err != nil {
@@ -299,6 +300,25 @@ func (s *Service) gcNamespace(ctx context.Context, ns string) error {
 	if len(tcps) > 0 || len(mds) > 0 {
 		return nil
 	}
+	// Refuse while any stratos-owned secret from ANOTHER service is still here.
+	//
+	// The sibling product no longer shares this namespace (dbaas moved to its own stdb- prefix
+	// precisely so that it could not), so this is not that crossing — it is the same hazard one
+	// level down: two providers OF THE SAME KIND on one cluster still collide on a project's
+	// namespace. What is at stake is the object each provider deliberately keeps LONGEST, after
+	// its Application is already gone: the only record by which a credential or a network share
+	// can ever be revoked. Deleting the namespace loses it silently, with nothing left to find
+	// the leaked grant by — so a foreign remnant is a reason to stop, whoever owns it. NOT scoped
+	// by project, for the same reason.
+	secrets, err := s.api.ListSecrets(ctx, ns, LabelManagedBy+"="+ManagedByValue)
+	if err != nil {
+		return err
+	}
+	for _, sec := range secrets {
+		if digStr(sec, "metadata", "labels", LabelService) != s.serviceID {
+			return nil
+		}
+	}
 	return s.api.DeleteNamespace(ctx, ns)
 }
 
@@ -380,11 +400,13 @@ func publicKubeconfig(kc []byte, fqdn string) []byte {
 	return out
 }
 
-// RotateKubeconfig triggers a Kamaji certificate rotation for the cluster's admin kubeconfig:
-// annotating the secret with `certs.kamaji.clastix.io/rotate` makes the CertificateLifecycle
-// controller regenerate it and roll the control plane
-// (https://kamaji.clastix.io/guides/certs-lifecycle/). Every kubeconfig already handed out stops
-// working — the caller is expected to have confirmed that with the user.
+// RotateKubeconfig re-issues the cluster's admin kubeconfig: the Secret is deleted and Kamaji's
+// controller immediately recreates it with a fresh client certificate. GET_KUBECONFIG then serves
+// the new credential.
+//
+// It is NOT a revocation. Kubeconfigs already downloaded keep working until their certificate
+// expires — revoking them would mean rotating the cluster CA, which also invalidates every
+// kubelet's certificate and re-bootstraps the nodes. Callers must not tell the customer otherwise.
 func (s *Service) RotateKubeconfig(ctx context.Context, projectID, clusterID string) error {
 	ns := NamespaceFor(projectID)
 	tcp, err := s.findTCP(ctx, ns, clusterID)
@@ -394,8 +416,18 @@ func (s *Service) RotateKubeconfig(ctx context.Context, projectID, clusterID str
 	if tcp == nil {
 		return fmt.Errorf("kamaji: cluster %s: control plane not found (still provisioning?)", clusterID)
 	}
-	return s.api.AnnotateSecret(ctx, ns, adminKubeconfigSecret(tcp, clusterID),
-		map[string]string{"certs.kamaji.clastix.io/rotate": ""})
+	// DELETE, not annotate. The `certs.kamaji.clastix.io/rotate` annotation this used to write is
+	// ignored by the operator on the version we run (verified against kamaji 26.7.5-edge: the
+	// annotation lands, the TCP reconciles, and the Secret is byte-identical afterwards), so the
+	// action was a no-op that reported success. Deleting the Secret is the contract Kamaji does
+	// honour — its controller recreates it, with a freshly signed client certificate, within a
+	// second.
+	//
+	// What this does NOT do is invalidate kubeconfigs already handed out: they carry client certs
+	// signed by the cluster CA, and x509 has no revocation here — only rotating the CA would do
+	// that, and it would also break every node's kubelet. Say what it is (a fresh credential),
+	// never "the old one stops working".
+	return s.api.DeleteSecret(ctx, ns, adminKubeconfigSecret(tcp, clusterID))
 }
 
 // adminKubeconfigSecret is the Kamaji admin-kubeconfig secret for a control plane: `<tcp>-admin-
@@ -418,7 +450,7 @@ func (s *Service) PatchClusterApp(ctx context.Context, clusterID string, mutate 
 	if app == nil {
 		return fmt.Errorf("kamaji: cluster %s not found", clusterID)
 	}
-	if !managedBy(app) {
+	if !s.owns(app) {
 		return fmt.Errorf("kamaji: cluster %s is not managed by stratos — refusing to modify", clusterID)
 	}
 	if err := mutate(app); err != nil {
@@ -499,7 +531,8 @@ type ClusterPin struct {
 // ListClusterPins lists every stratos-managed cluster on this provider with its chart pin
 // (ownership-labelled Applications only — pre-stratos clusters stay invisible).
 func (s *Service) ListClusterPins(ctx context.Context) ([]ClusterPin, error) {
-	apps, err := s.api.ListApplications(ctx, s.cfg.ArgoNamespace, LabelManagedBy+"="+ManagedByValue)
+	apps, err := s.api.ListApplications(ctx, s.cfg.ArgoNamespace,
+		LabelManagedBy+"="+ManagedByValue+","+LabelService+"="+s.serviceID)
 	if err != nil {
 		return nil, err
 	}

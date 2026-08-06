@@ -18,6 +18,8 @@ export const sections: DocSection[] = [
     title: "Cloud providers",
     pages: [
       { slug: "platform-admin/cloud/connect-a-cloud", title: "Connecting a cloud" },
+      { slug: "platform-admin/cloud/managed-kubernetes", title: "Offering Managed Kubernetes" },
+      { slug: "platform-admin/cloud/managed-databases", title: "Offering Managed Databases" },
       { slug: "platform-admin/cloud/service-availability", title: "Service availability" },
       { slug: "platform-admin/cloud/instance-metrics", title: "Instance metrics" },
       { slug: "platform-admin/cloud/reseller-domains", title: "Reseller domains" },

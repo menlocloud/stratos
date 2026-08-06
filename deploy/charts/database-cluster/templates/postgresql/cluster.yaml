@@ -1,0 +1,118 @@
+{{- if eq .Values.engine "postgresql" }}
+{{/*
+CloudNativePG Cluster (operator >= 1.29.1, pinned in
+deploy/dbaas-cluster/README.md). The operator provisions the `app` database +
+`app` user and maintains the <id>-app connection Secret — the tuple
+internal/cloud/dbaas/engines.go reads for GET_CONNECTION_INFO.
+*/}}
+{{- $name := include "database-cluster.name" . }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "database-cluster.labels" . | nindent 4 }}
+  annotations:
+    {{- include "database-cluster.annotations" . | nindent 4 }}
+    {{- with .Values.restartedAt }}
+    # RESTART mechanism: CNPG's documented rolling-restart trigger is this
+    # annotation on the Cluster — the same one `kubectl cnpg restart` stamps
+    # (utils.ClusterRestartAnnotationName = kubectl.kubernetes.io/restartedAt).
+    # NOT cnpg.io/reloadedAt — that name does not exist upstream; the reload
+    # (config-only) annotation is cnpg.io/reload on Secrets/ConfigMaps.
+    # TODO-verify(drill): confirm a changed value rolls instances on 1.29.
+    kubectl.kubernetes.io/restartedAt: {{ . | quote }}
+    {{- end }}
+spec:
+  instances: {{ int .Values.instances }}
+  imageName: {{ include "database-cluster.image" . }}
+  enableSuperuserAccess: {{ .Values.postgresql.superuserAccess | default false }}
+  {{- if or .Values.scheduling.nodeSelector .Values.scheduling.tolerations }}
+  # CNPG keeps pod placement under spec.affinity, not on a pod template.
+  affinity:
+    {{- include "database-cluster.podPlacement" . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.postgresql.parameters }}
+  postgresql:
+    parameters:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+  {{- if .Values.users }}
+  {{/*
+  Customer-declared logins as CNPG managed roles. The password NEVER appears
+  here: passwordSecret names the Secret stratos wrote (<id>-u-<user>), which is
+  the whole reason values can stay argocd-readable.
+
+  inRoles is how a user reaches a database it does not own — postgres has no
+  "grant on database" CR, so stratos turns "user u may use database d" into
+  membership of d's owner role (internal/cloud/dbaas/values.go usersValues).
+  ensure: present + a role dropped from the list simply stops being managed;
+  CNPG does not DROP roles, which is the safe default for objects that may own
+  data.
+  */}}
+  managed:
+    roles:
+      {{- range .Values.users }}
+      - name: {{ .name }}
+        ensure: present
+        login: true
+        passwordSecret:
+          name: {{ include "database-cluster.name" $ }}-u-{{ .name }}
+        {{- with .inRoles }}
+        inRoles:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- end }}
+  {{- end }}
+  {{- if include "database-cluster.backupEnabled" . }}
+  {{/* barman-cloud plugin: isWALArchiver is what turns on continuous WAL
+       archiving, i.e. what makes point-in-time recovery possible at all.
+       The ObjectStore it names is rendered by templates/postgresql/backup.yaml. */}}
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ include "database-cluster.name" . }}-store
+  {{- end }}
+  {{- if .Values.restore.sourceId }}
+  {{/*
+  RECOVERY, not an empty datadir. CNPG never restores in place: a recovered
+  database is always a NEW Cluster reading the SOURCE's object-store folder,
+  which is exactly why restore lives on the create path.
+
+  serverName on the external cluster MUST be the SOURCE's id — barman looks for
+  base backups under that name, and getting it wrong finds nothing rather than
+  failing loudly. The recovery store is a SEPARATE ObjectStore CR from the one
+  this database backs up to (restore.yaml), so recovering never writes into the
+  folder it is reading.
+  */}}
+  bootstrap:
+    recovery:
+      source: restore-origin
+      {{- with .Values.restore.targetTime }}
+      recoveryTarget:
+        targetTime: {{ . | quote }}
+      {{- end }}
+  externalClusters:
+    - name: restore-origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: {{ include "database-cluster.name" . }}-restore-store
+          serverName: {{ .Values.restore.sourceId }}
+  {{- end }}
+  storage:
+    size: {{ .Values.storage.sizeGi }}Gi
+    {{- with .Values.storage.storageClassName }}
+    storageClass: {{ . }}
+    {{- end }}
+  resources:
+    {{- include "database-cluster.resources" . | nindent 4 }}
+  monitoring:
+    enablePodMonitor: {{ .Values.monitoring.enabled }}
+  # Stamp the NetworkPolicy selector label onto every instance pod (CNPG pods
+  # otherwise only carry cnpg.io/* labels).
+  inheritedMetadata:
+    labels:
+      app.kubernetes.io/instance: {{ $name }}
+{{- end }}

@@ -1,9 +1,11 @@
 package project
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 )
 
@@ -162,5 +164,94 @@ func TestNewClusterIDUnique(t *testing.T) {
 			t.Fatalf("duplicate id %s", id)
 		}
 		seen[id] = true
+	}
+}
+
+// A node group's root volume must fit the image its machines boot — Cinder refuses a smaller one,
+// and the refusal is otherwise invisible to the customer (a MachineDeployment stuck at zero ready).
+func TestValidateNodeGroupDisks(t *testing.T) {
+	defaults := kamaji.ClusterDefaults{
+		RootVolumeGiB: 120,
+		Versions:      map[string]string{"1.35.4": "img-default"},
+		ImageVariants: map[string]map[string]string{"nvidia": {"1.35.4": "img-gpu"}},
+	}
+	calls := 0
+	images := map[string]map[string]any{
+		// Declared min_disk wins over the (smaller) image body.
+		"img-default": {"min_disk": 60, "size": 3 * 1073741824},
+		// No min_disk at all: the image's own virtual size is still a floor.
+		"img-gpu": {"min_disk": 0, "virtual_size": 40 * 1073741824},
+		"img-old": {"min_disk": 20},
+	}
+	get := func(id string) (map[string]any, error) {
+		calls++
+		im, ok := images[id]
+		if !ok {
+			return nil, errNoImage
+		}
+		return im, nil
+	}
+	check := func(groups []kamaji.NodeGroup, current map[string]string) error {
+		return validateNodeGroupDisks(defaults, "1.35.4", groups, current, get)
+	}
+
+	if err := check([]kamaji.NodeGroup{{Name: "w", RootVolumeGiB: 60}}, nil); err != nil {
+		t.Errorf("exactly at min_disk: %v", err)
+	}
+	err := check([]kamaji.NodeGroup{{Name: "w", RootVolumeGiB: 40}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "at least 60 GiB") {
+		t.Errorf("undersized default image = %v", err)
+	}
+	// A variant pool is weighed against ITS image, and virtual_size counts even with min_disk 0.
+	err = check([]kamaji.NodeGroup{{Name: "gpu", ImageVariant: "nvidia", RootVolumeGiB: 30}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "at least 40 GiB") {
+		t.Errorf("undersized variant image = %v", err)
+	}
+	// Size omitted => the provider default is what gets checked, not zero.
+	if err := check([]kamaji.NodeGroup{{Name: "w"}}, nil); err != nil {
+		t.Errorf("provider default 120: %v", err)
+	}
+	// Edit path: a group the version matrix no longer covers (an admin dropped an old release)
+	// resolves through the image it already runs — the same fallback applyNodeGroupImages uses.
+	err = validateNodeGroupDisks(defaults, "1.34.0",
+		[]kamaji.NodeGroup{{Name: "legacy", RootVolumeGiB: 10}}, map[string]string{"legacy": "img-old"}, get)
+	if err == nil || !strings.Contains(err.Error(), "at least 20 GiB") {
+		t.Errorf("undersized against current image = %v", err)
+	}
+	// An unreadable image leaves its group unchecked rather than blocking the request.
+	if err := check([]kamaji.NodeGroup{{Name: "w", ImageID: "img-gone", RootVolumeGiB: 1}}, nil); err != nil {
+		t.Errorf("unreadable image should not block: %v", err)
+	}
+	// One glance call per DISTINCT image, however many pools share it.
+	calls = 0
+	if err := check([]kamaji.NodeGroup{
+		{Name: "a", RootVolumeGiB: 120}, {Name: "b", RootVolumeGiB: 120}, {Name: "c", RootVolumeGiB: 120},
+	}, nil); err != nil {
+		t.Fatalf("shared image: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("glance calls = %d, want 1", calls)
+	}
+}
+
+var errNoImage = errors.New("image not found")
+
+func TestKamajiCachedImages(t *testing.T) {
+	version, images := kamajiCachedImages(&cloud.CloudResource{Data: map[string]any{
+		"cluster": map[string]any{
+			"version": "1.35.4",
+			"node_groups": []any{
+				map[string]any{"name": "w", "image_id": "img-a"},
+				map[string]any{"name": "gpu", "image_id": "img-b"},
+				"junk",
+			},
+		},
+	}})
+	if version != "1.35.4" || images["w"] != "img-a" || images["gpu"] != "img-b" || len(images) != 2 {
+		t.Errorf("version=%q images=%v", version, images)
+	}
+	// A cluster with no cached payload at all must not panic — it just has no fallback to offer.
+	if v, m := kamajiCachedImages(&cloud.CloudResource{}); v != "" || len(m) != 0 {
+		t.Errorf("empty resource = %q/%v", v, m)
 	}
 }

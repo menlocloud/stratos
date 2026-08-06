@@ -19,8 +19,10 @@ package project
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
+	"github.com/menlocloud/stratos/internal/cloud"
 	"github.com/menlocloud/stratos/internal/cloud/client"
 	"github.com/menlocloud/stratos/internal/cloud/kamaji"
 )
@@ -53,12 +55,203 @@ func (h *Handler) kamajiProvisionCloud(ctx context.Context, p *Project, d kamaji
 	return nil
 }
 
+// kamajiCheckNodeGroupDisks refuses a node group whose root volume is too small for the image its
+// machines boot. Every worker boots FROM A CINDER VOLUME — kamaji.NodeGroupValues always writes
+// machineRootVolume, because the node images are bigger than most flavors' ephemeral disk — and
+// Cinder will not write an image into a volume smaller than the image's min_disk or its own virtual
+// size. Nothing checked this: an undersized number was accepted by the API, stamped into the
+// Application values and only surfaced as a MachineDeployment that stayed at zero ready replicas,
+// with the real reason (a Cinder 400 CAPO logs on the management cluster) invisible to the customer.
+//
+// Runs BEFORE anything is minted, on create and on every SET_NODE_GROUPS.
+func (h *Handler) kamajiCheckNodeGroupDisks(ctx context.Context, p *Project, d kamaji.ClusterDefaults, version string, groups []kamaji.NodeGroup, current map[string]string) error {
+	osCfg, _, err := h.kamajiWorkerCloudConfig(ctx, p)
+	if err != nil {
+		return err
+	}
+	cc, err := client.New(ctx, osCfg)
+	if err != nil {
+		return fmt.Errorf("Managed Kubernetes could not reach your cloud project: %w", err)
+	}
+	return validateNodeGroupDisks(d, version, groups, current, func(id string) (map[string]any, error) {
+		return cc.GetImage(ctx, id)
+	})
+}
+
+// validateNodeGroupDisks is the rule itself, with the cloud behind a getter so it is testable
+// without one. getImage is called at most once per distinct image.
+//
+// Best effort on the LOOKUP, strict on the ANSWER: an image we cannot read leaves its groups
+// unvalidated (status quo — the create still goes through) rather than turning a glance hiccup
+// into a blocked cluster. An image we CAN read is enforced.
+func validateNodeGroupDisks(
+	d kamaji.ClusterDefaults,
+	version string,
+	groups []kamaji.NodeGroup,
+	current map[string]string,
+	getImage func(string) (map[string]any, error),
+) error {
+	minimums := map[string]int{}
+	for _, ng := range groups {
+		size := ng.RootVolumeGiB
+		if size == 0 {
+			size = d.RootVolumeGiB
+		}
+		imageID := kamajiNodeGroupImage(d, version, ng, current)
+		if size == 0 || imageID == "" {
+			// No size or no resolvable image — ClusterSpec.ValidateNodeGroups and
+			// applyNodeGroupImages own those two refusals; nothing to weigh here.
+			continue
+		}
+		minimum, known := minimums[imageID]
+		if !known {
+			image, err := getImage(imageID)
+			if err != nil || image == nil {
+				slog.Warn("kamaji: node image unreadable — root-disk size left unchecked",
+					"image", imageID, "nodeGroup", ng.Name, "err", err)
+				minimums[imageID] = 0
+				continue
+			}
+			minimum = imageMinimumRootGiB(image)
+			minimums[imageID] = minimum
+		}
+		if minimum > 0 && size < minimum {
+			return fmt.Errorf(
+				"node group %q: a root disk of %d GiB is too small for its node image — use at least %d GiB",
+				ng.Name, size, minimum)
+		}
+	}
+	return nil
+}
+
+// kamajiNodeGroupImage resolves the glance image a node group's machines boot, in the SAME order
+// the values builder does: an explicit override, then the provider's curated version→variant image
+// matrix, then — on an edit — whatever the group already runs (kamaji.NodeGroupValues +
+// applyNodeGroupImages). "" when nothing resolves.
+func kamajiNodeGroupImage(d kamaji.ClusterDefaults, version string, ng kamaji.NodeGroup, current map[string]string) string {
+	if ng.ImageID != "" {
+		return ng.ImageID
+	}
+	if img := d.ImageFor(version, ng.ImageVariant); img != "" {
+		return img
+	}
+	return current[ng.Name]
+}
+
+// clusterField reads one field off the cluster's cached sync payload. "" when the cache has not
+// caught up yet — callers must treat that as "unknown", never as a permissive default.
+func clusterField(cr *cloud.CloudResource, key string) any {
+	cl, _ := cr.Data["cluster"].(map[string]any)
+	return cl[key]
+}
+
+// kamajiCachedImages reads a cluster's current k8s version and per-group boot image off the sync
+// cache — the fallback an EDIT resolves an unchanged group's image through, mirroring
+// applyNodeGroupImages.
+func kamajiCachedImages(cr *cloud.CloudResource) (string, map[string]string) {
+	cl, _ := cr.Data["cluster"].(map[string]any)
+	images := map[string]string{}
+	raw, _ := cl["node_groups"].([]any)
+	for _, item := range raw {
+		g, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name := strAny(g["name"]); name != "" {
+			images[name] = strAny(g["image_id"])
+		}
+	}
+	return strAny(cl["version"]), images
+}
+
+// kamajiCheckSecurityGroups is the whole gate for customer-named security groups: the chart pin
+// must be able to render them, and every id must belong to this project's tenant. Shared by
+// create and by SET_NODE_GROUPS so the edit path can never be the looser one.
+func (h *Handler) kamajiCheckSecurityGroups(ctx context.Context, p *Project, osSvcID, chartVersion string, groups []kamaji.NodeGroup) error {
+	named := false
+	for _, ng := range groups {
+		if len(ng.SecurityGroupIDs) > 0 {
+			named = true
+			break
+		}
+	}
+	if !named {
+		return nil
+	}
+	if !kamaji.SecurityGroupsSupported(chartVersion) {
+		return fmt.Errorf("this cluster's platform version (%s) cannot attach your own security groups — apply the platform update first, or create the node group without them", chartVersion)
+	}
+	return h.kamajiValidateSecurityGroups(ctx, p, osSvcID, groups)
+}
+
+// kamajiValidateSecurityGroups proves every customer-named security group belongs to the
+// project's OWN tenant before it can reach the chart values.
+//
+// Same hazard, same answer as the BYO network ids in kamajiResolveClusterNetwork: neutron shows
+// security groups belonging to other tenants to a token that can see them, so an id taken on
+// trust would let a customer pin their nodes behind somebody else's rules — rules they cannot
+// read, cannot change, and which someone else can widen at any time. ListSecurityGroups is
+// project_id-filtered on the wire AND the result is re-checked here, because a filter that
+// silently stops being applied is exactly how this class of bug comes back.
+//
+// FAIL CLOSED. An unreachable cloud refuses the request rather than letting the ids through
+// unproven — the whole point is that nothing unverified reaches the values.
+//
+// Runs on create AND on every node-group edit: a validated-once-at-create check is a hole,
+// because SET_NODE_GROUPS accepts a fresh list of ids every time.
+func (h *Handler) kamajiValidateSecurityGroups(ctx context.Context, p *Project, osSvcID string, groups []kamaji.NodeGroup) error {
+	wanted := map[string]bool{}
+	for _, ng := range groups {
+		for _, id := range ng.SecurityGroupIDs {
+			wanted[id] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	cc, ok := h.tryTenantClient(ctx, p, osSvcID)
+	if !ok {
+		return fmt.Errorf("Managed Kubernetes could not reach your cloud project to verify the security groups")
+	}
+	sgs, err := cc.ListSecurityGroups(ctx)
+	if err != nil {
+		return fmt.Errorf("Managed Kubernetes could not list your security groups: %w", err)
+	}
+	tenant := p.ExternalProjectID(osSvcID)
+	owned := map[string]bool{}
+	for _, sg := range sgs {
+		id := strAny(sg["id"])
+		if id == "" {
+			continue
+		}
+		// Belt and braces over the wire-level project_id filter. Resolve the owner field FIRST,
+		// then compare exactly once — an id whose owner neither key reports stays unowned, so a
+		// response shape we did not expect refuses the group instead of waving it through.
+		if tenant != "" {
+			owner := strAny(sg["project_id"])
+			if owner == "" {
+				owner = strAny(sg["tenant_id"])
+			}
+			if owner != tenant {
+				continue
+			}
+		}
+		owned[id] = true
+	}
+	for _, ng := range groups {
+		for _, id := range ng.SecurityGroupIDs {
+			if !owned[id] {
+				return fmt.Errorf("node group %q: security group %s is not one of this project's security groups", ng.Name, id)
+			}
+		}
+	}
+	return nil
+}
+
 // kamajiResolveClusterNetwork settles the cluster's network placement before anything is built.
 //
-// Dedicated mode (no NetworkID): nothing to do — CAPO creates a per-cluster network, and the
-// provider-level default external network applies.
-//
-// BYO mode (NetworkID+SubnetID set): the ids are customer input, so first PROVE they belong to the
+// Every cluster is bring-your-own VPC (ClusterSpec.Validate enforces it), so this always runs:
+// the ids are customer input, so first PROVE they belong to the
 // project's own tenant. ListNetworksFull/ListSubnetsFull are project_id-filtered AND the create
 // would otherwise happily wire nodes onto a shared/external network that happens to be visible
 // cross-tenant. Then derive the external network the same way EKS-style clouds hide this knob:
@@ -75,8 +268,12 @@ func (h *Handler) kamajiProvisionCloud(ctx context.Context, p *Project, d kamaji
 // external networks visible that is a hard reconcile error, so fail HERE with a message the
 // customer can act on instead.
 func (h *Handler) kamajiResolveClusterNetwork(ctx context.Context, p *Project, osSvcID string, d kamaji.ClusterDefaults, spec *kamaji.ClusterSpec) error {
-	if spec.NetworkID == "" {
-		return nil
+	// Unreachable via create — Validate rejects an empty network before this is called — but it
+	// stays a hard error rather than an early return. This function is the ONLY place a
+	// customer-supplied network id is proven to belong to their tenant; a future caller that
+	// skips validation must fail here, not silently wire nodes onto whatever id it was handed.
+	if spec.NetworkID == "" || spec.SubnetID == "" {
+		return fmt.Errorf("Managed Kubernetes needs a network and subnet from your project")
 	}
 	cc, ok := h.tryTenantClient(ctx, p, osSvcID)
 	if !ok {

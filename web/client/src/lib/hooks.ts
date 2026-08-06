@@ -37,10 +37,11 @@ export function useLocations(pid: string) {
 export function useCloudScope(pid: string): CloudScope | undefined {
   const { data } = useLocations(pid)
   // Generic compute/network/storage pages need an OpenStack scope. A project can
-  // also attach Ceph S3 (buckets only) or Kamaji (managed Kubernetes control planes),
-  // and either may appear first — skip both, mirroring the backend's resolveServiceID.
+  // also attach Ceph S3 (buckets only), Kamaji (managed Kubernetes control planes) or
+  // DBaaS (managed databases), and any may appear first — skip them all, mirroring the
+  // backend's resolveServiceID.
   const loc =
-    data?.find((candidate) => candidate.provider !== "ceph-s3" && candidate.provider !== "kamaji") ?? data?.[0]
+    data?.find((candidate) => candidate.provider !== "ceph-s3" && candidate.provider !== "kamaji" && candidate.provider !== "dbaas") ?? data?.[0]
   if (!loc?.serviceId || !loc?.region) return undefined
   return { serviceId: loc.serviceId, region: loc.region }
 }

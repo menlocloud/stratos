@@ -52,6 +52,24 @@ on("GET /project/:pid/service", () => ({
   data: [
     { id: "svc-openstack-1", name: "Menlo Cloud", type: "CLOUD", status: "ACTIVE" },
     { id: "svc-ceph-1", name: "Menlo S3", type: "CLOUD", status: "ACTIVE" },
+    {
+      id: "svc-dbaas-1",
+      name: "Menlo DBaaS",
+      type: "CLOUD",
+      status: "ACTIVE",
+      databasePlatformVersion: "0.1.0",
+      databaseLimits: { maxCpu: 32, maxMemoryGiB: 128, maxStorageGiB: 2048 },
+      databaseStorageClasses: ["csi-cinder", "csi-cinder-highiops"],
+      databaseEngines: {
+        postgresql: { versions: ["16", "17", "18"], default: "17", replicas: [1, 3] },
+        mysql: { versions: ["8.4"], replicas: [1, 3] },
+        mariadb: { versions: ["11.4"], replicas: [1, 3] },
+        valkey: { versions: ["8"], replicas: [1, 3], beta: true },
+        ferretdb: { versions: ["2"], replicas: [1, 3] },
+        opensearch: { versions: ["3.3.0"], default: "3.3.0", replicas: [1, 3] },
+        kafka: { versions: ["4.2.0", "4.2.1", "4.3.0"], default: "4.3.0", replicas: [3] },
+      },
+    },
   ],
 }))
 

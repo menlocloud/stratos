@@ -390,6 +390,15 @@ kubeNetwork:
 # OpenStack Networking Configuration
 # =============================================================================
 clusterNetworking:
+  # -- DNS servers written onto every node in the cluster (systemd-resolved drop-in).
+  # Applies in BOTH network modes, unlike dnsNameservers below which CAPO only honours on a
+  # subnet it creates itself — with a bring-your-own subnet that key does nothing, and the nodes
+  # simply inherit whatever DNS the subnet hands out over DHCP. Empty = exactly that inheritance.
+  # CoreDNS forwards to the node resolver, so this is also the cluster's fallback DNS.
+  # Changing it rolls every worker node.
+  dnsServers: []
+  # -- DNS servers for the subnet CAPO CREATES (managed-subnet mode only — ignored when you bring
+  # your own network/subnet, which is what Stratos always does).
   dnsNameservers: []
   # -- Indicates if security groups should be managed by the cluster
   manageSecurityGroups: true
@@ -441,17 +450,37 @@ apiServer:
 # =============================================================================
 # Registry Mirror Configuration
 # =============================================================================
-registryMirrors:
-  docker.io:
-    - https://quay.io/v2/azimuth/docker.io
-  ghcr.io:
-    - https://quay.io/v2/azimuth/ghcr.io
-  nvcr.io:
-    - https://quay.io/v2/azimuth/nvcr.io
-  quay.io:
-    - https://quay.io/v2/azimuth/quay.io
-  registry.k8s.io:
-    - https://quay.io/v2/azimuth/registry.k8s.io
+# -- containerd pull-through mirrors: upstream registry host -> mirror endpoint(s), rendered
+# into /etc/containerd/certs.d/<host>/hosts.toml on every node. Covers EVERY image the node
+# pulls, not just this chart's, and containerd falls back to the upstream registry on a miss.
+#
+# EMPTY BY DEFAULT — on purpose. This chart is derived from the Azimuth capi-helm-charts, whose
+# default routed every pull through a third party's quay.io namespace; a chart published for
+# anyone to install must not silently send their image traffic there. Point it at YOUR OWN cache
+# instead (a Harbor proxy-cache project is https://<harbor>/v2/<project> — a registry API root,
+# not a repository path). Without a mirror, node bootstrap runs against the public registries and
+# is subject to their rate limits.
+#
+#   registryMirrors:
+#     docker.io:
+#       - https://harbor.example.com/v2/dockerhub
+#     # containerd does NOT fold this into docker.io, and Bitnami-style charts write it literally
+#     registry-1.docker.io:
+#       - https://harbor.example.com/v2/dockerhub
+#     ghcr.io:
+#       - https://harbor.example.com/v2/ghcr-io
+#     quay.io:
+#       - https://harbor.example.com/v2/quay-io
+#     registry.k8s.io:
+#       - https://harbor.example.com/v2/k8s-io
+#
+# The long form takes per-mirror options:
+#     docker.io:
+#       upstream: https://registry-1.docker.io
+#       mirrors:
+#         - url: https://harbor.example.com/v2/dockerhub
+#           capabilities: ["pull", "resolve"]
+registryMirrors: {}
 
 # -- A map of trusted CAs to add to the system trust on cluster nodes
 trustedCAs: {}
@@ -480,6 +509,13 @@ nodeGroupDefaults:
   kubernetesVersion:
   machineNetworking:
     ports:
+  # -- Extra OpenStack security group IDs (UUIDs) attached to this pool's machines.
+  # ADDITIVE: CAPO appends the cluster's managed group to this list, so groups named here can
+  # only widen what reaches a node — they never replace the rules that make the cluster work.
+  # Mutually exclusive with machineNetworking.ports, which REPLACES the whole list (the template
+  # fails the render on that combination rather than silently dropping one). Changing the list
+  # rolls THIS pool's machines.
+  securityGroupIds: []
   machineRootVolume:
     diskSize:
   machineMetadata: {}
@@ -487,6 +523,9 @@ nodeGroupDefaults:
   nodeLabels: {}
   taints: []
   additionalBlockDevices: {}
+  # -- No-op since 0.12.0, kept so existing values keep rendering: every node gets a config drive
+  # regardless, because it is the only user-data delivery path that does not depend on the Neutron
+  # metadata service answering.
   machineConfigDrive: false
   nodeDrainTimeout: 5m0s
   nodeVolumeDetachTimeout: 5m0s
@@ -520,9 +559,11 @@ nodeGroupDefaults:
   healthCheck:
     enabled: true
     spec:
-      # 40% allows MHC to remediate single-node failures while protecting
-      # against mass-failure storms (would not remediate if >40% unhealthy).
-      # Set to 100% to disable remediation entirely.
+      # A percentage is resolved against the node group's own size and floored at 1, so a single
+      # dead node is always remediable (40% of a 2-node group would otherwise be 0.8 — one failure
+      # is 50%, over budget, and that group could never heal itself) while a mass-failure storm on
+      # a large pool is still held back. A plain number is passed through verbatim; set it to the
+      # group's size to disable the storm guard, or healthCheck.enabled=false for no remediation.
       maxUnhealthy: 40%
       # Increased from upstream 30m: with Kamaji the CCM runs on workers,
       # so first nodes need extra time to bootstrap before going Ready.

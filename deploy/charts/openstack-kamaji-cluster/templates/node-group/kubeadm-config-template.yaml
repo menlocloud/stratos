@@ -38,7 +38,9 @@ joinConfiguration: {{ $rendered | nindent 2 }}
     (include "openstack-kamaji-cluster.nodegroup.kct.spec.taints" (list $ctx $nodeGroup) | fromYaml)
     (include "openstack-kamaji-cluster.kubeadmConfigSpec" (list $ctx $nodeGroup.kubeadmConfigSpec) | fromYaml)
     (omit (include "openstack-kamaji-cluster.osDistroKubeadmConfigSpec" (list $ctx) | fromYaml) "initConfiguration")
-    (pick (include "openstack-kamaji-cluster.patchConfigSpec" (list $ctx ) | fromYaml) "preKubeadmCommands") |
+    (pick (include "openstack-kamaji-cluster.patchConfigSpec" (list $ctx ) | fromYaml) "preKubeadmCommands")
+    (include "openstack-kamaji-cluster.dnsKubeadmConfigSpec" (list $ctx) | fromYaml)
+    (include "openstack-kamaji-cluster.apiWaitKubeadmConfigSpec" (list $ctx) | fromYaml) |
   include "openstack-kamaji-cluster.mergeConcatMany" |
   fromYaml |
   toYaml

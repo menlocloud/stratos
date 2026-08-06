@@ -155,6 +155,19 @@ func imageSizeGiB(image map[string]any) int {
 	return int(math.Ceil(bytes / 1073741824))
 }
 
+// imageMinimumRootGiB is the smallest root volume an image can be written into: glance's declared
+// min_disk, and never smaller than the image itself — Cinder refuses to write an image into a
+// volume it does not fit in ("Size of specified image is larger than volume size"). The 1 GiB
+// floor keeps a size-less image from producing 0.
+//
+// Shared by every path that sizes a boot volume — the create-server wizard AND Managed Kubernetes
+// node groups, whose machines boot from a Cinder volume too. One rule, one place: a node group
+// sized under this does not produce a slow cluster, it produces a MachineDeployment whose machines
+// never build, with the reason buried in a CAPO log the customer cannot read.
+func imageMinimumRootGiB(image map[string]any) int {
+	return maxInts(1, integerAny(image["min_disk"]), integerAny(image["minDisk"]), imageSizeGiB(image))
+}
+
 func maxInts(values ...int) int {
 	max := 0
 	for _, value := range values {
@@ -237,7 +250,7 @@ func normalizeServerStorageRequest(
 	if flavorHasLocalStorage(flavor) {
 		return httpx.BadRequest("Selected flavor includes local ephemeral or swap storage and is not available for volume-backed servers")
 	}
-	minimumRootSize := maxInts(1, integerAny(image["min_disk"]), integerAny(image["minDisk"]), imageSizeGiB(image))
+	minimumRootSize := imageMinimumRootGiB(image)
 	defaultRootSize := maxInts(minimumRootSize, integerAny(flavor["disk"]))
 	rootValue, rootPresent := data["rootVolume"]
 	root, rootIsMap := rootValue.(map[string]any)

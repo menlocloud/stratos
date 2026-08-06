@@ -37,6 +37,7 @@ import {
 } from "@/lib/hooks"
 import { gpuCapacityViolations, serverQuotaViolations } from "@/lib/quota"
 import type { CloudResource, Location } from "@/lib/types"
+import { versionGt } from "@/lib/utils"
 import { isPrivateNetwork, networkName } from "../network/NetworksPage"
 import { serverName, serverStatus, serverIPs } from "../servers/ServersPage"
 
@@ -54,6 +55,9 @@ type NodeGroupRow = {
   rootDisk: string // GiB — nodes always boot from a volume, see DEFAULT_ROOT_DISK_GIB
   labels: string // "k=v,k2=v2"
   taints: string // "key=val:NoSchedule,…"
+  // Extra OpenStack security groups for THIS pool. Additive — the platform's own group is always
+  // attached on top, so an empty list is the normal case and never leaves a node unreachable.
+  securityGroupIds: string[]
 }
 // LIST_FLAVORS rows come back in the same shape CreateServerPage consumes: the OpenStack
 // flavor document nested under `data`, with the nova id mirrored as `externalId`.
@@ -78,9 +82,25 @@ type FlavorOption = {
   spec?: string // "4 vCPU · 8 GB RAM"
   blocked?: boolean // exceeds project quota or region GPU capacity — must not be picked
 }
-// A pickable cluster network: one of the project's own VPCs plus its subnets. The default —
-// no pick — is a dedicated network CAPO creates for the cluster (EKS-style, the external
-// gateway is derived server-side and never shown).
+// A pickable cluster network: one of the project's own VPCs plus its subnets. The pick is
+// REQUIRED — worker nodes land in the customer's own VPC, never on a platform-created network
+// they cannot route to or see. The external gateway is derived server-side and never shown.
+// A pickable security group: one of the project's own, offered per node group.
+type SecurityGroupOption = { id: string; name: string }
+
+// CAPO creates a security group per cluster per role and names them deterministically —
+// k8s-cluster-<namespace>-<cluster>-secgroup-{controlplane,worker,bastion}. They live in the
+// customer's tenant, so they sync like any other security group and were showing up in this
+// picker: one row per role per cluster, growing with every cluster the project owns.
+//
+// They are never a sane pick. They belong to a specific cluster, they are deleted with it, and
+// attaching one pool to ANOTHER cluster's rules is a dependency nobody asked for. Filtered from
+// the picker only — the server still accepts them if an API client insists, because they do
+// belong to the tenant and a name pattern is not a thing to build an authorisation rule on.
+const platformSecurityGroup = /^k8s-cluster-.+-secgroup-(controlplane|worker|bastion)$/
+function isPlatformSecurityGroup(name: string): boolean {
+  return platformSecurityGroup.test(name)
+}
 type NetworkOption = {
   id: string
   name: string
@@ -115,7 +135,7 @@ const DEFAULT_ROOT_DISK_GIB = "120"
 
 const emptyGroup: NodeGroupRow = {
   name: "workers", flavorId: "", variant: "", az: "", publicIp: false, count: "3", autoscale: false, min: "1", max: "5",
-  rootDisk: DEFAULT_ROOT_DISK_GIB, labels: "", taints: "",
+  rootDisk: DEFAULT_ROOT_DISK_GIB, labels: "", taints: "", securityGroupIds: [],
 }
 
 // Curated add-on menu — keys mirror the backend's kamaji.ClusterAddons (an unknown key is a 400).
@@ -216,6 +236,7 @@ function groupsToData(groups: NodeGroupRow[]) {
       ? { autoscale: true, min: Number(g.min), max: Number(g.max) }
       : { count: Number(g.count) }),
     ...(Number(g.rootDisk) > 0 ? { rootVolumeGiB: Number(g.rootDisk) } : {}),
+    ...(g.securityGroupIds.length ? { securityGroupIds: g.securityGroupIds } : {}),
     ...(parseLabels(g.labels) ? { labels: parseLabels(g.labels) } : {}),
     ...(g.taints.trim() ? { taints: g.taints.split(",").map((t) => t.trim()).filter(Boolean) } : {}),
   }))
@@ -234,6 +255,9 @@ function rowsToSyncGroups(rows: NodeGroupRow[]): Cluster[] {
     // dataGroupsToRows falls back to 120 when this is absent — the patch must carry it, or
     // re-opening the editor before the next sync silently resizes every pool's root disk.
     ...(Number(g.rootDisk) > 0 ? { root_volume_gib: Number(g.rootDisk) } : {}),
+    // Same reason: SET_NODE_GROUPS is a full replace, so a field this patch forgets is a field
+    // the editor re-opens empty and then wipes off every pool on the next save.
+    ...(g.securityGroupIds.length ? { security_group_ids: g.securityGroupIds } : {}),
     ...(g.autoscale
       ? { autoscale: true, min: Number(g.min), max: Number(g.max) }
       : { count: Number(g.count) }),
@@ -285,6 +309,7 @@ function dataGroupsToRows(c: Cluster): NodeGroupRow[] {
       .map(([k, v]) => `${k}=${v}`)
       .join(","),
     taints: ((g.taints as string[]) ?? []).map(String).join(","),
+    securityGroupIds: ((g.security_group_ids as string[]) ?? []).map(String),
   }))
 }
 
@@ -435,9 +460,25 @@ function useKubernetesData(pid: string) {
     [qc, pid],
   )
 
+  // The project's own security groups. BOTH pages need them — the list page's create wizard for
+  // the per-pool picker, the detail page for the same picker plus the id→name lookup on the cloud
+  // resources card — so they live in the shared hook rather than being fetched twice. The data key
+  // is camelCase (`data.securityGroup`), the shape the neutron sync writes.
+  const securityGroupsQ = useCloudList(pid, "SECURITY_GROUP")
+  const securityGroupOptions = useMemo<SecurityGroupOption[]>(() => {
+    return (securityGroupsQ.data ?? [])
+      .map((r): SecurityGroupOption => {
+        const sg = (r.data?.securityGroup ?? {}) as Record<string, unknown>
+        return { id: ((sg.id as string) || r.externalId || ""), name: (sg.name as string) || "" }
+      })
+      .filter((g) => !!g.id && !isPlatformSecurityGroup(g.name))
+      .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
+  }, [securityGroupsQ.data])
+
   return {
     kLocs, kScope, osScope, clusters,
     versionsFor, variantsFor, platformVersionFor, storageFor, rowServiceId, rowScope, flavorOptionsFor,
+    securityGroupOptions,
     invalidate, patchCluster,
   }
 }
@@ -446,7 +487,8 @@ export default function KubernetesPage() {
   const pid = useProjectId()
   const navigate = useNavigate()
   const {
-    kLocs, kScope, clusters, versionsFor, variantsFor, storageFor, rowServiceId, rowScope, flavorOptionsFor, invalidate,
+    kLocs, kScope, clusters, versionsFor, variantsFor, storageFor, rowServiceId, rowScope, flavorOptionsFor,
+    securityGroupOptions, invalidate,
   } = useKubernetesData(pid)
   const { data, isLoading, isError, error, refetch, isFetching } = clusters
 
@@ -541,7 +583,9 @@ export default function KubernetesPage() {
       },
       {
         id: "endpoint",
-        accessorFn: (r) => (cluster(r).endpoint as string) ?? "",
+        // endpoint_url is the copyable https://<name>:<port>; endpoint (host:port) is the
+        // fallback for rows synced before the URL existed.
+        accessorFn: (r) => (cluster(r).endpoint_url as string) || (cluster(r).endpoint as string) || "",
         header: "API endpoint",
         cell: ({ getValue }) => <span className="font-mono text-xs">{getValue() || "—"}</span>,
       },
@@ -639,6 +683,7 @@ export default function KubernetesPage() {
           flavors={createFlavorOptions}
          
           networks={networkOptions}
+          securityGroups={securityGroupOptions}
           locations={kLocs}
           locKey={createLoc ? locKeyOf(createLoc) : ""}
           onLocKey={setCreateLocKey}
@@ -687,7 +732,8 @@ export function KubernetesClusterDetailPage() {
   const navigate = useNavigate()
   const { resourceId = "" } = useParams()
   const {
-    clusters, versionsFor, variantsFor, platformVersionFor, rowServiceId, rowScope, flavorOptionsFor, invalidate, patchCluster,
+    clusters, versionsFor, variantsFor, platformVersionFor, rowServiceId, rowScope, flavorOptionsFor,
+    securityGroupOptions, invalidate, patchCluster,
   } = useKubernetesData(pid)
   const resource = (clusters.data ?? []).find((r) => r.id === resourceId)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -711,7 +757,11 @@ export function KubernetesClusterDetailPage() {
         title={name || "Kubernetes cluster"}
         eyebrow="Kubernetes cluster"
         description={
-          resource ? ((cluster(resource).endpoint as string) || "endpoint pending…") : undefined
+          resource
+            ? ((cluster(resource).endpoint_url as string) ||
+               (cluster(resource).endpoint as string) ||
+               "endpoint pending…")
+            : undefined
         }
         actions={
           <>
@@ -753,7 +803,7 @@ export function KubernetesClusterDetailPage() {
           variantsForVersion={(v) => variantsFor(rowServiceId(resource), v)}
           platformVersion={platformVersionFor(rowServiceId(resource))}
           flavors={flavorOptionsFor(rowServiceId(resource))}
-         
+          securityGroups={securityGroupOptions}
           onDeleted={() => setDeleteOpen(true)}
           onPatch={(patch) => patchCluster(resource.id, patch)}
         />
@@ -782,7 +832,7 @@ export function KubernetesClusterDetailPage() {
 
 // ── create/edit form ─────────────────────────────────────────────────────────
 function ClusterFormDialog({
-  title, submitLabel, versions, variantsForVersion, storage, flavors, networks, locations, locKey, onLocKey, onClose, onSubmit,
+  title, submitLabel, versions, variantsForVersion, storage, flavors, networks, securityGroups, locations, locKey, onLocKey, onClose, onSubmit,
 }: {
   title: string
   submitLabel: string
@@ -791,6 +841,7 @@ function ClusterFormDialog({
   storage?: { className?: string; volumeType?: string }
   flavors: FlavorOption[]
   networks: NetworkOption[]
+  securityGroups: SecurityGroupOption[]
   locations: Location[]
   locKey: string
   onLocKey: (key: string) => void
@@ -809,15 +860,16 @@ function ClusterFormDialog({
   const [oidcOpen, setOidcOpen] = useState(false)
   const [oidc, setOidc] = useState<OidcDraft>({ ...emptyOidc })
   const [allowedCidrs, setAllowedCidrs] = useState("")
-  // "" = a dedicated network the platform creates for the cluster; otherwise the picked network id.
+  const [dnsServers, setDnsServers] = useState("")
   const [networkId, setNetworkId] = useState("")
   const [subnetId, setSubnetId] = useState("")
   const selectedNetwork = networks.find((n) => n.id === networkId)
   const [pending, setPending] = useState(false)
 
-  // BYO requires BOTH; the subnet select only appears once a network is chosen, and picking a
-  // network clears a stale subnet from a previous one.
-  const networkValid = !networkId || (!!subnetId && !!selectedNetwork?.subnets.some((s) => s.id === subnetId))
+  // BOTH ids are required — the server rejects a half-configured or absent pick. The subnet
+  // select only appears once a network is chosen, and picking a network clears a stale subnet
+  // from a previous one.
+  const networkValid = !!networkId && !!subnetId && !!selectedNetwork?.subnets.some((s) => s.id === subnetId)
   const valid =
     !!name.trim() && !!version && networkValid && groups.length > 0 && groups.every(groupValid)
 
@@ -834,6 +886,9 @@ function ClusterFormDialog({
         ...(oidc.issuerUrl.trim() ? { oidc: oidcToBody(oidc) } : {}),
         ...(allowedCidrs.trim()
           ? { allowedCidrs: allowedCidrs.split(",").map((c) => c.trim()).filter(Boolean) }
+          : {}),
+        ...(dnsServers.trim()
+          ? { dnsServers: dnsServers.split(",").map((d) => d.trim()).filter(Boolean) }
           : {}),
       })
     } catch (e) {
@@ -931,7 +986,7 @@ function ClusterFormDialog({
             <Switch checked={ha} onCheckedChange={setHa} />
           </div>
 
-          <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
+          <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} securityGroups={securityGroups} />
 
           {storage?.className && (
             <p className="text-xs text-muted-foreground">
@@ -964,31 +1019,30 @@ function ClusterFormDialog({
             ))}
           </div>
 
-          {networks.length > 0 && (
+          {(
             <div className="grid gap-3 rounded-lg border p-3">
               <div className="grid gap-2">
                 <Label htmlFor="k8s-network">Network</Label>
                 <Select
-                  value={networkId || "__dedicated__"}
+                  value={networkId || undefined}
                   onValueChange={(v) => {
-                    const id = v === "__dedicated__" ? "" : v
-                    setNetworkId(id)
+                    setNetworkId(v)
                     setSubnetId("") // a subnet from the previous network is meaningless here
                   }}
                 >
                   <SelectTrigger id="k8s-network">
-                    <SelectValue />
+                    <SelectValue placeholder={networks.length ? "Pick a network" : "No networks with a subnet found"} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__dedicated__">Dedicated network (created for this cluster)</SelectItem>
                     {networks.map((n) => (
                       <SelectItem key={n.id} value={n.id}>{n.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Leave as “Dedicated” to let the platform create an isolated network. Pick one of your
-                  own networks to place worker nodes on it — it must reach the internet through a router.
+                  {networks.length
+                    ? "Worker nodes are placed on this network — it must reach the internet through a router."
+                    : "Create a network with a subnet and a router first, then come back — the cluster's nodes live in your own VPC."}
                 </p>
               </div>
               {selectedNetwork && (
@@ -1018,6 +1072,22 @@ function ClusterFormDialog({
               onChange={(e) => setAllowedCidrs(e.target.value)}
               placeholder="203.0.113.0/24, 198.51.100.7/32"
             />
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="k8s-dns">DNS servers (optional, comma-separated)</Label>
+            <Input
+              id="k8s-dns"
+              className="font-mono"
+              value={dnsServers}
+              onChange={(e) => setDnsServers(e.target.value)}
+              placeholder="10.0.0.53, 10.0.0.54"
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave empty and the nodes use whatever DNS your subnet hands out — that is what every
+              cluster does today. Addresses only, not hostnames. This also becomes the fallback the
+              cluster's own DNS forwards to.
+            </p>
           </div>
 
           <button type="button" className="text-left text-sm font-medium text-primary hover:underline" onClick={() => setOidcOpen(!oidcOpen)}>
@@ -1086,13 +1156,16 @@ function OidcFields({
 }
 
 function NodeGroupsEditor({
-  groups, setGroups, flavors, variants,
+  groups, setGroups, flavors, variants, securityGroups = [],
 }: {
   groups: NodeGroupRow[]
   setGroups: (g: NodeGroupRow[]) => void
   flavors: FlavorOption[]
   // Image-variant names offered for the cluster's version ("" = default is always offered).
   variants: string[]
+  // The project's own security groups, offered per pool. Empty = the picker is hidden rather
+  // than shown as a dead control (a project with none, or a stale cache).
+  securityGroups?: SecurityGroupOption[]
 }) {
   const set = (i: number, patch: Partial<NodeGroupRow>) =>
     setGroups(groups.map((g, j) => (j === i ? { ...g, ...patch } : g)))
@@ -1213,15 +1286,163 @@ function NodeGroupsEditor({
               <Input id={`ng-taints-${i}`} className="font-mono text-xs" value={g.taints} onChange={(e) => set(i, { taints: e.target.value })} placeholder="gpu=true:NoSchedule" />
             </div>
           </div>
+          {securityGroups.length > 0 && (
+            <div className="grid gap-2">
+              <Label>Security groups (optional)</Label>
+              <div className="grid gap-1.5 rounded-md border p-3 sm:grid-cols-2">
+                {securityGroups.map((sg) => {
+                  const on = g.securityGroupIds.includes(sg.id)
+                  return (
+                    <label key={sg.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="size-4"
+                        checked={on}
+                        onChange={() =>
+                          set(i, {
+                            securityGroupIds: on
+                              ? g.securityGroupIds.filter((x) => x !== sg.id)
+                              : [...g.securityGroupIds, sg.id],
+                          })
+                        }
+                      />
+                      <span className="truncate">{sg.name || sg.id}</span>
+                    </label>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                The platform always attaches its own security group to this pool's nodes — anything you
+                pick here is added on top, so leaving this empty is the normal choice. Because these are
+                set when a node's port is created, changing them replaces this node group's nodes.
+              </p>
+            </div>
+          )}
         </div>
       ))}
     </div>
   )
 }
 
+
+// ── the cloud-resources card ────────────────────────────────────────────────
+// "What exists in my OpenStack project because of this cluster, and what happens to it when I
+// delete the cluster." Split by OWNERSHIP rather than by object type, because that is the only
+// distinction that changes what a customer may safely do: the platform's objects go with the
+// cluster, the customer's are left exactly where they were.
+//
+// Node servers, root volumes and floating IPs are deliberately NOT listed one by one — they
+// already have their own pages, and duplicating an inventory that goes stale is worse than a
+// pointer to the live one.
+function CloudResourcesCard({
+  cluster, securityGroups,
+}: {
+  cluster: Cluster
+  securityGroups: SecurityGroupOption[]
+}) {
+  const nameOf = (id: string) => securityGroups.find((g) => g.id === id)?.name || id
+  const managed = (cluster.managed_security_groups as { id: string; name?: string; role?: string }[]) ?? []
+  const pools = (cluster.node_groups as Cluster[]) ?? []
+  const serverGroups = pools.filter((g) => !!g.server_group_id)
+  const chosen = pools.flatMap((g) =>
+    ((g.security_group_ids as string[]) ?? []).map((id) => ({ pool: String(g.name ?? ""), id })),
+  )
+  const keypair = (cluster.support_keypair as string) || ""
+  const clusterId = (cluster.id as string) || ""
+
+  const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="min-w-0 break-all">{children}</span>
+    </div>
+  )
+
+  return (
+    <div className="grid gap-3 rounded-lg border p-4">
+      <div className="text-sm font-medium">Cloud resources</div>
+
+      <div className="grid gap-1.5">
+        <div className="text-xs font-medium uppercase text-muted-foreground">Created by the platform</div>
+        {managed.length > 0 && (
+          <Row label="Security groups">
+            {managed.map((g) => (
+              <span key={g.id} className="mr-2 inline-block">
+                <span className="font-mono text-xs">{g.name || g.id}</span>
+                {g.role ? <span className="text-xs text-muted-foreground"> ({g.role})</span> : null}
+              </span>
+            ))}
+          </Row>
+        )}
+        {serverGroups.length > 0 && (
+          <Row label="Server groups">
+            {serverGroups.map((g) => (
+              <span key={String(g.name)} className="mr-2 inline-block font-mono text-xs">
+                {clusterId}-{String(g.name)}
+              </span>
+            ))}
+            <span className="text-xs text-muted-foreground">— soft anti-affinity, one per node group</span>
+          </Row>
+        )}
+        {clusterId ? (
+          <Row label="Application credential">
+            <span className="font-mono text-xs">stratos-{clusterId}</span>
+            <span className="text-xs text-muted-foreground"> — scoped to this cluster alone</span>
+          </Row>
+        ) : null}
+        {keypair ? (
+          <Row label="SSH key">
+            <span className="font-mono text-xs">{keypair}</span>
+            <span className="text-xs text-muted-foreground"> — break-glass access for support</span>
+          </Row>
+        ) : null}
+        <Row label="Nodes, root volumes, floating IPs">
+          <span className="text-xs text-muted-foreground">on the Servers, Volumes and Floating IPs pages</span>
+        </Row>
+      </div>
+
+      <div className="grid gap-1.5">
+        <div className="text-xs font-medium uppercase text-muted-foreground">Chosen by you</div>
+        {(cluster.network_id as string) ? (
+          <Row label="Network">
+            <span className="font-mono text-xs">{cluster.network_id as string}</span>
+            {(cluster.subnet_id as string) ? (
+              <span className="text-xs text-muted-foreground"> · subnet {cluster.subnet_id as string}</span>
+            ) : null}
+          </Row>
+        ) : null}
+        <Row label="DNS servers">
+          {((cluster.dns_servers as string[]) ?? []).length > 0 ? (
+            <span className="font-mono text-xs">{((cluster.dns_servers as string[]) ?? []).join(", ")}</span>
+          ) : (
+            <span className="text-xs text-muted-foreground">inherited from your subnet</span>
+          )}
+        </Row>
+        {chosen.length > 0 ? (
+          <Row label="Security groups">
+            {chosen.map((c) => (
+              <span key={`${c.pool}:${c.id}`} className="mr-2 inline-block">
+                <span className="font-mono text-xs">{nameOf(c.id)}</span>
+                <span className="text-xs text-muted-foreground"> ({c.pool})</span>
+              </span>
+            ))}
+          </Row>
+        ) : (
+          <Row label="Security groups">
+            <span className="text-xs text-muted-foreground">none — the platform's own group is the only one attached</span>
+          </Row>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Deleting the cluster removes everything in the first group. What you chose is left alone.
+      </p>
+    </div>
+  )
+}
+
 // ── cluster detail body (the manage surface, rendered by the detail page) ────
 function ClusterDetail({
-  pid, scope, resource, versions, variantsForVersion, platformVersion, flavors, onDeleted, onPatch,
+  pid, scope, resource, versions, variantsForVersion, platformVersion, flavors, securityGroups, onDeleted, onPatch,
 }: {
   pid: string
   scope: CloudScope | undefined
@@ -1231,6 +1452,9 @@ function ClusterDetail({
   // The provider's pinned platform (chart) version; "" = unknown, no offer shown.
   platformVersion: string
   flavors: FlavorOption[]
+  // The project's own security groups — the per-pool picker feed, and the id→name lookup for the
+  // cloud-resources card.
+  securityGroups: SecurityGroupOption[]
   onDeleted: () => void
   // Optimistically applies a partial data.cluster patch to the cached row (and this sheet's
   // resource prop) — MUST be called after every successful mutating action, or the next
@@ -1303,7 +1527,10 @@ function ClusterDetail({
   // Opt-in platform update: offered only when the provider's pinned platform version is known
   // and this cluster sits on an older one. Applying is the customer's call, never automatic.
   const chartVersion = (c.chart_version as string) || ""
-  const updateAvailable = !!platformVersion && !!chartVersion && chartVersion !== platformVersion
+  // STRICTLY newer, not merely different. A cluster can legitimately sit AHEAD of the provider's
+  // pin — an operator rolls the pin back, or bumps one cluster past it — and `!==` then billed
+  // that as "a newer version is available", counting down to the older one and never clearing.
+  const updateAvailable = !!platformVersion && !!chartVersion && versionGt(platformVersion, chartVersion)
   const [platformOpen, setPlatformOpen] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [rotateOpen, setRotateOpen] = useState(false)
@@ -1367,9 +1594,9 @@ function ClusterDetail({
   const rotate = useMutation({
     mutationFn: () => act("ROTATE_KUBECONFIG"),
     onSuccess: () => {
-      // Nothing in the cached cluster payload changes — the control plane just re-issues its
-      // certificates — so there is no optimistic patch to apply here.
-      toast.success("Rotating — download a fresh kubeconfig in a minute")
+      // Nothing in the cached cluster payload changes — only the credential Secret does — so
+      // there is no optimistic patch to apply here.
+      toast.success("New kubeconfig issued — download it below")
       setRotateOpen(false)
     },
     onError: (e: Error) => toast.error(e.message),
@@ -1421,6 +1648,8 @@ function ClusterDetail({
               </>
             ) : null}
           </p>
+
+          <CloudResourcesCard cluster={c} securityGroups={securityGroups} />
 
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => kubeconfig.mutate()} disabled={kubeconfig.isPending}>
@@ -1529,7 +1758,14 @@ function ClusterDetail({
                   groups.map((g, i) => (
                     <TableRow key={(g.name as string) ?? i}>
                       <TableCell className="font-medium">{(g.name as string) || "—"}</TableCell>
-                      <TableCell className="font-mono text-xs">{(g.flavor_id as string) || "—"}</TableCell>
+                      {/* The cache stores the flavor ID; the customer picked a NAME and that is what
+                          the editor, the create wizard and the instance list all show. Falling back
+                          to the raw UUID keeps a since-removed flavor visible rather than blank. */}
+                      <TableCell className="text-sm">
+                        {flavors.find((f) => f.id === g.flavor_id)?.name ?? (
+                          <span className="font-mono text-xs">{(g.flavor_id as string) || "—"}</span>
+                        )}
+                      </TableCell>
                       <TableCell className="font-mono text-sm">
                         {g.autoscale ? `${g.min}–${g.max} (auto)` : (g.count ?? g.replicas ?? "—")}
                       </TableCell>
@@ -1702,21 +1938,24 @@ function ClusterDetail({
           </DialogContent>
         </Dialog>
 
-        {/* Rotate kubeconfig — destructive for anyone holding the old one, so confirm */}
+        {/* Re-issue the admin kubeconfig. Deliberately NOT described as a revocation: the
+            credential is an x509 client cert signed by the cluster CA, so copies already handed
+            out stay valid until they expire — only a CA rotation would kill them, and that
+            re-bootstraps every node. */}
         <Dialog open={rotateOpen} onOpenChange={setRotateOpen}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Rotate kubeconfig</DialogTitle>
               <DialogDescription>
-                Issues fresh cluster credentials and restarts the control plane. Every kubeconfig
-                downloaded before now stops working, including any in CI. Download a new one
-                afterwards.
+                Issues a fresh admin kubeconfig for this cluster. Kubeconfigs already downloaded
+                keep working until their certificate expires — this is not a way to cut off a
+                leaked one. To do that, replace the cluster.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
               <Button variant="outline" onClick={() => setRotateOpen(false)}>Cancel</Button>
               <Button variant="destructive" onClick={() => rotate.mutate()} disabled={rotate.isPending}>
-                {rotate.isPending ? "Rotating…" : "Rotate"}
+                {rotate.isPending ? "Issuing…" : "Issue new kubeconfig"}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1728,7 +1967,7 @@ function ClusterDetail({
             initial={dataGroupsToRows(c)}
             flavors={flavors}
             variants={variantsForVersion(current)}
-           
+            securityGroups={securityGroups}
             onClose={() => setEditOpen(false)}
             onSubmit={async (rows) => {
               await act("SET_NODE_GROUPS", { nodeGroups: groupsToData(rows) })
@@ -1800,11 +2039,12 @@ function OidcEditDialog({
 }
 
 function EditNodeGroupsDialog({
-  initial, flavors, variants, onClose, onSubmit,
+  initial, flavors, variants, securityGroups, onClose, onSubmit,
 }: {
   initial: NodeGroupRow[]
   flavors: FlavorOption[]
   variants: string[]
+  securityGroups: SecurityGroupOption[]
   onClose: () => void
   onSubmit: (rows: NodeGroupRow[]) => Promise<void>
 }) {
@@ -1821,7 +2061,7 @@ function EditNodeGroupsDialog({
             remaining groups.
           </DialogDescription>
         </DialogHeader>
-        <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} />
+        <NodeGroupsEditor groups={groups} setGroups={setGroups} flavors={flavors} variants={variants} securityGroups={securityGroups} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button

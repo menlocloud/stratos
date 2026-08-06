@@ -14,7 +14,7 @@ export const projects: Project[] = [
     organizationId: ORG_ID,
     billingProfileId: BP_ID,
     memberships: [{ sub: mockProfile.sub, roles: ["OWNER"] }],
-    services: [{ serviceId: "svc-openstack-1" }, { serviceId: "svc-ceph-1" }],
+    services: [{ serviceId: "svc-openstack-1" }, { serviceId: "svc-ceph-1" }, { serviceId: "svc-dbaas-1" }],
     publicNetworksVisible: true,
     gpuCapacityVisible: true,
   },
@@ -80,6 +80,14 @@ export const locations: Location[] = [
     provider: "ceph-s3",
     serviceName: "Menlo S3",
   },
+  {
+    serviceId: "svc-dbaas-1",
+    region: "RegionOne",
+    displayName: "Hanoi Databases",
+    resourceTypes: ["DATABASE_CLUSTER"],
+    provider: "dbaas",
+    serviceName: "Menlo DBaaS",
+  },
 ]
 
 // Sidebar service gating — keys are OpenStack service names (AppShell.tsx).
@@ -97,6 +105,7 @@ export const uiMenu = {
       dns: { enabled: true },
       orchestration: { enabled: true },
       "key-manager": { enabled: true },
+      database: { enabled: true },
     },
   },
 }

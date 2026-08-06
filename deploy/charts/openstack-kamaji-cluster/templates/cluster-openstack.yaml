@@ -26,9 +26,41 @@ spec:
   {{- if .manageSecurityGroups }}
   managedSecurityGroups:
     allowAllInClusterTraffic: {{ .allowAllInClusterTraffic }}
-    {{- with .securityGroupRules }}
-    allNodesSecurityGroupRules: {{ toYaml . | nindent 6 }}
-    {{- end }}
+    {{- /*
+      allowAllInClusterTraffic and every rule CAPO writes for in-cluster traffic match on
+      remoteGroupID. In ML2/OVN that compiles to an address set built from the member ports' FIXED
+      IPs — a packet whose source is a POD address matches nothing and is dropped at the receiving
+      node, even though the sending port's allowedAddressPairs let it out. Cilium runs in native
+      routing mode and does not masquerade traffic aimed at other cluster nodes, so every packet a
+      pod sends off-node arrives carrying the pod address. The pairs (added in 0.11.0) are only the
+      sending half; without these rules the receiving half still drops it, and cross-node pod
+      traffic stays broken exactly as if nothing had been fixed.
+
+      Verified on a live 2-node cluster: from a pod, cross-node pod IP and cross-node NODE IP both
+      failed, while the identical destination and port from hostNetwork (source = the node's fixed
+      IP) succeeded — the source address is the whole difference.
+
+      Rules are keyed on the cluster's own CIDRs, the same kubeNetwork values that feed the pairs
+      and Cilium's ipv4NativeRoutingCIDR, so the three cannot drift apart.
+    */}}
+    allNodesSecurityGroupRules:
+      {{- range $i, $cidr := $.Values.kubeNetwork.pods.cidrBlocks }}
+      - name: {{ printf "in-cluster-pod-cidr-%d" $i }}
+        description: "Pod traffic from another node (Cilium native routing keeps the pod source address)"
+        direction: ingress
+        etherType: IPv4
+        remoteIPPrefix: {{ $cidr | quote }}
+      {{- end }}
+      {{- range $i, $cidr := $.Values.kubeNetwork.services.cidrBlocks }}
+      - name: {{ printf "in-cluster-service-cidr-%d" $i }}
+        description: "Service traffic from another node"
+        direction: ingress
+        etherType: IPv4
+        remoteIPPrefix: {{ $cidr | quote }}
+      {{- end }}
+      {{- with .securityGroupRules }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
   {{- end }}
   {{- if and .externalNetworkId .disableExternalNetwork }}
   {{- fail "clusterNetworking: externalNetworkId and disableExternalNetwork are mutually exclusive" }}

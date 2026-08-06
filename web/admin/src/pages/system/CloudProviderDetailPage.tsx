@@ -35,6 +35,13 @@ import {
   kamajiFormValid,
   type KamajiFormState,
 } from "./kamajiProvider"
+import {
+  DbaasProviderForm,
+  dbaasConfigBlocks,
+  dbaasFormFromService,
+  dbaasFormValid,
+  type DbaasFormState,
+} from "./dbaasProvider"
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 type Obj = Record<string, any>
@@ -234,30 +241,84 @@ function KamajiConnectionTab({ id, provider }: TabProps) {
         </div>
       </CardContent>
     </Card>
-    <KamajiClustersCard id={id} />
+    <ChartPinsCard id={id} kind="k8s" />
     </>
   )
 }
 
-// KamajiClustersCard — every stratos-managed cluster's pinned chart version, with explicit
-// re-pin controls. Clusters keep their pin when the provider's version moves (by design); this
-// card is the operator override, one cluster or all at once.
-function KamajiClustersCard({ id }: { id: string }) {
+// DbaasConnectionTab edits a Managed Database provider in place — same wholesale-config,
+// blank-kubeconfig-keeps semantics as the kamaji tab above.
+function DbaasConnectionTab({ id, provider }: TabProps) {
+  const [form, setForm] = useState<DbaasFormState>(() => dbaasFormFromService(provider))
+  const save = useEsSave(id)
+  const submit = () => {
+    save.mutate({
+      path: `/admin/service/${id}`,
+      body: {
+        name: form.name.trim(),
+        config: dbaasConfigBlocks(form),
+        // Blank fields keep the stored secret; only what was typed is sent.
+        ...(() => {
+          const secret: Record<string, string> = {}
+          if (form.kubeconfig.trim()) secret.kubeconfig = form.kubeconfig.trim()
+          if (form.backupAccessKey.trim()) secret.backupAccessKey = form.backupAccessKey.trim()
+          if (form.backupSecretKey.trim()) secret.backupSecretKey = form.backupSecretKey.trim()
+          return Object.keys(secret).length ? { secret } : {}
+        })(),
+      },
+    })
+  }
+  return (
+    <>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-eyebrow">Managed Databases (DBaaS) connection</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <DbaasProviderForm form={form} setForm={setForm} mode="edit" />
+        <Note>
+          Changing the chart version here only affects databases created from now on — an existing
+          database keeps the version it was pinned to. Removing an engine or version stops it being
+          offered; databases already on it keep running.
+        </Note>
+        <div className="flex justify-end">
+          <Button onClick={submit} disabled={!dbaasFormValid(form, false) || save.isPending}>
+            {save.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+    <ChartPinsCard id={id} kind="db" />
+    </>
+  )
+}
+
+// ChartPinsCard — every stratos-managed workload's pinned chart version, with explicit re-pin
+// controls. Workloads keep their pin when the provider's version moves (by design); this card is
+// the operator override, one at a time or all at once. Shared by the kamaji (k8s clusters) and
+// dbaas (databases) providers — the two backends expose the same shape under different route
+// and array names.
+function ChartPinsCard({ id, kind }: { id: string; kind: "k8s" | "db" }) {
+  const isDb = kind === "db"
+  const noun = isDb ? "database" : "cluster"
+  const path = `/admin/service/${id}/${isDb ? "db-clusters" : "k8s-clusters"}`
   const qc = useQueryClient()
+  type Row = { id: string; name?: string; projectId?: string; chartVersion?: string; engine?: string }
   const q = useAdminGet<{
     providerChartVersion?: string
-    clusters?: { id: string; name?: string; projectId?: string; chartVersion?: string }[]
-  }>(`/admin/service/${id}/k8s-clusters`)
+    clusters?: Row[]
+    databases?: Row[]
+  }>(path)
   const pin = q.data?.providerChartVersion ?? ""
-  const clusters = q.data?.clusters ?? []
+  const clusters: Row[] = q.data?.clusters ?? q.data?.databases ?? []
   const behind = clusters.filter((c) => pin && c.chartVersion !== pin)
-  const invalidate = () => void qc.invalidateQueries({ queryKey: ["admin-get", `/admin/service/${id}/k8s-clusters`] })
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ["admin-get", path] })
 
   const bumpOne = useMutation({
     mutationFn: (clusterId: string) =>
-      apiFetch(`/admin/service/${id}/k8s-clusters/${clusterId}/bump-chart`, { method: "POST" }),
+      apiFetch(`${path}/${clusterId}/bump-chart`, { method: "POST" }),
     onSuccess: () => {
-      toast.success(`Cluster re-pinned to ${pin}`)
+      toast.success(`Re-pinned to ${pin}`)
       invalidate()
     },
     onError: (e: Error) => toast.error(e.message),
@@ -265,12 +326,12 @@ function KamajiClustersCard({ id }: { id: string }) {
   const bumpAll = useMutation({
     mutationFn: () =>
       apiFetch<{ bumped?: number; errors?: Record<string, string> }>(
-        `/admin/service/${id}/k8s-clusters/bump-chart`, { method: "POST" },
+        `${path}/bump-chart`, { method: "POST" },
       ),
     onSuccess: (d) => {
       const failed = Object.keys(d?.errors ?? {}).length
       if (failed) toast.warning(`${d?.bumped ?? 0} re-pinned, ${failed} failed`)
-      else toast.success(`${d?.bumped ?? 0} cluster(s) re-pinned to ${pin}`)
+      else toast.success(`${d?.bumped ?? 0} ${noun}(s) re-pinned to ${pin}`)
       invalidate()
     },
     onError: (e: Error) => toast.error(e.message),
@@ -279,7 +340,9 @@ function KamajiClustersCard({ id }: { id: string }) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-eyebrow">Managed clusters — platform (chart) versions</CardTitle>
+        <CardTitle className="text-eyebrow">
+          Managed {isDb ? "databases" : "clusters"} — platform (chart) versions
+        </CardTitle>
         <Button
           size="sm"
           variant="outline"
@@ -292,14 +355,17 @@ function KamajiClustersCard({ id }: { id: string }) {
       <CardContent className="grid gap-3">
         <p className="text-sm text-muted-foreground">
           Provider pin: <span className="font-mono">{pin || "—"}</span>. Re-pinning re-renders the
-          chart for that cluster — platform components restart with a rolling update, and when the
-          node template changed between chart versions the nodes rotate too (surge-first).
-          Customers can also apply this themselves from the cluster page.
+          chart for that {noun}
+          {isDb
+            ? " — the engine version and the data are untouched; pods roll one at a time."
+            : " — platform components restart with a rolling update, and when the node template changed between chart versions the nodes rotate too (surge-first)."}
+          {" "}Customers can also apply this themselves from the {noun} page.
         </p>
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead>Cluster</TableHead>
+              <TableHead>{isDb ? "Database" : "Cluster"}</TableHead>
+              {isDb ? <TableHead>Engine</TableHead> : null}
               <TableHead>Project</TableHead>
               <TableHead>Chart version</TableHead>
               <TableHead />
@@ -307,9 +373,9 @@ function KamajiClustersCard({ id }: { id: string }) {
           </TableHeader>
           <TableBody>
             {q.isLoading ? (
-              <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground">Loading…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={isDb ? 5 : 4} className="text-center text-sm text-muted-foreground">Loading…</TableCell></TableRow>
             ) : clusters.length === 0 ? (
-              <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground">No managed clusters.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={isDb ? 5 : 4} className="text-center text-sm text-muted-foreground">No managed {isDb ? "databases" : "clusters"}.</TableCell></TableRow>
             ) : (
               clusters.map((c) => (
                 <TableRow key={c.id}>
@@ -317,6 +383,7 @@ function KamajiClustersCard({ id }: { id: string }) {
                     <span className="font-medium">{c.name || c.id}</span>{" "}
                     <span className="font-mono text-xs text-muted-foreground">{c.id}</span>
                   </TableCell>
+                  {isDb ? <TableCell className="text-sm">{c.engine || "—"}</TableCell> : null}
                   <TableCell className="font-mono text-xs">{c.projectId || "—"}</TableCell>
                   <TableCell className="font-mono text-sm">
                     {c.chartVersion || "—"}
@@ -371,6 +438,10 @@ function ConnectionTab({ id, provider }: TabProps) {
   // tab is the editable form rather than a read-only card.
   if (provider.config?.provider === "kamaji") {
     return <KamajiConnectionTab id={id} provider={provider} />
+  }
+  // dbaas: same delivery-config-heavy shape as kamaji — the tab IS the editable form.
+  if (provider.config?.provider === "dbaas") {
+    return <DbaasConnectionTab id={id} provider={provider} />
   }
   // ceph-s3: no Keystone — show the S3/Admin Ops config instead of the identity card. There is no
   // backend test endpoint for RGW (the connection is exercised by bootstrap/sync), so no Test button.
@@ -1593,6 +1664,10 @@ const CEPH_TAB_KEYS = new Set(["connection", "services", "configuration"])
 // (connection = kubeconfig/chart pin, services = the kubernetes toggle, configuration = raw doc).
 const KAMAJI_TAB_KEYS = CEPH_TAB_KEYS
 
+// A dbaas provider serves ONLY managed databases off its DB cluster — same trimmed set again
+// (connection = kubeconfig/chart pin/engine catalog, services = the database toggle).
+const DBAAS_TAB_KEYS = CEPH_TAB_KEYS
+
 const crumbs = (label: string) => (
   <Breadcrumb>
     <BreadcrumbList>
@@ -1635,7 +1710,9 @@ export default function CloudProviderDetailPage() {
       ? TAB_DEFS.filter((t) => CEPH_TAB_KEYS.has(t.v))
       : p.config?.provider === "kamaji"
         ? TAB_DEFS.filter((t) => KAMAJI_TAB_KEYS.has(t.v))
-        : TAB_DEFS
+        : p.config?.provider === "dbaas"
+          ? TAB_DEFS.filter((t) => DBAAS_TAB_KEYS.has(t.v))
+          : TAB_DEFS
 
   return (
     <>

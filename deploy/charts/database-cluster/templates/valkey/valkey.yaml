@@ -1,0 +1,87 @@
+{{- if eq .Values.engine "valkey" }}
+{{/*
+Valkey via the OFFICIAL valkey-io/valkey-operator (chart valkey-operator,
+CRD group valkey.io). An earlier revision of this file targeted the
+third-party hyperspike operator, which has no helm chart at all — only a
+raw install.yaml per release — and a different CRD shape.
+
+TOPOLOGY. `shards` is the number of shard groups and `replicas` the copies
+WITHIN each shard, so an HA valkey is 1 shard with N-1 replicas, NOT N shards:
+sharding splits the keyspace, it does not make it redundant. The platform
+exposes only `instances` (1 or 3) and maps it that way. The operator is
+CLUSTER-MODE ONLY — upstream states plainly that standalone and sentinel are
+not supported — so there is no mode to offer and nothing to pretend about.
+
+STILL BETA. What remains unverified against a live operator, and why the
+provider keeps this engine behind its beta flag:
+  * the pod labels the operator stamps (the LB selector in _helpers.tpl and
+    the NetworkPolicy podSelector both guess them)
+  * whether one Octavia VIP in front of a multi-shard cluster is usable at
+    all — a client that lands on the wrong node gets a MOVED redirect to a
+    DB-cluster pod IP that is unroutable from the tenant VPC. Safe at
+    instances 1 (one shard, one keyspace owner); shards > 1 is not offered.
+  * whether the ACL user below is actually the credential
+    engines.go ConnectionSecret hands customers.
+*/}}
+{{- $name := include "database-cluster.name" . }}
+apiVersion: valkey.io/v1alpha1
+kind: ValkeyCluster
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "database-cluster.labels" . | nindent 4 }}
+  annotations:
+    {{- include "database-cluster.annotations" . | nindent 4 }}
+spec:
+  {{/* One keyspace, instances-1 copies of it — see the topology note. */}}
+  shards: 1
+  replicas: {{ sub (int .Values.instances) 1 }}
+  image: {{ include "database-cluster.image" . }}
+  {{/* The exposed account, authenticated from the STRATOS-owned <id>-auth
+       secret (engines.go ConnectionSecret) rather than a chart-generated
+       password, which would re-roll on every ArgoCD render. */}}
+  users:
+    - name: default
+      enabled: true
+      passwordSecret:
+        name: {{ $name }}-auth
+        {{- /* keys, PLURAL and an ARRAY — valkey supports several passwords per
+             user for rotation. It was `key: password`, a field the CRD does not
+             have: the API server pruned it without a word, and the operator
+             fell back to its documented default, "defaults to username", i.e.
+             it looked for a key called `default` in our secret. The cluster
+             then never started —
+
+               state: Failed
+               reason: UsersACLError
+               message: user default: missing password key in secret
+
+             — with ZERO pods and, because nothing reads that condition, an
+             ArgoCD app still reporting Healthy. Live-caught on the 2026-08-06
+             engine drill. */}}
+        keys:
+          - password
+  resources:
+    {{- include "database-cluster.resources" . | nindent 4 }}
+  {{- if or .Values.scheduling.nodeSelector .Values.scheduling.tolerations }}
+  # valkey-operator groups placement under spec.scheduling.
+  scheduling:
+    {{- include "database-cluster.podPlacement" . | nindent 4 }}
+  {{- end }}
+  persistence:
+    size: {{ .Values.storage.sizeGi }}Gi
+    {{- with .Values.storage.storageClassName }}
+    storageClassName: {{ . }}
+    {{- end }}
+    reclaimPolicy: Delete
+  {{- if .Values.monitoring.enabled }}
+  exporter:
+    enabled: true
+  {{- end }}
+  {{- with .Values.valkey.parameters }}
+  {{/* Customer-tunable valkey.conf settings (maxmemory-policy, timeout, ...).
+       Free-form string map on the CR; stratos allowlists what may land here. */}}
+  config:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

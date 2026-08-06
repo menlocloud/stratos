@@ -22,7 +22,8 @@ package externalservice
 //	      "externalNetworkId": "…",       // CAPO external network
 //	      "dnsZone":           "k8s.example.com",
 //	      "versions":          {"1.35.4": "<glance-image-id>"},  // curated version→DEFAULT-image matrix
-//	      "imageVariants":     {"nvidia": {"1.35.4": "<glance-image-id>"}}  // optional per-version variants
+//	      "imageVariants":     {"nvidia": {"1.35.4": "<glance-image-id>"}},  // optional per-version variants
+//	      "registryMirrors":   {"docker.io": ["https://registry.example.com/v2/dockerhub"]}  // optional containerd pull-through; absent = chart defaults
 //	    }
 //	  },
 //	  "secret": {"kubeconfig": "<management-cluster kubeconfig>"}  // encrypted at rest
@@ -91,6 +92,33 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			}
 		}
 	}
+	// registryMirrors: upstream host → mirror endpoint(s). A bare string is accepted alongside
+	// the list form because that is the shape an operator hand-editing the document reaches for.
+	var mirrors map[string][]string
+	if ms, ok := cl["registryMirrors"].(map[string]any); ok {
+		for host, raw := range ms {
+			var urls []string
+			switch v := raw.(type) {
+			case string:
+				if v != "" {
+					urls = []string{v}
+				}
+			case []any:
+				for _, u := range v {
+					if s := str(u); s != "" {
+						urls = append(urls, s)
+					}
+				}
+			}
+			if len(urls) > 0 {
+				if mirrors == nil {
+					mirrors = map[string][]string{}
+				}
+				mirrors[host] = urls
+			}
+		}
+	}
+	nodeSelector, tolerations := scheduling(cl)
 	cfg := kamaji.Config{
 		Kubeconfig:    str(e.secretMap()["kubeconfig"]),
 		Region:        e.KamajiRegion(),
@@ -112,6 +140,9 @@ func (e *ExternalService) KamajiConfig() kamaji.Config {
 			SupportKeypairPublicKey: str(cl["supportKeypairPublicKey"]),
 			AllowedCIDRs:            strList(cl["allowedCidrs"]),
 			StorageVolumeType:       str(cl["storageVolumeType"]),
+			RegistryMirrors:         mirrors,
+			NodeSelector:            nodeSelector,
+			Tolerations:             tolerations,
 		},
 	}
 	if cfg.ArgoNamespace == "" {
@@ -136,6 +167,44 @@ func intOf(v any) int {
 		return int(n)
 	}
 	return 0
+}
+
+// scheduling reads the optional pod-placement block both managed-service providers accept:
+//
+//	"scheduling": {
+//	  "nodeSelector": {"node-role": "kamaji"},
+//	  "tolerations":  [{"key": "dedicated", "operator": "Equal", "value": "kamaji", "effect": "NoSchedule"}]
+//	}
+//
+// Tolerations pass through as opaque maps — the shape is Kubernetes', and validating it here
+// would only duplicate the API server's own admission, which is where a bad toleration is
+// rejected anyway. Both halves are independent: a selector without tolerations is valid (an
+// untainted pool), and so is the reverse.
+func scheduling(cfg map[string]any) (map[string]string, []map[string]any) {
+	block, _ := cfg["scheduling"].(map[string]any)
+	if block == nil {
+		return nil, nil
+	}
+	var selector map[string]string
+	if ns, ok := block["nodeSelector"].(map[string]any); ok {
+		for k, v := range ns {
+			if s := str(v); k != "" && s != "" {
+				if selector == nil {
+					selector = map[string]string{}
+				}
+				selector[k] = s
+			}
+		}
+	}
+	var tolerations []map[string]any
+	if ts, ok := block["tolerations"].([]any); ok {
+		for _, t := range ts {
+			if m, ok := t.(map[string]any); ok && len(m) > 0 {
+				tolerations = append(tolerations, m)
+			}
+		}
+	}
+	return selector, tolerations
 }
 
 // strList reads a config array of strings, skipping blanks.

@@ -67,6 +67,12 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 	if d.SupportKeypairName != "" {
 		values["machineSSHKeyName"] = d.SupportKeypairName
 	}
+	// Containerd pull-through mirrors for the cluster's nodes. Omitted (not `{}`) when the
+	// provider configures none, so the values carry no opinion and the chart default — none
+	// since 0.8.0, a mirror pinned in an older pin — decides.
+	if mirrors := RegistryMirrorValues(d.RegistryMirrors); mirrors != nil {
+		values["registryMirrors"] = mirrors
+	}
 	// clusterNetworking — the CUSTOMER-project side of the cluster (the API-server LB above lives
 	// in the MANAGEMENT project; two clouds, do not conflate).
 	//
@@ -90,6 +96,15 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 			"subnetFilter":  map[string]any{"id": spec.SubnetID},
 		}
 	}
+	// Node resolvers (chart 0.10.0+). Omitted when empty so the render — and therefore every
+	// pool's KubeadmConfigTemplate checksum — is unchanged for a cluster that never set them.
+	if len(spec.DNSServers) > 0 {
+		out := make([]any, 0, len(spec.DNSServers))
+		for _, srv := range spec.DNSServers {
+			out = append(out, srv)
+		}
+		cn["dnsServers"] = out
+	}
 	if len(cn) > 0 {
 		values["clusterNetworking"] = cn
 	}
@@ -101,10 +116,28 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 
 	// Cluster-autoscaler minor MUST match the cluster's Kubernetes minor (upstream values
 	// comment); the default tag would drift as soon as we offer a different minor.
+	autoscaler := map[string]any{}
 	if maj, min, _, err := ParseVersion(spec.Version); err == nil {
-		values["autoscaler"] = map[string]any{
-			"image": map[string]any{"tag": fmt.Sprintf("v%d.%d.0", maj, min)},
+		autoscaler["image"] = map[string]any{"tag": fmt.Sprintf("v%d.%d.0", maj, min)}
+	}
+
+	// Management-cluster pod placement. The chart runs FOUR things there per customer cluster —
+	// the hosted control plane, the CCM, the Cinder CSI controller and the autoscaler — and each
+	// takes its own nodeSelector/tolerations, so the provider's pool only holds the whole cluster
+	// if all four get it. Missing one leaves that pod on a general node and the "dedicated pool"
+	// is a half-truth.
+	if placement := PlacementValues(d.NodeSelector, d.Tolerations); placement != nil {
+		// The hosted control plane takes it under `deployment` — that block is passed to the
+		// KamajiControlPlane's spec.deployment verbatim by the chart.
+		cp["deployment"] = PlacementValues(d.NodeSelector, d.Tolerations)
+		cp["cloudControllerManager"] = PlacementValues(d.NodeSelector, d.Tolerations)
+		cp["cinderCSI"] = PlacementValues(d.NodeSelector, d.Tolerations)
+		for k, v := range placement {
+			autoscaler[k] = v
 		}
+	}
+	if len(autoscaler) > 0 {
+		values["autoscaler"] = autoscaler
 	}
 
 	// The addons block: the customer's curated toggles (ClusterAddons, one
@@ -117,6 +150,59 @@ func BuildValues(cfg Config, spec ClusterSpec) map[string]any {
 		values["addons"] = addons
 	}
 	return values
+}
+
+// RegistryMirrorValues renders the chart's registryMirrors block (host → mirror endpoints) from
+// the provider config. nil when nothing is configured — the caller must then leave the key OFF
+// the values entirely so the chart's own defaults apply. Hosts with no usable endpoint are
+// dropped rather than rendered empty: an empty host entry produces a hosts.toml with no mirror,
+// which silently turns the mirror OFF for that registry instead of leaving it at the default.
+func RegistryMirrorValues(mirrors map[string][]string) map[string]any {
+	out := map[string]any{}
+	for host, endpoints := range mirrors {
+		if strings.TrimSpace(host) == "" {
+			continue
+		}
+		urls := make([]any, 0, len(endpoints))
+		for _, u := range endpoints {
+			if u = strings.TrimSpace(u); u != "" {
+				urls = append(urls, u)
+			}
+		}
+		if len(urls) > 0 {
+			out[strings.TrimSpace(host)] = urls
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// PlacementValues renders a chart pod-placement block (nodeSelector + tolerations) from the
+// provider config. nil when neither is set, so the key stays off the values and the chart's
+// "schedule anywhere" default stands. Returns a fresh map per call: the same placement is
+// written under four different chart keys, and a shared map would alias them.
+func PlacementValues(nodeSelector map[string]string, tolerations []map[string]any) map[string]any {
+	out := map[string]any{}
+	if len(nodeSelector) > 0 {
+		sel := map[string]any{}
+		for k, v := range nodeSelector {
+			sel[k] = v
+		}
+		out["nodeSelector"] = sel
+	}
+	if len(tolerations) > 0 {
+		list := make([]any, 0, len(tolerations))
+		for _, t := range tolerations {
+			list = append(list, t)
+		}
+		out["tolerations"] = list
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // AddonValues renders the addons block: the customer's picks as `addons.<name>.enabled`, plus
@@ -195,6 +281,16 @@ func NodeGroupValues(d ClusterDefaults, version string, groups []NodeGroup) []an
 		if ng.ServerGroupID != "" {
 			g["serverGroupId"] = ng.ServerGroupID
 		}
+		// Extra customer security groups for this pool (chart 0.9.0+). Omitted when empty so the
+		// render is byte-identical to a pre-0.9.0 cluster — which is what keeps an upgrade from
+		// rotating the machine template and rolling every node for nothing.
+		if len(ng.SecurityGroupIDs) > 0 {
+			ids := make([]any, 0, len(ng.SecurityGroupIDs))
+			for _, id := range ng.SecurityGroupIDs {
+				ids = append(ids, id)
+			}
+			g["securityGroupIds"] = ids
+		}
 		// The variant rides in the values so it survives round-trips: the sync reads it back for
 		// the UI, and UPGRADE re-resolves each group onto the target version's image of the same
 		// variant. The chart reads only the keys it knows — an extra key is inert there.
@@ -266,6 +362,13 @@ func NodeGroupsFromValues(values map[string]any) []map[string]any {
 		}
 		if v, ok := ng["serverGroupId"]; ok {
 			g["server_group_id"] = v
+		}
+		// Read back so the UI can show what a pool actually runs with, and — more importantly —
+		// so an edit that does not touch security groups can carry them forward. SET_NODE_GROUPS
+		// replaces the whole nodeGroups value, so anything absent from the round-trip is silently
+		// dropped from every pool the customer did not re-state.
+		if sgs, ok := ng["securityGroupIds"].([]any); ok && len(sgs) > 0 {
+			g["security_group_ids"] = sgs
 		}
 		if v, _ := ng["imageVariant"].(string); v != "" {
 			g["image_variant"] = v

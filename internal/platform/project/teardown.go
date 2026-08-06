@@ -21,7 +21,7 @@ import (
 // minimizes "resource still in use" failures. Unknown/leaf types sort last.
 func deletionOrder(t string) int {
 	switch t {
-	case cloud.TypeKubernetesCluster, cloud.TypeStack, cloud.TypeLoadBalancer:
+	case cloud.TypeKubernetesCluster, cloud.TypeDatabaseCluster, cloud.TypeStack, cloud.TypeLoadBalancer:
 		return 0 // composites that own many children
 	case cloud.TypeTrilioRestore, cloud.TypeTrilioSnapshot, cloud.TypeTrilioWorkload, cloud.TypeTrilioBackupTarget:
 		return 1
@@ -84,20 +84,45 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 	}
 	SortCloudResourcesForDeletion(resources)
 
-	// kamaji rows first, split out of the tenant sweep entirely: they have no keystone tenant
-	// (tryTenantClient below can never build a client for them), and their delete is an ArgoCD
-	// Application delete on the management cluster whose cascade runs asynchronously. Rows
-	// archive on a successful delete request; the clouds.yaml secret / appcred / namespace are
-	// reaped by FinalizeOrphans below once the cascade has actually finished.
-	var kamajiServices []string
+	// kamaji + dbaas rows first, split out of the tenant sweep entirely: they have no keystone
+	// tenant (tryTenantClient below can never build a client for them), and their delete is an
+	// ArgoCD Application delete on the management/DB cluster whose cascade runs asynchronously.
+	// Rows archive on a successful delete request; secrets / appcreds / network shares /
+	// namespaces are reaped by FinalizeOrphans below once the cascade has actually finished.
+	var kamajiServices, dbaasServices []string
 	{
 		var sweep []cloud.CloudResource
 		now := time.Now().UTC()
 		for i := range resources {
 			res := &resources[i]
 			es, gerr := h.esSvc.Get(ctx, res.ServiceID)
-			if gerr != nil || es == nil || !es.IsKamaji() {
+			if gerr != nil || es == nil || (!es.IsKamaji() && !es.IsDbaas()) {
 				sweep = append(sweep, *res)
+				continue
+			}
+			if es.IsDbaas() {
+				if h.dbaasFor == nil {
+					sweep = append(sweep, *res)
+					continue
+				}
+				ds, derr := h.dbaasFor(es)
+				if derr != nil {
+					slog.Error("teardown: build dbaas service", "project", p.ID, "serviceId", res.ServiceID, "err", derr)
+					sweep = append(sweep, *res)
+					continue
+				}
+				if !contains(dbaasServices, res.ServiceID) {
+					dbaasServices = append(dbaasServices, res.ServiceID)
+				}
+				if derr := ds.DeleteDatabase(ctx, p.ID, res.ExternalID); derr != nil {
+					slog.Error("teardown: delete dbaas database", "project", p.ID, "database", res.ExternalID, "err", derr)
+					sweep = append(sweep, *res)
+					continue
+				}
+				if aerr := h.cloud.DeleteAndArchive(ctx, res, now); aerr != nil {
+					slog.Error("teardown: archive dbaas database row", "project", p.ID, "database", res.ExternalID, "err", aerr)
+					sweep = append(sweep, *res)
+				}
 				continue
 			}
 			if h.kamajiFor == nil {
@@ -164,8 +189,13 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 	// cluster deleted minutes before teardown has no row anymore, but its cascade may still be
 	// running against the tenant.
 	for _, svcID := range p.ServiceIDs() {
-		if es, err := h.esSvc.Get(ctx, svcID); err == nil && es != nil && es.IsKamaji() && !contains(kamajiServices, svcID) {
-			kamajiServices = append(kamajiServices, svcID)
+		if es, err := h.esSvc.Get(ctx, svcID); err == nil && es != nil {
+			if es.IsKamaji() && !contains(kamajiServices, svcID) {
+				kamajiServices = append(kamajiServices, svcID)
+			}
+			if es.IsDbaas() && !contains(dbaasServices, svcID) {
+				dbaasServices = append(dbaasServices, svcID)
+			}
 		}
 	}
 	kamajiPending := 0
@@ -183,6 +213,26 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 		if ferr != nil {
 			slog.Warn("teardown: kamaji orphan finalize", "project", p.ID, "serviceId", svcID, "pending", pending, "err", ferr)
 			kamajiPending++
+		}
+	}
+	// Same finalize + pending signal for dbaas: while a database's Octavia LB port still sits on
+	// the customer subnet (and the neutron network share exists), deleting the keystone tenant /
+	// its networks would wedge — defer exactly like kamaji.
+	dbaasPending := 0
+	for _, svcID := range dbaasServices {
+		es, err := h.esSvc.Get(ctx, svcID)
+		if err != nil || es == nil || h.dbaasFor == nil {
+			continue
+		}
+		ds, err := h.dbaasFor(es)
+		if err != nil {
+			continue
+		}
+		pending, ferr := ds.FinalizeOrphans(ctx, p.ID, h.dbaasNetShareRevoker(p))
+		dbaasPending += pending
+		if ferr != nil {
+			slog.Warn("teardown: dbaas orphan finalize", "project", p.ID, "serviceId", svcID, "pending", pending, "err", ferr)
+			dbaasPending++
 		}
 	}
 
@@ -289,10 +339,11 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 			continue
 		}
 		// A kamaji delete cascade still needs this tenant (CAPO tears the worker VMs / LB down
-		// with tenant-scoped credentials) — defer the keystone delete; re-run teardown once the
-		// sweep reports clean.
-		if kamajiPending > 0 {
-			slog.Warn("teardown: deferring keystone tenant delete — kamaji cascade in flight", "project", p.ID, "serviceId", svcID)
+		// with tenant-scoped credentials), and a dbaas cascade still holds an Octavia port +
+		// network share on it — defer the keystone delete; re-run teardown once the sweeps
+		// report clean.
+		if kamajiPending+dbaasPending > 0 {
+			slog.Warn("teardown: deferring keystone tenant delete — kamaji/dbaas cascade in flight", "project", p.ID, "serviceId", svcID)
 			continue
 		}
 		adminCC, err := client.New(ctx, es.ClientConfig(h.cloudRegion))
@@ -315,6 +366,9 @@ func (h *Handler) TeardownProject(ctx context.Context, projectID string) error {
 	}
 	if kamajiPending > 0 {
 		return fmt.Errorf("teardown: %d kamaji cluster remnant(s) still finalizing on the management cluster (keystone tenant deletion deferred) — the periodic sweep revokes credentials and GCs them; re-run teardown afterwards to delete the tenant (docs/managed-k8s.md)", kamajiPending)
+	}
+	if dbaasPending > 0 {
+		return fmt.Errorf("teardown: %d managed-database remnant(s) still finalizing on the DB cluster (keystone tenant deletion deferred) — the periodic sweep revokes network shares and GCs them; re-run teardown afterwards to delete the tenant (docs/managed-dbaas.md)", dbaasPending)
 	}
 	return nil
 }

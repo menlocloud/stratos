@@ -265,6 +265,16 @@ export function seedCloudResources(): CloudResource[] {
     res("BARBICAN_SECRET", "db-password", {
       secret: { name: "db-password", status: "ACTIVE", secret_type: "opaque", expiration: null },
     }),
+
+    res("DATABASE_CLUSTER", "orders-db", {
+      database: {
+        id: "std-1a2b3c4d", name: "orders-db", engine: "postgresql", version: "17", replicas: 3,
+        cpu: 2, memory_gib: 8, storage_gib: 50, storage_class: "csi-cinder",
+        network_id: "net-priv-1", subnet_id: "sub-priv-1", allowed_cidrs: ["10.0.0.0/24"],
+        status: "READY", sync_status: "Synced", chart_version: "0.1.0",
+        created_at: "2026-07-20T09:00:00Z", endpoint: "10.0.0.50", port: 5432,
+      },
+    }, { status: "READY", externalId: "std-1a2b3c4d", serviceId: "svc-dbaas-1", region: "RegionOne" }),
   ]
 }
 

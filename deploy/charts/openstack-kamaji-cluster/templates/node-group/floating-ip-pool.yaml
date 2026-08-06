@@ -3,8 +3,14 @@
   machine a floating IP from the cluster's external network — the same range the router and the
   public LoadBalancers draw from (clusterNetworking.externalNetworkId, derived at create from
   the chosen subnet's router). CAPO assigns the IP via floatingIPPoolRef on the machine template
-  and releases it with the machine (reclaimPolicy Release). The FIPs land in the customer's
-  tenant, so they sync and bill like any other floating IP.
+  and releases it with the machine. The FIPs land in the customer's tenant, so they sync and bill
+  like any other floating IP.
+
+  reclaimPolicy: the CRD enum is Retain|Delete ONLY — "Release" is not a value and the webhook
+  rejects the whole object, which under ArgoCD fails the sync and leaves the node group with no
+  FIP pool at all. Delete is the billing-correct half of the pair: Retain leaves the floating IP
+  allocated in the customer's tenant after its machine is gone, so they keep paying for an IP
+  nothing is using.
 */}}
 {{- range $nodeGroupOverrides := .Values.nodeGroups }}
 {{- $nodeGroup := deepCopy $.Values.nodeGroupDefaults | mustMerge $nodeGroupOverrides }}
@@ -23,6 +29,6 @@ spec:
     cloudName: openstack
   floatingIPNetwork:
     id: {{ $.Values.clusterNetworking.externalNetworkId | required (printf "node group '%s': machineFloatingIP needs clusterNetworking.externalNetworkId" $nodeGroup.name) }}
-  reclaimPolicy: Release
+  reclaimPolicy: Delete
 {{- end }}
 {{- end }}

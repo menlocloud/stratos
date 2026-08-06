@@ -30,7 +30,8 @@ func (p *ClusterSyncProvider) List(ctx context.Context) ([]cloud.CloudResource, 
 	// Ownership marker in the selector: pre-stratos clusters on the same management cluster
 	// (unlabelled) never enter the cache, so they never surface in the UI or billing.
 	apps, err := s.api.ListApplications(ctx, s.cfg.ArgoNamespace,
-		LabelProject+"="+p.projectID+","+LabelManagedBy+"="+ManagedByValue)
+		LabelProject+"="+p.projectID+","+LabelManagedBy+"="+ManagedByValue+
+			","+LabelService+"="+s.serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -56,12 +57,20 @@ func (p *ClusterSyncProvider) List(ctx context.Context) ([]cloud.CloudResource, 
 		if err != nil {
 			return nil, err
 		}
+		// The CAPO infrastructure object, for the "what did the platform create for me" panel.
+		// BEST EFFORT on purpose: this enrichment must never be able to fail a project's whole
+		// cluster sync — a management cluster without the CRD, or without RBAC for it, still has
+		// clusters worth listing. An error means "not known", which renders as an absent panel.
+		osc, oscErr := s.api.GetOpenStackCluster(ctx, ns, id)
+		if oscErr != nil {
+			osc = nil
+		}
 		out = append(out, cloud.CloudResource{
 			Type:       cloud.TypeKubernetesCluster,
 			ExternalID: id,
 			Region:     p.region,
 			ProjectID:  p.projectID,
-			Data:       clusterData(app, tcp, mds),
+			Data:       clusterData(app, tcp, mds, osc),
 		})
 	}
 	return out, nil
@@ -70,7 +79,7 @@ func (p *ClusterSyncProvider) List(ctx context.Context) ([]cloud.CloudResource, 
 // clusterData maps Application (+ optional TCP/MachineDeployments) → the cached `data` payload.
 // bson-round-trip-stable by construction: strings, bools and JSON numbers only, timestamps as
 // the RFC3339 strings Kubernetes already serializes (never time.Time — the dev-era churn lesson).
-func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
+func clusterData(app, tcp map[string]any, mds []map[string]any, osc map[string]any) map[string]any {
 	values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
 
 	status := "PENDING"
@@ -113,6 +122,11 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 	if ext := digStr(values, "clusterNetworking", "externalNetworkId"); ext != "" {
 		c["external_network_id"] = ext
 	}
+	// Node resolvers. Absent = the cluster inherits the subnet's DHCP servers, which is what the
+	// UI must say rather than showing an empty list as if a choice had been made.
+	if dns, ok := dig(values, "clusterNetworking", "dnsServers").([]any); ok && len(dns) > 0 {
+		c["dns_servers"] = dns
+	}
 	// Customer add-on toggles, read back for the UI (absent block = chart defaults). Filtered to
 	// the curated menu: the stratos-owned `openstack` storage leg (and any operator hand-edit)
 	// must not surface as a customer toggle — it would round-trip into SET_ADDONS and be
@@ -149,10 +163,33 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 		c["oidc"] = oidc
 	}
 
-	// Control-plane endpoint from the TCP status (host:port the kubeconfig points at).
+	// Control-plane endpoint.
+	//
+	// The TCP reports the raw VIP:port its Service happens to hold. That is the wrong thing to
+	// hand a customer: the address belongs to an Octavia load balancer and moves if the LB is
+	// ever rebuilt, and a URL built from it fails certificate validation — the apiserver cert
+	// carries the cluster's DNS NAME as its SAN, not the address.
+	//
+	// The name already exists for exactly this: BuildValues publishes <clusterID>.<dnsZone> via
+	// external-dns and puts it in certSANs. Read it back off the cluster's OWN values rather than
+	// re-deriving it from the provider's current DNS zone, so a cluster created under a different
+	// zone keeps reporting the name it actually answers to.
+	//
+	// endpoint stays host:port — its existing shape, which the console renders and the readiness
+	// checklist tests for emptiness. endpoint_url is the copyable thing.
 	if tcp != nil {
 		if ep := digStr(tcp, "status", "controlPlaneEndpoint"); ep != "" {
-			c["endpoint"] = ep
+			host, port, found := strings.Cut(ep, ":")
+			if !found {
+				port = "6443"
+			}
+			c["endpoint_ip"] = host
+			if fqdn := digStr(values, "kamajiControlPlane", "network", "serviceAnnotations",
+				"external-dns.alpha.kubernetes.io/hostname"); fqdn != "" {
+				host = fqdn
+			}
+			c["endpoint"] = host + ":" + port
+			c["endpoint_url"] = "https://" + host + ":" + port
 		}
 		if v := digStr(tcp, "status", "kubernetesResources", "version", "status"); v != "" {
 			c["cp_status"] = v
@@ -189,5 +226,31 @@ func clusterData(app, tcp map[string]any, mds []map[string]any) map[string]any {
 		groups = append(groups, g)
 	}
 	c["node_groups"] = groups
+
+	// ── what the platform created for this cluster ────────────────────────────
+	// Read off CAPO's own status rather than derived from names: these are the objects the
+	// delete cascade takes with it, and a customer deciding whether an OpenStack object is safe
+	// to touch needs the authoritative list, not a guess.
+	if osc != nil {
+		managed := []any{}
+		for _, sg := range []struct{ field, role string }{
+			{"controlPlaneSecurityGroup", "control-plane"},
+			{"workerSecurityGroup", "worker"},
+			{"bastionSecurityGroup", "bastion"},
+		} {
+			g, _ := dig(osc, "status", sg.field).(map[string]any)
+			if id := digStr(g, "id"); id != "" {
+				managed = append(managed, map[string]any{"id": id, "name": digStr(g, "name"), "role": sg.role})
+			}
+		}
+		if len(managed) > 0 {
+			c["managed_security_groups"] = managed
+		}
+	}
+	// The break-glass keypair injected into every node — platform-owned, and the customer should
+	// know it is there.
+	if kp := digStr(values, "machineSSHKeyName"); kp != "" {
+		c["support_keypair"] = kp
+	}
 	return map[string]any{"cluster": c}
 }

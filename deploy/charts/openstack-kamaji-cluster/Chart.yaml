@@ -16,9 +16,74 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.15.0 makes a worker WAIT for the control-plane endpoint before running kubeadm join. The Kamaji
+# control plane is a Service of type LoadBalancer, so its endpoint is an Octavia load balancer that
+# Octavia builds at the same time CAPI boots the workers — the workers race it. kubeadm's discovery
+# gives up after ~5 minutes ("couldn't validate the identity of the API Server"), cloud-init marks
+# the run failed, and NOTHING retries: the machine sits Provisioned until the 45-minute health check
+# replaces it. Seen on two separate clusters, each time one worker won the race and its sibling died
+# — which reads as a flaky node rather than a startup ordering bug. The endpoint is not known at
+# render time, so the node reads it back out of the join config CAPI wrote and polls for up to 10
+# minutes, then joins anyway so kubeadm still produces its own diagnostics.
+# 0.14.0 finishes what 0.11.0 started: cross-node POD traffic needs the RECEIVING side opened too.
+# Every in-cluster rule CAPO writes matches on remoteGroupID, which ML2/OVN compiles to an address
+# set of the member ports' FIXED IPs — a pod-sourced packet matches nothing and is dropped on
+# arrival, however permissive the sender's allowedAddressPairs are. Cilium native routing does not
+# masquerade traffic aimed at other cluster nodes, so pod addresses really do arrive on the wire.
+# Proven live: from a pod, cross-node pod IP AND cross-node node IP both failed, while the same
+# destination and port from hostNetwork succeeded. Now every node also admits the cluster's own pod
+# and service CIDRs by remoteIPPrefix.
+# 0.13.0 resolves the health check's maxUnhealthy PERCENTAGE against the node group's own size and
+# floors it at 1. CAPI remediates nothing once the unhealthy count exceeds the budget, so 40% of a
+# 2-node group is 0.8 and one dead node (50%) was already over it — the pool sizes customers
+# actually run could never replace a failed node, and the machine sat Provisioned forever. Large
+# pools keep the storm guard; a plain number is still honoured verbatim.
+# 0.12.0 attaches a config drive to EVERY node, instead of only to node groups that asked for one.
+# User-data carries the kubeadm join, and without a config drive its only delivery path is the
+# Neutron metadata service. That service answered for exactly one of five nodes observed on
+# 2026-08-06: the other four finished cloud-init with `DataSourceNone`, kept the hostname
+# `localhost`, never ran kubeadm, and sat at "Waiting for a Node with spec.providerID ... to exist"
+# until the 45-minute startup health check failed them. Nothing in CAPI, CAPO or Kamaji reports the
+# real cause; it is only visible in the node's serial console. A config drive is a local block
+# device, so delivery no longer depends on DHCP, a route to 169.254.169.254, or a metadata agent.
+# 0.11.0 gives every node port the cluster's pod and service CIDRs as allowedAddressPairs, which
+# is what makes POD-TO-POD TRAFFIC BETWEEN NODES work at all. Cilium runs in native routing mode
+# here, so a pod's packets leave the node carrying the POD's source address; Neutron port security
+# drops every frame whose source is neither the port's fixed IP nor an allowed pair. Without them a
+# ONE-NODE cluster looks perfectly healthy and the failure only appears once a second node exists —
+# which is how it was reported. The infra-ops wrapper charts have always set these by hand; the
+# Stratos values builder never did, so no Stratos-created cluster has ever had them.
+# Also relaxes the 0.9.0 guard: securityGroupIds is refused only alongside a port that sets its OWN
+# securityGroups (the case CAPO resolves by replacement), not alongside any port at all — the old
+# rule would have blocked this very fix.
+# 0.10.0 adds `clusterNetworking.dnsServers`: DNS servers written onto every node as a
+# systemd-resolved drop-in. Until now the chart's only DNS knob was `dnsNameservers`, which CAPO
+# honours ONLY on a subnet it creates itself — with a bring-your-own subnet, which is the only mode
+# Stratos uses, it does nothing and nodes silently inherit whatever DNS the customer's subnet hands
+# out over DHCP. CoreDNS forwards to the node resolver, so this also sets the cluster's fallback
+# DNS. Written as a resolved drop-in rather than to /etc/resolv.conf: on the Ubuntu node images that
+# file is a symlink into resolved's stub and DHCP rewrites it on every lease. Empty by default, so
+# an existing cluster renders byte-identically and no node rolls. CHANGING it rolls EVERY worker in
+# the cluster — the value lands in every pool's KubeadmConfigTemplate checksum.
+# 0.9.0 adds `machineSecurityGroupIds`: extra OpenStack security groups attached to every machine
+# in every node group, so a customer can bring their own groups instead of living with only the
+# ones CAPO manages. ADDITIVE, not a replacement — verified against CAPO v0.14.4
+# (pkg/cloud/services/networking/port.go ConstructPorts appends the managed group to the
+# machine-level list), so a chosen group can widen reachability but can never lock the cluster
+# out of itself. Refuses to render alongside nodeGroups[].machineNetworking.ports, where CAPO's
+# semantics flip to REPLACE and the managed group would be dropped without a word. Empty by
+# default, so an existing cluster upgrading to 0.9.0 renders byte-identically and no node rolls.
+# CHANGING the list later changes the machine-template checksum and therefore replaces every
+# worker node in the cluster.
+# 0.8.0 drops the inherited registryMirrors default (a third party's quay.io namespace) — the
+# chart now mirrors nothing until you configure it, so installing it never routes an operator's
+# image pulls through somebody else's cache. Stratos providers set `config.cluster.registryMirrors`;
+# a plain helm install sets registryMirrors in values. Upgrading an EXISTING cluster to 0.8.0
+# without setting them removes its hosts.toml files and sends pulls straight at the upstream
+# registries — set your own mirrors in the same change.
 # 0.7.0 enables Cilium Hubble + hubble-relay by default (flow observability in every cluster).
 # 0.5.0 adds clusterNetworking.disableExternalNetwork (CAPO auto-discovery opt-out for clusters
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.7.0
+version: 0.15.0

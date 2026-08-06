@@ -1,0 +1,36 @@
+# apiserver -> kubelet authorization on the DBaaS cluster.
+#
+# WHY THIS EXISTS: CloudNativePG takes a backup by EXEC'ing into the instance pod, and an exec
+# goes apiserver -> kubelet (nodes/proxy). Without this binding the kubelet rejects the API
+# server and every backup dies before it ever reaches the object store:
+#
+#   Backup .status.phase: failed
+#   error: unable to upgrade connection: Forbidden
+#          (user=kube-apiserver-kubelet-client, verb=create, resource=nodes, subresource(s)=[proxy])
+#
+# The blast radius is bigger than backups: `kubectl logs`, `exec`, `attach`, `port-forward` and
+# `cp` all take the same path, so the whole cluster looks fine and is undebuggable. Quick check
+# on any cluster — if this fails, apply this file:
+#
+#   kubectl -n <any-namespace> logs <any-pod>
+#
+# The ClusterRole `system:kubelet-api-admin` ships with Kubernetes; what goes missing is the
+# BINDING to the API server's kubelet client identity. kubeadm normally creates it during
+# control-plane init, so a cluster that lost it (or was bootstrapped without that phase) needs
+# it applied by hand. `kube-apiserver-kubelet-client` is the CN of the certificate the API
+# server presents to kubelets (--kubelet-client-certificate); if your control plane uses a
+# different CN, change the subject name to match, or the binding grants nothing.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeadm:kubelet-api-admin
+  labels:
+    app.kubernetes.io/managed-by: stratos-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:kubelet-api-admin
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: kube-apiserver-kubelet-client

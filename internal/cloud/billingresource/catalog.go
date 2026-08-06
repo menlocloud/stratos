@@ -14,6 +14,7 @@ func Catalog() []*billingapi.BillingResourceType {
 		floatingIPType(),
 		loadBalancerType(),
 		kubernetesClusterType(),
+		databaseClusterType(),
 		bucketType(),
 	}
 }
