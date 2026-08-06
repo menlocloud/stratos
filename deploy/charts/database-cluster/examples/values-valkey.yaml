@@ -6,7 +6,7 @@
 #   helm template test deploy/charts/database-cluster -f examples/values-valkey.yaml
 # =============================================================================
 engine: valkey
-engineVersion: "8.1"
+engineVersion: "9.0"
 instances: 3
 resources:
   cpu: "1"

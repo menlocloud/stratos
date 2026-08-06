@@ -23,6 +23,13 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
+# 0.6.3 moves valkey onto 9.x ONLY (9.0, 9.1) and drops 7.2/8.0/8.1. valkey-operator v0.4.0 writes
+# `shutdown-on-sigterm failover` into every server config unconditionally and its own docs say that
+# directive "requires Valkey 9.0+"; on 7.2, 8.0 and 8.1 the server refuses the config file outright
+# and CrashLoopBackOffs forever while the operator sits at Reconciling. All three were verified dead
+# on the 2026-08-06 drill. Not a deprecation — those versions cannot start under this operator, so
+# offering them only bought a database that never boots. BREAKING for any existing valkey database
+# pinned to 7.2/8.0/8.1, but there can be no working one.
 # 0.6.2 unblocks valkey and opensearch — both were 100% uncreatable, and both failed quietly.
 #   valkey: the user's passwordSecret said `key: password`, a field the CRD does not have. The
 #     API server pruned it silently and the operator fell back to its documented default ("keys
@@ -46,4 +53,4 @@ type: application
 # 0.5.0 adds `scheduling` (nodeSelector + tolerations) so a provider can pin every pod a
 # database runs — engine, proxy, FerretDB frontend — onto a dedicated node pool. Additive: with
 # it unset the render is byte-identical to 0.4.5.
-version: 0.6.2
+version: 0.6.3

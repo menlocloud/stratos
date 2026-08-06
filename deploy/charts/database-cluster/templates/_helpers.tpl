@@ -115,6 +115,20 @@ opensearch/kafka have NO map here BY DESIGN: both operators resolve images
 from the version field natively (OpenSearchCluster spec.general.version,
 Kafka spec.kafka.version), so their templates never call this helper — the
 guard below turns an accidental future call into a loud render failure.
+
+valkey is 9.x ONLY. valkey-operator v0.4.0 writes `shutdown-on-sigterm failover`
+into every server config unconditionally (internal/controller/config.go), and
+its own docs say that directive "requires Valkey 9.0+". On anything older the
+server refuses the config file outright —
+
+  *** FATAL CONFIG FILE ERROR *** ... 'shutdown-on-sigterm failover'
+  argument(s) must be one of the following: default, save, nosave, now, force
+
+— and CrashLoopBackOffs forever while the operator sits at Reconciling. 7.2,
+8.0 and 8.1 were each verified dead against this operator on the 2026-08-06
+drill: they are not older versions we still offer, they are versions that
+cannot start. Dropping them turns a create into a render-time failure instead
+of a database that never boots.
 */}}
 {{- define "database-cluster.image" -}}
 {{- if has .Values.engine (list "opensearch" "kafka") -}}
@@ -137,9 +151,8 @@ guard below turns an accidental future call into a loud render failure.
         "11.4" "docker.io/library/mariadb:11.4.12"
         "11.8" "docker.io/library/mariadb:11.8.8")
       "valkey" (dict
-        "7.2" "docker.io/valkey/valkey:7.2.14"
-        "8.0" "docker.io/valkey/valkey:8.0.10"
-        "8.1" "docker.io/valkey/valkey:8.1.9")
+        "9.0" "docker.io/valkey/valkey:9.0.5"
+        "9.1" "docker.io/valkey/valkey:9.1.1")
       "ferretdb" (dict
         "2.5" "ghcr.io/ferretdb/ferretdb:2.5.0"
         "2.7" "ghcr.io/ferretdb/ferretdb:2.7.0")
