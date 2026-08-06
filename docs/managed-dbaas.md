@@ -555,3 +555,24 @@ create_collection → insert_one → read → drop_collection as the `app` role 
 - **`not managed by stratos — refusing`** — the object lacks the
   `app.kubernetes.io/managed-by: stratos` label; pre-existing/hand-made objects are invisible
   and untouchable by design.
+- **Every engine fails to provision with `ResourceExhausted … VolumeLimitExceeded`** — the
+  dbaas project is out of Cinder volumes, and the usual cause is leaked PVs rather than real
+  usage. Check the ratio first: `kubectl get pv --no-headers | awk '{print $5}' | sort | uniq -c`.
+  A cluster with a handful of `Bound` and a hundred `Released` has been leaking. Two things
+  produce that:
+  - **The StorageClass reclaim policy.** `Retain` (the default on the ceph-az1 DBaaS cluster)
+    means deleting a database never frees its Cinder volume — the PV goes `Released` and stays
+    forever. Every database ever deleted permanently consumes quota until an operator removes
+    the volume by hand. Deliberate, but it needs a cleanup routine or the quota runs out.
+    Reclaiming one: patch the PV's `persistentVolumeReclaimPolicy` to `Delete` and the
+    controller deletes both the PV and the Cinder volume **within seconds** — irreversible, so
+    confirm the claim is genuinely gone first.
+  - **An operator livelock.** A single valkey left 90 `Released` PVs behind in one incident:
+    a foreground finalizer made Kubernetes stamp `foregroundDeletion` on the children, the
+    operator rebuilt them, and each round minted a fresh PVC and Cinder volume. Fixed by
+    deleting the ArgoCD Application with the **background** cascade finalizer; databases
+    created before that fix still carry the old finalizer and can still deadlock.
+- **A managed database reports Ready with no pods** — the ArgoCD Lua health checks are not
+  loaded. ArgoCD calls the Application Healthy the moment the manifests apply. Verify with
+  `kubectl -n argocd get cm argocd-cm -o yaml | grep resource.customizations.health` and
+  restart the application controller.

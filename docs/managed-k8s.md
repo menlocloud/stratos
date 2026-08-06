@@ -118,6 +118,16 @@ One-time, per management cluster (details + apply order: [`deploy/mgmt-cluster/R
    OCI registry at pinned versions. Never `latest`, never `0.0.0+latest` (plan §9) — the
    provider config and every existing cluster pin an exact version, and the registry must
    retain every pinned version.
+5. **On the OpenStack cloud itself — `force_config_drive = True` in nova.** Worker user-data
+   carries the kubeadm join. Without a config drive its only delivery path is the Neutron
+   metadata service, and a node that cannot reach it boots perfectly healthy, keeps the
+   hostname `localhost`, never runs kubeadm, and reports nothing in CAPI beyond "Waiting for
+   a Node with spec.providerID … to exist". Chart 0.12.0 forces a config drive on every node
+   the chart creates, which covers managed clusters; the nova setting is what protects
+   ordinary customer VMs on the same cloud. Observed 2026-08-06: the metadata service
+   answered for one of five nodes because `neutron-ovn-metadata-agent` had torn down the
+   `ovnmeta-<network>` namespace on the chassis while VMs of that network were still running
+   on it.
 
 ## 2. Provider setup (admin → Cloud providers → Add provider → Kubernetes)
 
@@ -348,6 +358,9 @@ kubectl get application <stc-id> -n argocd -o jsonpath='{.status.health}{"\n"}{.
 | Cluster stuck `PROGRESSING`, no endpoint | `kubectl get tcp -n st-<projectId>` → TCP status. Kamaji CP pods pending → mgmt capacity/datastore; endpoint absent → Octavia LB creation (`kubectl describe svc` in the namespace; floating network id wrong?). |
 | Workers not appearing | `kubectl get machinedeployments,machines -n st-<projectId>`; `kubectl describe` a stuck Machine → CAPO events. Usual causes: quota in the customer tenant, wrong Glance image id in the versions matrix, appcred invalid/revoked (check the `<stc-id>-cloud-config` secret exists and the appcred is alive in keystone). |
 | MachineDeployment stuck mid-rotation | Old machines not draining / new not joining: `kubectl get machinehealthchecks -n st-<projectId>`; verify the new image id boots (nova console of the new VM in the customer tenant). |
+| Machine `Provisioned` forever, "Waiting for a Node with spec.providerID … to exist" | **Read the node's serial console** — nothing else reports the cause. `Datasource DataSourceNone` + hostname `localhost` means cloud-init never got user-data: config drive missing (chart < 0.12.0, or nova without `force_config_drive`) or the chassis' `ovnmeta-<net>` namespace is gone. A kubeadm `couldn't validate the identity of the API Server … cluster-info` means the node could not reach the control-plane endpoint; chart ≥ 0.15.0 logs `waiting for control plane <host>:<port>` and polls for 10 minutes first, so the console says which of the two it was. |
+| One dead node in a small pool is never replaced | `maxUnhealthy` as a percentage cannot express "remediate one node" below 3 replicas — 40% of a 2-node group is 0.8, and one dead node is already over budget, so CAPI remediates nothing. Chart ≥ 0.13.0 resolves the percentage against the group size and floors it at 1. Check `kubectl get machinehealthcheck -n st-<projectId> -o jsonpath='{.items[*].spec.remediation}'`. |
+| Cross-node pod traffic blackholed (one-node cluster fine, two-node broken) | Both halves are needed and they are separate: the SENDING port needs the pod/service CIDRs as `allowedAddressPairs` (chart ≥ 0.11.0), and the RECEIVING node needs security-group rules admitting those CIDRs by `remoteIPPrefix` (chart ≥ 0.14.0) — CAPO's in-cluster rules match on `remoteGroupID`, which ML2/OVN compiles to an address set of FIXED IPs only, so a pod-sourced packet matches nothing on arrival. Discriminator: from a pod, cross-node fails; from `hostNetwork: true` on the same node, the same destination works. |
 | Delete hangs | Application stays with finalizer while the cascade runs — inspect what's left in the tree (`argocd app get`). Nova VMs refusing to delete block CAPI → fix in the customer tenant. Only remove the finalizer by hand if you accept orphaning the rendered objects, then GC per §3 above. |
 | Orphaned namespaces/secrets after teardown | §3 orphan-finalization check. |
 

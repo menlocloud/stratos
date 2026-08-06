@@ -34,6 +34,12 @@ selling, billing, and operating OpenStack cloud capacity (a Go backend, two Reac
   Ceph RGW S3 object-store backend that runs alongside it.
 - [openstack-notifications.md](openstack-notifications.md) — operator guide:
   wiring OpenStack/RabbitMQ events into the near-real-time notification webhook.
+- [managed-k8s.md](managed-k8s.md) — operator runbook for the `kamaji` provider:
+  standing up the management cluster, what the chart renders, fleet upgrades and
+  troubleshooting. Customer- and operator-facing help lives in the SPAs.
+- [managed-dbaas.md](managed-dbaas.md) — operator guide for the `dbaas` provider:
+  the DBaaS cluster and its operator suite, per-engine behaviour, backups,
+  connection secrets and troubleshooting.
 - [jobs-scheduling.md](jobs-scheduling.md) — scheduled jobs, the PostgreSQL
   distributed lock, and the optional RabbitMQ charge fan-out.
 
