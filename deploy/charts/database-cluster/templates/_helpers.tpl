@@ -323,8 +323,12 @@ app.kubernetes.io/component: haproxy
 app.kubernetes.io/name: mariadb-haproxy
 app.kubernetes.io/instance: {{ $name }}
 {{- else if eq .Values.engine "valkey" -}}
-app.kubernetes.io/name: valkey
-app.kubernetes.io/instance: {{ $name }}
+{{- /* valkey.io/cluster, the operator's own cluster label — NOT
+     app.kubernetes.io/instance, which valkey-operator stamps PER NODE as
+     `<cluster>-<shard>-<node>` (e.g. std-abc12345-0-0). Selecting on the bare
+     cluster id matched no pod, so this Service had zero endpoints and the
+     Octavia LB fronted nothing. Drill-verified off a live pod 2026-08-06. */}}
+valkey.io/cluster: {{ $name }}
 {{- else if eq .Values.engine "ferretdb" -}}
 app.kubernetes.io/name: ferretdb
 app.kubernetes.io/instance: {{ $name }}

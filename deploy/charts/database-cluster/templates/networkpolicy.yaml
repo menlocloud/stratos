@@ -59,6 +59,8 @@ spec:
       strimzi.io/cluster: {{ $name }}
       {{- else if eq .Values.engine "opensearch" }}
       opensearch.org/opensearch-cluster: {{ $name }}
+      {{- else if eq .Values.engine "valkey" }}
+      valkey.io/cluster: {{ $name }}
       {{- else }}
       app.kubernetes.io/instance: {{ $name }}
       {{- end }}
@@ -110,6 +112,8 @@ spec:
               strimzi.io/cluster: {{ $name }}
               {{- else if eq .Values.engine "opensearch" }}
               opensearch.org/opensearch-cluster: {{ $name }}
+              {{- else if eq .Values.engine "valkey" }}
+              valkey.io/cluster: {{ $name }}
               {{- else }}
               app.kubernetes.io/instance: {{ $name }}
               {{- end }}

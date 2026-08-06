@@ -23,6 +23,13 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
+# 0.6.5 fixes the valkey selectors, the same defect as 0.6.4 in a different engine. The NetworkPolicy
+# and the LB Service selected app.kubernetes.io/instance: <cluster>, but valkey-operator stamps that
+# label PER NODE as <cluster>-<shard>-<node> (std-abc12345-0-0). Neither selector matched a pod: the
+# LB had zero endpoints, and the unmatched NetworkPolicy left the namespace default-deny to block the
+# cluster bus, so the node logged "Cluster is currently down: I am part of a minority partition" and
+# the operator sat at MissingShards forever. Both now select valkey.io/cluster, the operator's own
+# cluster label. Drill-caught 2026-08-06.
 # 0.6.4 fixes the opensearch pod-label selectors: they were opster.io/*, but on operator 3.0.2 the
 # labels moved WITH the api group and pods carry opensearch.org/* only. The NetworkPolicy podSelector
 # therefore matched nothing — and a podSelector that matches nothing grants nothing, while the
@@ -60,4 +67,4 @@ type: application
 # 0.5.0 adds `scheduling` (nodeSelector + tolerations) so a provider can pin every pod a
 # database runs — engine, proxy, FerretDB frontend — onto a dedicated node pool. Additive: with
 # it unset the render is byte-identical to 0.4.5.
-version: 0.6.4
+version: 0.6.5
