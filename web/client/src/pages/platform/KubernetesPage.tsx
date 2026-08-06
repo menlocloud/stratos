@@ -582,7 +582,9 @@ export default function KubernetesPage() {
       },
       {
         id: "endpoint",
-        accessorFn: (r) => (cluster(r).endpoint as string) ?? "",
+        // endpoint_url is the copyable https://<name>:<port>; endpoint (host:port) is the
+        // fallback for rows synced before the URL existed.
+        accessorFn: (r) => (cluster(r).endpoint_url as string) || (cluster(r).endpoint as string) || "",
         header: "API endpoint",
         cell: ({ getValue }) => <span className="font-mono text-xs">{getValue() || "—"}</span>,
       },
@@ -754,7 +756,11 @@ export function KubernetesClusterDetailPage() {
         title={name || "Kubernetes cluster"}
         eyebrow="Kubernetes cluster"
         description={
-          resource ? ((cluster(resource).endpoint as string) || "endpoint pending…") : undefined
+          resource
+            ? ((cluster(resource).endpoint_url as string) ||
+               (cluster(resource).endpoint as string) ||
+               "endpoint pending…")
+            : undefined
         }
         actions={
           <>

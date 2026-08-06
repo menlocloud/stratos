@@ -1367,3 +1367,41 @@ func TestDNSServersSupported(t *testing.T) {
 		}
 	}
 }
+
+// The console must show the cluster's DNS NAME, not the Octavia VIP: the address moves if the load
+// balancer is rebuilt, and a URL built from it fails certificate validation because the apiserver
+// cert carries the name as its SAN. The name is read back off the cluster's OWN values, so a
+// cluster created under a different DNS zone keeps reporting what it actually answers to.
+func TestClusterDataEndpointPrefersTheDNSName(t *testing.T) {
+	app := func(fqdn string) map[string]any {
+		values := map[string]any{"kubernetesVersion": "1.36.3"}
+		if fqdn != "" {
+			values["kamajiControlPlane"] = map[string]any{"network": map[string]any{
+				"serviceAnnotations": map[string]any{"external-dns.alpha.kubernetes.io/hostname": fqdn},
+			}}
+		}
+		return map[string]any{
+			"metadata": map[string]any{"name": "stc-abcd1234"},
+			"spec":     map[string]any{"source": map[string]any{"helm": map[string]any{"valuesObject": values}}},
+		}
+	}
+	tcp := map[string]any{"status": map[string]any{"controlPlaneEndpoint": "10.200.40.199:6443"}}
+
+	got, _ := clusterData(app("stc-abcd1234.k8s.example.com"), tcp, nil, nil)["cluster"].(map[string]any)
+	if got["endpoint"] != "stc-abcd1234.k8s.example.com:6443" {
+		t.Errorf("endpoint = %v", got["endpoint"])
+	}
+	if got["endpoint_url"] != "https://stc-abcd1234.k8s.example.com:6443" {
+		t.Errorf("endpoint_url = %v", got["endpoint_url"])
+	}
+	// The VIP is still reported, because a customer whose DNS is not yet propagated needs it.
+	if got["endpoint_ip"] != "10.200.40.199" {
+		t.Errorf("endpoint_ip = %v", got["endpoint_ip"])
+	}
+
+	// No DNS zone on the provider: fall back to the address rather than inventing a name.
+	bare, _ := clusterData(app(""), tcp, nil, nil)["cluster"].(map[string]any)
+	if bare["endpoint"] != "10.200.40.199:6443" || bare["endpoint_url"] != "https://10.200.40.199:6443" {
+		t.Errorf("no-zone fallback = %v / %v", bare["endpoint"], bare["endpoint_url"])
+	}
+}

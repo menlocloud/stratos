@@ -163,10 +163,33 @@ func clusterData(app, tcp map[string]any, mds []map[string]any, osc map[string]a
 		c["oidc"] = oidc
 	}
 
-	// Control-plane endpoint from the TCP status (host:port the kubeconfig points at).
+	// Control-plane endpoint.
+	//
+	// The TCP reports the raw VIP:port its Service happens to hold. That is the wrong thing to
+	// hand a customer: the address belongs to an Octavia load balancer and moves if the LB is
+	// ever rebuilt, and a URL built from it fails certificate validation — the apiserver cert
+	// carries the cluster's DNS NAME as its SAN, not the address.
+	//
+	// The name already exists for exactly this: BuildValues publishes <clusterID>.<dnsZone> via
+	// external-dns and puts it in certSANs. Read it back off the cluster's OWN values rather than
+	// re-deriving it from the provider's current DNS zone, so a cluster created under a different
+	// zone keeps reporting the name it actually answers to.
+	//
+	// endpoint stays host:port — its existing shape, which the console renders and the readiness
+	// checklist tests for emptiness. endpoint_url is the copyable thing.
 	if tcp != nil {
 		if ep := digStr(tcp, "status", "controlPlaneEndpoint"); ep != "" {
-			c["endpoint"] = ep
+			host, port, found := strings.Cut(ep, ":")
+			if !found {
+				port = "6443"
+			}
+			c["endpoint_ip"] = host
+			if fqdn := digStr(values, "kamajiControlPlane", "network", "serviceAnnotations",
+				"external-dns.alpha.kubernetes.io/hostname"); fqdn != "" {
+				host = fqdn
+			}
+			c["endpoint"] = host + ":" + port
+			c["endpoint_url"] = "https://" + host + ":" + port
 		}
 		if v := digStr(tcp, "status", "kubernetesResources", "version", "status"); v != "" {
 			c["cp_status"] = v
