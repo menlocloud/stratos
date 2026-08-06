@@ -1137,8 +1137,16 @@ func TestSyncProviderList(t *testing.T) {
 	if c["status"] != "READY" || c["sync_status"] != "Synced" {
 		t.Errorf("status = %v / %v", c["status"], c["sync_status"])
 	}
-	if c["endpoint"] != "10.0.0.5:6443" {
+	// The cluster's DNS name, not the Octavia VIP — the address moves when the LB is rebuilt and
+	// the apiserver cert is issued for the name. The VIP stays available as endpoint_ip.
+	if c["endpoint"] != "stc-abcd1234.k8s.example.com:6443" {
 		t.Errorf("endpoint = %v", c["endpoint"])
+	}
+	if c["endpoint_url"] != "https://stc-abcd1234.k8s.example.com:6443" {
+		t.Errorf("endpoint_url = %v", c["endpoint_url"])
+	}
+	if c["endpoint_ip"] != "10.0.0.5" {
+		t.Errorf("endpoint_ip = %v", c["endpoint_ip"])
 	}
 	if c["created_at"] != "2026-07-12T00:00:00Z" {
 		t.Errorf("created_at = %v", c["created_at"])
