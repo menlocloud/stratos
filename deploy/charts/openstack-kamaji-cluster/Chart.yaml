@@ -16,6 +16,14 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.14.0 finishes what 0.11.0 started: cross-node POD traffic needs the RECEIVING side opened too.
+# Every in-cluster rule CAPO writes matches on remoteGroupID, which ML2/OVN compiles to an address
+# set of the member ports' FIXED IPs — a pod-sourced packet matches nothing and is dropped on
+# arrival, however permissive the sender's allowedAddressPairs are. Cilium native routing does not
+# masquerade traffic aimed at other cluster nodes, so pod addresses really do arrive on the wire.
+# Proven live: from a pod, cross-node pod IP AND cross-node node IP both failed, while the same
+# destination and port from hostNetwork succeeded. Now every node also admits the cluster's own pod
+# and service CIDRs by remoteIPPrefix.
 # 0.13.0 resolves the health check's maxUnhealthy PERCENTAGE against the node group's own size and
 # floors it at 1. CAPI remediates nothing once the unhealthy count exceeds the budget, so 40% of a
 # 2-node group is 0.8 and one dead node (50%) was already over it — the pool sizes customers
@@ -69,4 +77,4 @@ type: application
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.13.0
+version: 0.14.0
