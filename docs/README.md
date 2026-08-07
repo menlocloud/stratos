@@ -71,3 +71,12 @@ rationale, in Nygard format:
   distributed lock, with optional broker fan-out.
 - [ADR-0008](adr/0008-postgres-jsonb-document-store.md) — PostgreSQL + JSONB as
   the document store (supersedes ADR-0004's engine choice).
+
+## Proposals
+
+Design documents for work that is not built yet. Read these as arguments to be
+reviewed, not as descriptions of the system.
+
+- [sandbox-plan.md](sandbox-plan.md) — add code sandboxes (E2B-style
+  Firecracker microVMs) as a sellable SKU: architecture, data model, billing,
+  phasing, and the open questions.
