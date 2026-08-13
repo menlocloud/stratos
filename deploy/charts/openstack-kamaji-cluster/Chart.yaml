@@ -16,6 +16,10 @@ description: >-
   in the management cluster (no dedicated CP VMs needed).
 name: openstack-kamaji-cluster
 type: application
+# 0.16.0 turns on the autoscaler's --enforce-node-group-min-size. Upstream defaults it to false,
+# where a group's min size only bounds scale-DOWN — raising min above the current node count
+# changed nothing until pending pods happened to force a scale-up, which read as "edited the node
+# group, nothing happened". Now the autoscaler grows the group to its min directly.
 # 0.15.0 makes a worker WAIT for the control-plane endpoint before running kubeadm join. The Kamaji
 # control plane is a Service of type LoadBalancer, so its endpoint is an Octavia load balancer that
 # Octavia builds at the same time CAPI boots the workers — the workers race it. kubeadm's discovery
@@ -86,4 +90,4 @@ type: application
 # on provider networks). 0.4.1 fixed a render bug that made every cluster unprovisionable: the
 # `internalNetwork` defaults shipped `networkFilter: {id: }`, a truthy map, so the chart took the
 # bring-your-own-network branch and emitted `network: {id: null}` with no subnet. Do not use 0.4.0.
-version: 0.15.0
+version: 0.16.0
