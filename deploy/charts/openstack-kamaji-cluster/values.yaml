@@ -602,6 +602,10 @@ autoscaler:
     logtostderr: true
     stderrthreshold: info
     v: 4
+    # Upstream default is false, under which the min size is only a scale-DOWN floor:
+    # raising a group's min above its current size does nothing until pod pressure
+    # forces a scale-up. With it on, the autoscaler grows the group to min directly.
+    enforce-node-group-min-size: "true"
     cordon-node-before-terminating: "true"
     expander: least-waste,random
     skip-nodes-with-system-pods: "true"
