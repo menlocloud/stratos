@@ -20,8 +20,10 @@ provider keeps this engine behind its beta flag:
     all — a client that lands on the wrong node gets a MOVED redirect to a
     DB-cluster pod IP that is unroutable from the tenant VPC. Safe at
     instances 1 (one shard, one keyspace owner); shards > 1 is not offered.
-  * whether the ACL user below is actually the credential
-    engines.go ConnectionSecret hands customers.
+  * ~~whether the ACL user below is actually the credential engines.go
+    ConnectionSecret hands customers~~ — it is, live-verified: the account
+    authenticated but had NO permissions until the explicit `permissions`
+    grant below (see its note).
 */}}
 {{- $name := include "database-cluster.name" . }}
 apiVersion: valkey.io/v1alpha1
@@ -41,8 +43,18 @@ spec:
        secret (engines.go ConnectionSecret) rather than a chart-generated
        password, which would re-roll on every ArgoCD render. */}}
   users:
+    {{/* permissions is the operator's RAW ACL tail, and it is NOT optional in
+         practice: buildUserAcl (operator users.go) renders EXACTLY the rules
+         declared, and a `user … on #hash` line with no rules is a valkey user
+         with no keys and no commands — every command answered NOPERM. That is
+         how the exposed account shipped once: authenticated fine, could not
+         GET/SET a thing. `default` gets the full grant (the customer's own
+         instance — the postgresql superuser posture); customer users below
+         additionally lose @admin so an app credential cannot CONFIG SET /
+         CLUSTER / ACL against the operator's management. */}}
     - name: default
       enabled: true
+      permissions: "~* &* +@all"
       passwordSecret:
         name: {{ $name }}-auth
         {{- /* keys, PLURAL and an ARRAY — valkey supports several passwords per
@@ -69,6 +81,7 @@ spec:
          '_' -> '-' (config.go K8sName) to stay a legal k8s name. */}}
     - name: {{ .name }}
       enabled: true
+      permissions: "~* &* +@all -@admin"
       passwordSecret:
         name: {{ $name }}-u-{{ .name | replace "_" "-" }}
         keys:
