@@ -39,7 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per node (`<cluster>-<shard>-<node>`), so no pod ever matched — same gap for OpenSearch
   (`opensearch.org/opensearch-cluster`) and Kafka (`strimzi.io/cluster`), whose operators also
   stamp their own cluster label. Log reads now use the per-engine pod label, the same one the
-  chart's NetworkPolicy already selects on. (#170)
+  chart's NetworkPolicy already selects on. Two more valkey-only mismatches fixed in the same
+  read (verified against the pinned valkey-operator v0.4.0 sources): the operator prefixes its
+  workload names with `valkey-`, so the pod-name ownership check now expects
+  `valkey-<id>-…` instead of the bare id, and the main container is named `server`, not
+  `valkey`. (#170)
 - Creating a database or user whose name contains an underscore (e.g. `keycloak_stag`) via
   **Databases and users → Manage** failed with `internal error`: `_` is a legal SQL identifier
   character but illegal in Kubernetes object names, so the derived user Secret and
