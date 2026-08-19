@@ -379,9 +379,11 @@ func TestPodSelectorFor(t *testing.T) {
 	}
 }
 
-// TestLogs drives the log read end to end against pods labelled the way each operator actually
-// labels them. The valkey pod deliberately carries app.kubernetes.io/instance in the operator's
-// PER-NODE form — the exact shape that made the old selector match nothing.
+// TestLogs drives the log read end to end against pods named and labelled EXACTLY the way each
+// operator does it. The valkey pod is the operator's real shape (v0.4.0): the workload name is
+// `valkey-<cluster>-<shard>-<node>` (its own resourcePrefix — it does NOT start with the
+// database id), app.kubernetes.io/instance carries the PER-NODE value, and the main container
+// is `server`. Any of those three assumed wrong made the Logs tab of a healthy valkey fail.
 func TestLogs(t *testing.T) {
 	api := newFakeAPI()
 	s := NewWithAPI(api, testConfig(), "svc-dbaas")
@@ -391,8 +393,8 @@ func TestLogs(t *testing.T) {
 			"metadata": map[string]any{"name": name, "labels": labels},
 		}
 	}
-	seed("std-v-0-0", map[string]any{
-		"valkey.io/cluster":           "std-v",
+	seed("valkey-std-v-0-0-0", map[string]any{
+		"valkey.io/cluster":          "std-v",
 		"app.kubernetes.io/instance": "std-v-0-0", // per-node, NOT the cluster id
 	})
 	seed("std-p-1", map[string]any{"app.kubernetes.io/instance": "std-p"})
@@ -403,7 +405,7 @@ func TestLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valkey logs: %v", err)
 	}
-	if len(logs) != 1 || logs[0]["pod"] != "std-v-0-0" || logs[0]["container"] != "valkey" {
+	if len(logs) != 1 || logs[0]["pod"] != "valkey-std-v-0-0-0" || logs[0]["container"] != "server" {
 		t.Fatalf("valkey logs = %v", logs)
 	}
 	logs, err = s.Logs(context.Background(), "p1", "std-p", EnginePostgreSQL, 100)

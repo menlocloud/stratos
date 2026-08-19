@@ -727,9 +727,10 @@ func (s *Service) Logs(ctx context.Context, projectID, dbID, engine string, tail
 		return nil, err
 	}
 	out := make([]map[string]any, 0, len(pods))
+	namePrefix := PodNamePrefixFor(engine, dbID)
 	for _, pod := range pods {
 		name := digStr(pod, "metadata", "name")
-		if name == "" || !strings.HasPrefix(name, dbID) {
+		if name == "" || !strings.HasPrefix(name, namePrefix) {
 			continue
 		}
 		// A pod that has not started yet has no log; report it rather than failing the batch,

@@ -119,7 +119,10 @@ func LogContainerFor(engine string) string {
 	case EngineMariaDB:
 		return "mariadb"
 	case EngineValkey:
-		return "valkey"
+		// "server", NOT "valkey": valkey-operator names the main container `server`
+		// (valkeynode_resources.go on the pinned v0.4.0). Asking for `valkey` made every
+		// per-pod log read fail on a healthy database.
+		return "server"
 	case EngineOpenSearch:
 		return "opensearch"
 	case EngineKafka:
@@ -148,6 +151,18 @@ func PodSelectorFor(engine, dbID string) string {
 		return "strimzi.io/cluster=" + dbID
 	}
 	return "app.kubernetes.io/instance=" + dbID
+}
+
+// PodNamePrefixFor is the name prefix every pod of one database carries — Logs' second
+// ownership check next to PodSelectorFor. Every operator here names workloads off the CR name
+// (= the resource id) EXCEPT valkey-operator, which prepends its own "valkey-"
+// (resourcePrefix in its utils.go, pinned v0.4.0): pods are valkey-<id>-<shard>-<node>-…, so
+// requiring the bare id matched no pod and Logs failed on a healthy valkey.
+func PodNamePrefixFor(engine, dbID string) string {
+	if engine == EngineValkey {
+		return "valkey-" + dbID
+	}
+	return dbID
 }
 
 // BackupCRFor maps an engine to the custom resource its operator produces per backup run

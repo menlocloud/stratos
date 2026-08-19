@@ -23,6 +23,13 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
+# 0.7.1 grants the valkey ACL users their permissions. The operator's buildUserAcl renders
+#   EXACTLY the rules a user declares, and an entry with none is `user … on #hash` — a valkey
+#   user with no keys and no commands. The exposed `default` account therefore authenticated
+#   and then got NOPERM on every command (live-caught 2026-08-19). `default` now carries
+#   `~* &* +@all` (the customer's own instance — the postgresql superuser posture); customer
+#   users get `~* &* +@all -@admin` so an app credential cannot CONFIG SET / CLUSTER / ACL
+#   against the operator's own management.
 # 0.7.0 adds valkey ACL users and fixes underscore idents breaking every access object.
 #   valkey: values.users now renders onto the ValkeyCluster's spec.users next to `default` —
 #     the same live-verified shape (name + passwordSecret keys: [password], no explicit ACL
@@ -77,4 +84,4 @@ type: application
 # 0.5.0 adds `scheduling` (nodeSelector + tolerations) so a provider can pin every pod a
 # database runs — engine, proxy, FerretDB frontend — onto a dedicated node pool. Additive: with
 # it unset the render is byte-identical to 0.4.5.
-version: 0.7.0
+version: 0.7.1
