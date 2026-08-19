@@ -20,7 +20,9 @@ customer already has.
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: {{ $name }}-db-{{ .name }}
+  {{- /* '_' -> '-' in the CR NAME only (spec.name keeps the real identifier):
+       idents allow underscores, k8s object names do not (config.go K8sName). */}}
+  name: {{ $name }}-db-{{ .name | replace "_" "-" }}
   labels:
     {{- include "database-cluster.labels" $ | nindent 4 }}
   annotations:

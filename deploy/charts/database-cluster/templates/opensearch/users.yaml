@@ -22,7 +22,10 @@ passwordFrom points at the Secret stratos wrote; values never carry it.
 */}}
 {{- $name := include "database-cluster.name" . }}
 {{- range .Values.users }}
-{{- $login := printf "%s-u-%s" $name .name }}
+{{- /* '_' -> '-': the CR name doubles as the login and k8s names take no
+     underscore (config.go K8sName; the sync's login echo applies the same
+     mapping). The Secret stratos wrote already carries the mapped name. */}}
+{{- $login := printf "%s-u-%s" $name (.name | replace "_" "-") }}
 ---
 apiVersion: opensearch.org/v1
 kind: OpensearchUser
@@ -65,7 +68,7 @@ spec:
     {{- $custom := dict }}
     {{- range $.Values.opensearch.roles }}{{ $_ := set $custom .name true }}{{ end }}
     {{- range . }}
-    - {{ if index $custom . }}{{ printf "%s-r-%s" $name . }}{{ else }}{{ . }}{{ end }}
+    - {{ if index $custom . }}{{ printf "%s-r-%s" $name (. | replace "_" "-") }}{{ else }}{{ . }}{{ end }}
     {{- end }}
 {{- end }}
 {{- end }}

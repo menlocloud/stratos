@@ -79,14 +79,15 @@ func (o EngineOffer) ReplicaChoices() []int {
 // Restore against it (sync-wave 1), which the operator carries out. Same outcome for the
 // customer, two phases underneath, and it needs a specific backup NAME rather than a search.
 //
-// MANAGE_ACCESS (postgresql/mariadb/opensearch) is customer-managed logical databases, users
-// and grants, declared in values and rendered as the operators' own CRs (CNPG Database +
-// managed.roles; mariadb Database/User/Grant; OpensearchUser + OpensearchUserRoleBinding).
+// MANAGE_ACCESS (postgresql/mariadb/opensearch/valkey) is customer-managed logical databases,
+// users and grants, declared in values and rendered as the operators' own CRs (CNPG Database +
+// managed.roles; mariadb Database/User/Grant; OpensearchUser + OpensearchUserRoleBinding) or,
+// for valkey, extra ACL entries on the ValkeyCluster's own spec.users list — valkey has no
+// logical databases, so its surface is USERS ONLY (ValidateAccess enforces that).
 // mysql is deliberately OUT: the Percona ps-operator has no user/database CRDs, so there is
 // nothing to reconcile against and a SQL-over-exec implementation is not a values-shaped
-// mechanism. valkey/ferretdb/kafka are out by nature — valkey has no user model in the pinned
-// operator, ferretdb authenticates through its CNPG backend's app role, and kafka already ships
-// its KafkaUser.
+// mechanism. ferretdb/kafka are out by nature — ferretdb authenticates through its CNPG
+// backend's app role, and kafka already ships its KafkaUser.
 //
 // SET_AUTOSCALE (all engines) opts into the surcharge-priced vertical autoscale tick
 // (autoscale.go): CPU/RAM bounds work wherever RESIZE does; the disk leg additionally requires
@@ -95,9 +96,12 @@ var Capabilities = map[string]map[string]bool{
 	EnginePostgreSQL: {"SET_PARAMETERS": true, "BACKUP": true, "RESTORE": true, "SET_READ_ENDPOINT": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
 	EngineMySQL:      {"SET_PARAMETERS": true, "BACKUP": true, "RESTORE": true, "SET_READ_ENDPOINT": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 	EngineMariaDB:    {"SET_PARAMETERS": true, "BACKUP": true, "RESTORE": true, "SET_READ_ENDPOINT": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
-	EngineValkey:     {"SET_PARAMETERS": true, "RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false, "SET_AUTOSCALE": true},
+	EngineValkey:     {"SET_PARAMETERS": true, "RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": false, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
 	EngineFerretDB:   {"BACKUP": true, "RESTORE": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": true, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
-	EngineOpenSearch: {"SET_PARAMETERS": true, "RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_CUSTOM_DOMAIN": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true},
+	// SET_INDEX_POLICIES was gated by the handler but declared by NO engine, so the action 400'd
+	// before its dispatch could run and opensearch retention policies were dead end-to-end (the
+	// console offered the dialog, the server refused every submit).
+	EngineOpenSearch: {"SET_PARAMETERS": true, "RESIZE": true, "RESIZE_STORAGE": false, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": false, "UPGRADE": true, "SET_SSO": true, "SET_CUSTOM_DOMAIN": true, "SET_AUTOSCALE": true, "MANAGE_ACCESS": true, "SET_INDEX_POLICIES": true},
 	EngineKafka:      {"SET_PARAMETERS": true, "RESIZE": true, "RESIZE_STORAGE": true, "SCALE_REPLICAS": true, "RESTART": false, "RESET_PASSWORD": true, "UPGRADE": true, "SET_AUTOSCALE": true},
 }
 
@@ -122,6 +126,28 @@ func LogContainerFor(engine string) string {
 		return "kafka"
 	}
 	return ""
+}
+
+// PodSelectorFor is the label selector matching EVERY pod of one database — the ownership
+// boundary for pod-level reads (Logs). Derivation twin of the podSelector switch in the chart's
+// templates/networkpolicy.yaml — change both together. app.kubernetes.io/instance is the
+// convention most operators follow (CNPG via inheritedMetadata, Percona, mariadb, the chart's
+// own Deployments), but three stamp their own cluster label instead:
+//   - valkey:     valkey.io/cluster — the operator stamps app.kubernetes.io/instance PER NODE
+//     as `<cluster>-<shard>-<node>`, so selecting on the bare id matched no pod and the Logs
+//     read failed on a healthy database (drill-verified 2026-08-06)
+//   - opensearch: opensearch.org/opensearch-cluster (labels moved with the api group on 3.0.2)
+//   - kafka:      strimzi.io/cluster
+func PodSelectorFor(engine, dbID string) string {
+	switch engine {
+	case EngineValkey:
+		return "valkey.io/cluster=" + dbID
+	case EngineOpenSearch:
+		return "opensearch.org/opensearch-cluster=" + dbID
+	case EngineKafka:
+		return "strimzi.io/cluster=" + dbID
+	}
+	return "app.kubernetes.io/instance=" + dbID
 }
 
 // BackupCRFor maps an engine to the custom resource its operator produces per backup run
@@ -246,13 +272,17 @@ func NeedsAuthSecret(engine string) bool {
 }
 
 // DefaultUser is the exposed account name when ConnectionSecret carries no userKey. Kafka's is
-// derived from the database id (the KafkaUser name IS the SASL username).
+// derived from the database id (the KafkaUser name IS the SASL username); valkey's is the
+// `default` ACL user the chart wires to the <id>-auth secret — shown so the connection panel
+// names the account, and reserved so MANAGE_ACCESS cannot redefine it.
 func DefaultUser(engine, dbID string) string {
 	switch engine {
 	case EngineMySQL:
 		return "root"
 	case EngineMariaDB:
 		return "app"
+	case EngineValkey:
+		return "default"
 	case EngineKafka:
 		return dbID + "-app"
 	}
@@ -324,7 +354,9 @@ func URI(engine, user, pass, host string, port int, db string) string {
 	case EngineMySQL, EngineMariaDB:
 		return fmt.Sprintf("mysql://%s@%s:%d/%s", u, host, port, db)
 	case EngineValkey:
-		return fmt.Sprintf("redis://:%s@%s:%d/0", url.QueryEscape(pass), host, port)
+		// The username matters now that customer ACL users exist: `redis://default:…` and a
+		// customer user's URI differ only here.
+		return fmt.Sprintf("redis://%s@%s:%d/0", u, host, port)
 	case EngineFerretDB:
 		return fmt.Sprintf("mongodb://%s@%s:%d/%s", u, host, port, db)
 	case EngineOpenSearch:

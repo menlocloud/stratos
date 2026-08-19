@@ -712,15 +712,17 @@ func (s *Service) accessUsernames(ctx context.Context, dbID string) (map[string]
 // stratos stores.
 //
 // The pod filter is the ownership boundary: one namespace holds every database in a project, so
-// a selector that leaked would hand one customer another's log. It is the chart's own
-// app.kubernetes.io/instance label, which is the resource id.
+// a selector that leaked would hand one customer another's log. PodSelectorFor knows which label
+// each operator actually stamps cluster-wide — app.kubernetes.io/instance was assumed here and
+// matched NOTHING for valkey (per-node values), opensearch and kafka (own cluster labels), so a
+// healthy database's Logs tab returned an internal error.
 func (s *Service) Logs(ctx context.Context, projectID, dbID, engine string, tailLines int) ([]map[string]any, error) {
 	container := LogContainerFor(engine)
 	if container == "" {
 		return nil, fmt.Errorf("dbaas: engine %q has no readable log", engine)
 	}
 	ns := NamespaceFor(projectID)
-	pods, err := s.api.ListPods(ctx, ns, "app.kubernetes.io/instance="+dbID)
+	pods, err := s.api.ListPods(ctx, ns, PodSelectorFor(engine, dbID))
 	if err != nil {
 		return nil, err
 	}

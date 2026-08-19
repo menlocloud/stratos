@@ -19,7 +19,9 @@ raw action strings.
 apiVersion: opensearch.org/v1
 kind: OpensearchRole
 metadata:
-  name: {{ $name }}-r-{{ .name }}
+  {{- /* '_' -> '-': idents allow underscores, k8s names do not (config.go
+       K8sName); users.yaml resolves customer roles with the same mapping. */}}
+  name: {{ $name }}-r-{{ .name | replace "_" "-" }}
   labels:
     {{- include "database-cluster.labels" $ | nindent 4 }}
   annotations:

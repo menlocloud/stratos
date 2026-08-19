@@ -90,7 +90,17 @@ func CustomTLSSecretName(dbID string) string { return dbID + "-custom-tls" }
 // UserSecretName is the stratos-owned password Secret for a customer-created database user.
 // Passwords NEVER travel through values (the Application CR is argocd-readable) — the chart
 // only references this Secret by name from the engine's User/role CR.
-func UserSecretName(dbID, username string) string { return dbID + "-u-" + username }
+func UserSecretName(dbID, username string) string { return dbID + "-u-" + K8sName(username) }
+
+// K8sName maps a customer identifier to the shape a Kubernetes object name may take. identRE
+// allows '_' (a legitimate SQL identifier character) but RFC1123 names do not — creating the
+// user Secret or any derived CR for `keycloak_stag` was a 422 the customer saw as an internal
+// error. '-' cannot appear in an ident, so the mapping is injective for a SINGLE ident. It is
+// NOT injective for idents joined with '-' (`a_b`+`c` and `a`+`b_c` both map to `a-b-c`), so a
+// name built from a PAIR must be collision-checked — ValidateAccess does, for the one such name
+// (mariadb's per-grant CR). The chart applies the SAME mapping wherever it derives an object
+// name from a customer ident (`replace "_" "-"`) — change both together.
+func K8sName(ident string) string { return strings.ReplaceAll(ident, "_", "-") }
 
 // identRE is the ONLY shape a customer-supplied database or user name may take. This is a
 // security control, not cosmetics: mariadb-operator interpolates these strings straight into
@@ -108,6 +118,9 @@ var reservedIdents = map[string]bool{
 	"postgres": true, "app": true, "root": true, "mysql": true, "mariadb": true,
 	"admin": true, "kibanaserver": true, "template0": true, "template1": true,
 	"streaming_replica": true, "cnpg_metrics_exporter": true,
+	// valkey's built-in ACL account — the credential the connection panel hands out; a customer
+	// redefining it would retarget that credential.
+	"default": true,
 }
 
 // NetShareSecretName is the per-database neutron-RBAC marker secret (DB-cluster side only): the
@@ -642,6 +655,18 @@ func ValidateAccess(engine string, dbs []DBDatabase, users []DBUser, roles []OSR
 			return err
 		}
 	}
+	// valkey is USERS ONLY: one keyspace, no logical databases to declare or grant. Each user is
+	// an ACL entry on the ValkeyCluster CR, authenticated from its stratos-owned Secret.
+	if engine == EngineValkey {
+		if len(dbs) > 0 {
+			return fmt.Errorf("valkey has no logical databases — manage users only")
+		}
+		for _, u := range users {
+			if len(u.Databases) > 0 {
+				return fmt.Errorf("user %q: valkey users take no database grants", u.Name)
+			}
+		}
+	}
 	custom := map[string]bool{}
 	for _, r := range roles {
 		custom[r.Name] = true
@@ -681,11 +706,23 @@ func ValidateAccess(engine string, dbs []DBDatabase, users []DBUser, roles []OSR
 		}
 		dbNames[d.Name] = true
 	}
+	// Derived-name collision guard. The chart renders one object per (user, database) grant named
+	// <id>-g-<K8sName(user)>-<K8sName(db)> (mariadb access.yaml); K8sName is injective per ident
+	// but the pair is JOINED with the same '-' the mapping produces, so `a_b`×`c` and `a`×`b_c`
+	// derive one name — two CRs with the same identity wedge the ArgoCD sync. Refuse the list
+	// instead, uniformly across engines: the rule is about the platform's name derivation, not one
+	// operator. This also catches the same database listed twice on one user.
+	grants := map[string][2]string{}
 	for _, u := range users {
 		for _, d := range u.Databases {
 			if !dbNames[d] {
 				return fmt.Errorf("user %q: database %q is not in the list", u.Name, d)
 			}
+			key := K8sName(u.Name) + "-" + K8sName(d)
+			if prev, dup := grants[key]; dup {
+				return fmt.Errorf("the grant of %q on %q collides with the grant of %q on %q — underscores and the name separator both become %q; rename one", u.Name, d, prev[0], prev[1], "-")
+			}
+			grants[key] = [2]string{u.Name, d}
 		}
 	}
 	return nil

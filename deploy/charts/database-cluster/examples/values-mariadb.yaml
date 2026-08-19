@@ -25,6 +25,13 @@ stratos:
   displayName: legacy-mariadb
 monitoring:
   enabled: false
+# Customer-managed access — underscore names pin the '_' -> '-' object-name
+# mapping across Database/User/Grant CRs and the password Secret reference.
+databases:
+  - name: shop_orders
+users:
+  - name: shop_writer
+    databases: [shop_orders]
 mariadb:
   parameters:
     max_connections: "300"

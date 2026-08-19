@@ -23,7 +23,9 @@ apiVersion: opensearch.org/v1
      api-resources --api-group=opensearch.org` is the authority. */}}
 kind: OpenSearchISMPolicy
 metadata:
-  name: {{ $name }}-p-{{ .name }}
+  {{- /* '_' -> '-': idents allow underscores, k8s names do not (config.go
+       K8sName). policyId mirrors the CR name so the two can never diverge. */}}
+  name: {{ $name }}-p-{{ .name | replace "_" "-" }}
   labels:
     {{- include "database-cluster.labels" $ | nindent 4 }}
   annotations:
@@ -31,7 +33,7 @@ metadata:
 spec:
   opensearchCluster:
     name: {{ $name }}
-  policyId: {{ $name }}-p-{{ .name }}
+  policyId: {{ $name }}-p-{{ .name | replace "_" "-" }}
   description: {{ printf "stratos retention policy %s" .name | quote }}
   defaultState: hot
   applyToExistingIndices: true

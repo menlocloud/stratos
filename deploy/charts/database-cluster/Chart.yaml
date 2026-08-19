@@ -23,6 +23,16 @@ type: application
 #
 # engineVersion→image maps live in templates/_helpers.tpl and are ops-updatable
 # per chart release (bump images -> bump version -> re-pin).
+# 0.7.0 adds valkey ACL users and fixes underscore idents breaking every access object.
+#   valkey: values.users now renders onto the ValkeyCluster's spec.users next to `default` —
+#     the same live-verified shape (name + passwordSecret keys: [password], no explicit ACL
+#     rule fields), each authenticated from the stratos-written <id>-u-<name> Secret. This is
+#     what backs MANAGE_ACCESS for valkey (users only; no logical databases).
+#   '_' -> '-' in every object NAME derived from a customer ident (postgresql passwordSecret +
+#     Database CR, mariadb Database/User/Grant + Secret ref, opensearch user/role/policy CR
+#     names, valkey user Secret): idents legally carry underscores, RFC1123 names do not, so a
+#     `keycloak_stag` user 422'd at the API server (stratos issue #168). SQL-side identifiers
+#     (spec.name/username/database, managed role names) stay raw. Twin: config.go K8sName.
 # 0.6.5 fixes the valkey selectors, the same defect as 0.6.4 in a different engine. The NetworkPolicy
 # and the LB Service selected app.kubernetes.io/instance: <cluster>, but valkey-operator stamps that
 # label PER NODE as <cluster>-<shard>-<node> (std-abc12345-0-0). Neither selector matched a pod: the
@@ -67,4 +77,4 @@ type: application
 # 0.5.0 adds `scheduling` (nodeSelector + tolerations) so a provider can pin every pod a
 # database runs — engine, proxy, FerretDB frontend — onto a dedicated node pool. Additive: with
 # it unset the render is byte-identical to 0.4.5.
-version: 0.6.5
+version: 0.7.0
