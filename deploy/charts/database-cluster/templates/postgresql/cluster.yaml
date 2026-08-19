@@ -57,7 +57,9 @@ spec:
         ensure: present
         login: true
         passwordSecret:
-          name: {{ include "database-cluster.name" $ }}-u-{{ .name }}
+          {{- /* '_' -> '-': idents allow underscores, Secret names do not
+               (internal/cloud/dbaas/config.go K8sName — change both together). */}}
+          name: {{ include "database-cluster.name" $ }}-u-{{ .name | replace "_" "-" }}
         {{- with .inRoles }}
         inRoles:
           {{- toYaml . | nindent 10 }}

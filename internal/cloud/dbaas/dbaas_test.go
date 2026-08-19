@@ -347,6 +347,69 @@ func TestNames(t *testing.T) {
 	if NetShareSecretName("std-x") != "std-x-net-share" {
 		t.Fatal("NetShareSecretName")
 	}
+	// '_' is a legal ident character but not a legal k8s-name character; the mapping is what
+	// keeps a `keycloak_stag` user from 422-ing every derived Secret/CR (issue #168). '-' cannot
+	// appear in an ident, so the mapping cannot collide two idents.
+	if K8sName("keycloak_stag") != "keycloak-stag" || K8sName("alice") != "alice" {
+		t.Fatal("K8sName")
+	}
+	if UserSecretName("std-x", "keycloak_stag") != "std-x-u-keycloak-stag" {
+		t.Fatal("UserSecretName must be a legal k8s name")
+	}
+}
+
+// TestPodSelectorFor pins the per-engine pod ownership label — the derivation twin of the chart's
+// networkpolicy.yaml podSelector switch. app.kubernetes.io/instance matched NOTHING for the three
+// operators that stamp their own cluster label, which surfaced as issue #170: a healthy valkey's
+// Logs tab returned an internal error because the pod list came back empty.
+func TestPodSelectorFor(t *testing.T) {
+	cases := map[string]string{
+		EnginePostgreSQL: "app.kubernetes.io/instance=std-1",
+		EngineMySQL:      "app.kubernetes.io/instance=std-1",
+		EngineMariaDB:    "app.kubernetes.io/instance=std-1",
+		EngineFerretDB:   "app.kubernetes.io/instance=std-1",
+		EngineValkey:     "valkey.io/cluster=std-1",
+		EngineOpenSearch: "opensearch.org/opensearch-cluster=std-1",
+		EngineKafka:      "strimzi.io/cluster=std-1",
+	}
+	for engine, want := range cases {
+		if got := PodSelectorFor(engine, "std-1"); got != want {
+			t.Errorf("%s: selector %q, want %q", engine, got, want)
+		}
+	}
+}
+
+// TestLogs drives the log read end to end against pods labelled the way each operator actually
+// labels them. The valkey pod deliberately carries app.kubernetes.io/instance in the operator's
+// PER-NODE form — the exact shape that made the old selector match nothing.
+func TestLogs(t *testing.T) {
+	api := newFakeAPI()
+	s := NewWithAPI(api, testConfig(), "svc-dbaas")
+	ns := NamespaceFor("p1")
+	seed := func(name string, labels map[string]any) {
+		api.pods[key(ns, name)] = map[string]any{
+			"metadata": map[string]any{"name": name, "labels": labels},
+		}
+	}
+	seed("std-v-0-0", map[string]any{
+		"valkey.io/cluster":           "std-v",
+		"app.kubernetes.io/instance": "std-v-0-0", // per-node, NOT the cluster id
+	})
+	seed("std-p-1", map[string]any{"app.kubernetes.io/instance": "std-p"})
+	// A sibling database in the same namespace must never leak into the read.
+	seed("std-x-1", map[string]any{"app.kubernetes.io/instance": "std-x"})
+
+	logs, err := s.Logs(context.Background(), "p1", "std-v", EngineValkey, 100)
+	if err != nil {
+		t.Fatalf("valkey logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0]["pod"] != "std-v-0-0" || logs[0]["container"] != "valkey" {
+		t.Fatalf("valkey logs = %v", logs)
+	}
+	logs, err = s.Logs(context.Background(), "p1", "std-p", EnginePostgreSQL, 100)
+	if err != nil || len(logs) != 1 || logs[0]["pod"] != "std-p-1" {
+		t.Fatalf("postgres logs = %v (%v)", logs, err)
+	}
 }
 
 // TestBuildValues pins EVERY chart-values key per engine — the chart-drift tripwire (the
@@ -832,7 +895,9 @@ func TestConnectionSecretContract(t *testing.T) {
 		{EngineFerretDB, "std-1-pg-app", "username", "password", "dbname", 27017, "", ""},
 		{EngineMySQL, "std-1-secrets", "", "root", "", 3306, "root", ""},
 		{EngineMariaDB, "std-1-auth", "", "password", "", 3306, "app", "app"},
-		{EngineValkey, "std-1-auth", "", "password", "", 6379, "", ""},
+		// valkey's exposed account is the `default` ACL user the chart wires to <id>-auth —
+		// named, so the connection panel can show WHICH user authenticates.
+		{EngineValkey, "std-1-auth", "", "password", "", 6379, "default", ""},
 		{EngineOpenSearch, "std-1-admin-password", "username", "password", "", 9200, "", ""},
 		{EngineKafka, "std-1-auth", "", "password", "", 9094, "std-1-app", ""},
 	}
@@ -1054,6 +1119,53 @@ func TestValidateAccess(t *testing.T) {
 	if err := ValidateAccess(EngineOpenSearch, nil, []DBUser{{Name: "alice", Roles: []string{"superuser"}}}, nil); err == nil {
 		t.Error("unknown opensearch role must be rejected")
 	}
+	// valkey is users-only: ACL entries on the ValkeyCluster, no logical databases to declare or
+	// grant, and `default` is the engine's own account (the connection-panel credential).
+	if err := ValidateAccess(EngineValkey, nil, []DBUser{{Name: "cache_writer"}}, nil); err != nil {
+		t.Errorf("valkey user rejected: %v", err)
+	}
+	if err := ValidateAccess(EngineValkey, []DBDatabase{{Name: "orders"}}, nil, nil); err == nil {
+		t.Error("valkey must reject logical databases")
+	}
+	if err := ValidateAccess(EngineValkey, nil, []DBUser{{Name: "alice", Databases: []string{"orders"}}}, nil); err == nil {
+		t.Error("valkey must reject database grants")
+	}
+	if err := ValidateAccess(EngineValkey, nil, []DBUser{{Name: "default"}}, nil); err == nil {
+		t.Error("the default valkey ACL user must be reserved")
+	}
+	// The '_'->'-' mapping is injective per ident but NOT across the '-'-joined grant pair:
+	// a_b×c and a×b_c derive one object name (mariadb's Grant CR) — two CRs with the same
+	// identity wedge the sync, so the list is refused up front. Same-pair duplicates too.
+	collide := []DBDatabase{{Name: "c"}, {Name: "b_c"}}
+	if err := ValidateAccess(EngineMariaDB, collide,
+		[]DBUser{{Name: "a_b", Databases: []string{"c"}}, {Name: "a", Databases: []string{"b_c"}}}, nil); err == nil {
+		t.Error("colliding derived grant names must be rejected")
+	}
+	if err := ValidateAccess(EngineMariaDB, []DBDatabase{{Name: "c"}},
+		[]DBUser{{Name: "a", Databases: []string{"c", "c"}}}, nil); err == nil {
+		t.Error("a duplicated grant must be rejected")
+	}
+	if err := ValidateAccess(EngineMariaDB, collide,
+		[]DBUser{{Name: "a_b", Databases: []string{"c"}}, {Name: "a", Databases: []string{"c"}}}, nil); err != nil {
+		t.Errorf("distinct derived grant names rejected: %v", err)
+	}
+}
+
+// TestCapabilityGateKeys pins that every handler-gated action is declared by the engines that
+// serve it — SET_INDEX_POLICIES was gated but declared by NO engine, which killed opensearch
+// retention policies end-to-end (the handler 400'd before its dispatch could run).
+func TestCapabilityGateKeys(t *testing.T) {
+	if !Capabilities[EngineOpenSearch]["SET_INDEX_POLICIES"] {
+		t.Error("opensearch must declare SET_INDEX_POLICIES")
+	}
+	if !Capabilities[EngineValkey]["MANAGE_ACCESS"] {
+		t.Error("valkey must declare MANAGE_ACCESS")
+	}
+	for engine, caps := range Capabilities {
+		if caps["SET_INDEX_POLICIES"] && engine != EngineOpenSearch {
+			t.Errorf("%s: index policies are an opensearch surface", engine)
+		}
+	}
 }
 
 // TestSetAccess drives the whole reconcile: new users get a Secret and a one-time password,
@@ -1152,6 +1264,62 @@ func TestSetAccess(t *testing.T) {
 	}
 	if data, _ := api.GetSecretData(context.Background(), ns, UserSecretName(spec.ID, "bob")); data != nil {
 		t.Error("a rejected list must not create secrets")
+	}
+
+	// Underscore idents are legal SQL names; their SECRET must land under the k8s-safe mapped
+	// name while the values keep the real identifier (issue #168's exact shape).
+	created3, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EnginePostgreSQL,
+		[]DBDatabase{{Name: "keycloak_stag", Owner: "keycloak_stag"}},
+		[]DBUser{{Name: "keycloak_stag", Databases: []string{"keycloak_stag"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created3["keycloak_stag"] == "" {
+		t.Fatal("underscore user must be created")
+	}
+	if data, _ := api.GetSecretData(context.Background(), ns, spec.ID+"-u-keycloak-stag"); string(data["password"]) != created3["keycloak_stag"] {
+		t.Error("the user secret must live under the '_'->'-' mapped name")
+	}
+	app, _ = api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
+	values, _ = dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	u0, _ := values["users"].([]any)[0].(map[string]any)
+	if u0["name"] != "keycloak_stag" {
+		t.Errorf("values must keep the real identifier, got %v", u0["name"])
+	}
+}
+
+// TestSetAccessValkey pins the users-only surface: an ACL user gets its Secret and lands in
+// values by name; a database list is refused before anything is written.
+func TestSetAccessValkey(t *testing.T) {
+	api := newFakeAPI()
+	cfg := testConfig()
+	svc := NewWithAPI(api, cfg, "svc-1")
+	spec := testSpec(EngineValkey, cfg.Engines[EngineValkey].Default)
+	spec.BetaAck = true
+	if _, err := svc.CreateDatabase(context.Background(), spec, NetShare{NetworkID: "net-1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EngineValkey,
+		nil, []DBUser{{Name: "cache_writer"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created["cache_writer"] == "" {
+		t.Fatal("new valkey user must come back with a password once")
+	}
+	ns := NamespaceFor(spec.ProjectID)
+	if data, _ := api.GetSecretData(context.Background(), ns, UserSecretName(spec.ID, "cache_writer")); string(data["password"]) != created["cache_writer"] {
+		t.Error("valkey user secret missing or wrong")
+	}
+	app, _ := api.GetApplication(context.Background(), cfg.ArgoNamespace, spec.ID)
+	values, _ := dig(app, "spec", "source", "helm", "valuesObject").(map[string]any)
+	users, _ := values["users"].([]any)
+	if len(users) != 1 || users[0].(map[string]any)["name"] != "cache_writer" {
+		t.Fatalf("values users = %v", values["users"])
+	}
+	if _, err := svc.SetAccess(context.Background(), spec.ProjectID, spec.ID, EngineValkey,
+		[]DBDatabase{{Name: "orders"}}, nil, nil); err == nil {
+		t.Fatal("valkey must reject logical databases")
 	}
 }
 

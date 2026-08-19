@@ -21,7 +21,10 @@ user or database from the list revokes access instead of leaving it behind.
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Database
 metadata:
-  name: {{ $name }}-db-{{ .name }}
+  {{- /* '_' -> '-' in every OBJECT name below (spec fields keep the real
+       identifier): idents allow underscores, k8s names do not (config.go
+       K8sName — the User Secret reference must match what stratos wrote). */}}
+  name: {{ $name }}-db-{{ .name | replace "_" "-" }}
   labels:
     {{- include "database-cluster.labels" $ | nindent 4 }}
   annotations:
@@ -42,7 +45,7 @@ spec:
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: User
 metadata:
-  name: {{ $name }}-u-{{ $user.name }}
+  name: {{ $name }}-u-{{ $user.name | replace "_" "-" }}
   labels:
     {{- include "database-cluster.labels" $ | nindent 4 }}
   annotations:
@@ -56,7 +59,7 @@ spec:
   name: {{ $user.name }}
   host: "%"
   passwordSecretKeyRef:
-    name: {{ $name }}-u-{{ $user.name }}
+    name: {{ $name }}-u-{{ $user.name | replace "_" "-" }}
     key: password
   cleanupPolicy: Delete
 {{- range $db := $user.databases }}
@@ -64,7 +67,7 @@ spec:
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Grant
 metadata:
-  name: {{ $name }}-g-{{ $user.name }}-{{ $db }}
+  name: {{ $name }}-g-{{ $user.name | replace "_" "-" }}-{{ $db | replace "_" "-" }}
   labels:
     {{- include "database-cluster.labels" $ | nindent 4 }}
   annotations:

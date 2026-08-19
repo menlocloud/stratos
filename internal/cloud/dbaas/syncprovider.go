@@ -211,7 +211,8 @@ func accessNames(values map[string]any, key string) []any {
 		// stays prefixed so two databases in one namespace cannot collide. Echo the effective
 		// login so the UI shows what to type (see templates/opensearch/users.yaml).
 		if key == "users" && digStr(values, "engine") == EngineOpenSearch {
-			entry["login"] = digStr(values, "stratos", "resourceId") + "-u-" + name
+			// K8sName: the CR name is the login, and object names map '_' to '-'.
+			entry["login"] = digStr(values, "stratos", "resourceId") + "-u-" + K8sName(name)
 		}
 		for _, f := range []string{"owner"} {
 			if v := digStr(item, f); v != "" {

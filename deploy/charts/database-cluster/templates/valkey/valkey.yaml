@@ -61,6 +61,19 @@ spec:
              engine drill. */}}
         keys:
           - password
+    {{- range .Values.users }}
+    {{/* Customer-declared ACL users (MANAGE_ACCESS) — the same live-verified
+         shape as `default` above: name + passwordSecret, no explicit ACL rule
+         fields (the operator owns the defaults; a wrong raw rule is the
+         UsersACLError failure mode documented above). Secret name maps
+         '_' -> '-' (config.go K8sName) to stay a legal k8s name. */}}
+    - name: {{ .name }}
+      enabled: true
+      passwordSecret:
+        name: {{ $name }}-u-{{ .name | replace "_" "-" }}
+        keys:
+          - password
+    {{- end }}
   resources:
     {{- include "database-cluster.resources" . | nindent 4 }}
   {{- if or .Values.scheduling.nodeSelector .Values.scheduling.tolerations }}

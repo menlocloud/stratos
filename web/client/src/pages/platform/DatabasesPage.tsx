@@ -72,9 +72,10 @@ const HIDDEN_ACTIONS: Record<string, Set<string>> = {
   RESTART: new Set(["mysql", "valkey", "opensearch", "kafka"]),
   RESIZE_STORAGE: new Set(["valkey", "opensearch"]),
   RESET_PASSWORD: new Set(["valkey", "opensearch"]),
-  // Only postgresql/mariadb/opensearch have a values-shaped user model in their pinned
-  // operator; mysql's ps-operator has no user/database CRDs at all.
-  MANAGE_ACCESS: new Set(["mysql", "valkey", "ferretdb", "kafka"]),
+  // postgresql/mariadb/opensearch have a values-shaped user model in their pinned operator;
+  // valkey manages ACL users on its own CR (users only — no logical databases). mysql's
+  // ps-operator has no user/database CRDs at all.
+  MANAGE_ACCESS: new Set(["mysql", "ferretdb", "kafka"]),
   // Caches and streams are not what customers restore, and neither pinned operator has an
   // object-store backup CR worth the surface.
   BACKUP: new Set(["valkey", "opensearch", "kafka"]),
@@ -86,6 +87,12 @@ const HIDDEN_ACTIONS: Record<string, Set<string>> = {
   SET_READ_ENDPOINT: new Set(["valkey", "ferretdb", "opensearch", "kafka"]),
 }
 const supports = (engine: string, action: string) => !HIDDEN_ACTIONS[action]?.has(engine)
+
+// Engines whose access surface is USERS ONLY: opensearch binds roles instead of databases,
+// valkey is one keyspace with ACL users. Everything else manages logical databases too.
+const hasLogicalDatabases = (engine: string) => engine !== "opensearch" && engine !== "valkey"
+const accessLabel = (engine: string) =>
+  engine === "opensearch" ? "Users & roles" : engine === "valkey" ? "Users" : "Databases & users"
 
 // Size presets (cpu / memory GiB) — no flavors here, the DB runs on platform-owned nodes.
 const SIZE_PRESETS = [
@@ -1328,7 +1335,7 @@ function DatabaseDetail({
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="connect">Connection</TabsTrigger>
               {supports(engine, "MANAGE_ACCESS") && (
-                <TabsTrigger value="access">{engine === "opensearch" ? "Users & roles" : "Databases & users"}</TabsTrigger>
+                <TabsTrigger value="access">{accessLabel(engine)}</TabsTrigger>
               )}
               {supports(engine, "BACKUP") && backupConfigured && <TabsTrigger value="backups">Backups</TabsTrigger>}
               {paramDefs.length > 0 && <TabsTrigger value="config">Configuration</TabsTrigger>}
@@ -1463,9 +1470,9 @@ function DatabaseDetail({
           {supports(engine, "MANAGE_ACCESS") && (
             <TabsContent value="access" className="mt-4">
               <Card>
-                <CardHeader><CardTitle className="text-base">{engine === "opensearch" ? "Users and roles" : "Databases and users"}</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="text-base">{accessLabel(engine)}</CardTitle></CardHeader>
                 <CardContent className="grid gap-3">
-                  {engine !== "opensearch" && (
+                  {hasLogicalDatabases(engine) && (
                     <div className="grid gap-1">
                       <div className="text-xs text-muted-foreground">Databases</div>
                       {((d.databases as AccessDatabase[]) ?? []).length === 0 ? (
@@ -2402,6 +2409,8 @@ function AccessDialog({
   onRotate: (username: string) => Promise<void>
 }) {
   const isSearch = engine === "opensearch"
+  // valkey: ACL users only — one keyspace, nothing to grant per database and no roles.
+  const usersOnly = engine === "valkey"
   const [dbs, setDbs] = useState<AccessDatabase[]>(databases)
   const [us, setUs] = useState<AccessUser[]>(users)
   const [rs, setRs] = useState<AccessRole[]>(roles)
@@ -2453,16 +2462,18 @@ function AccessDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{isSearch ? "Users & roles" : "Databases & users"}</DialogTitle>
+          <DialogTitle>{accessLabel(engine)}</DialogTitle>
           <DialogDescription>
             {isSearch
               ? "Logins on this OpenSearch cluster and the built-in roles bound to them. New users get a password once, shown after you apply."
-              : "Logical databases inside this instance and the logins that may use them. New users get a password once, shown after you apply."}
+              : usersOnly
+                ? "Additional accounts that can authenticate to this instance. New users get a password once, shown after you apply."
+                : "Logical databases inside this instance and the logins that may use them. New users get a password once, shown after you apply."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-5 py-2">
-          {!isSearch && (
+          {!isSearch && !usersOnly && (
             <div className="grid gap-2">
               <Label>Databases</Label>
               {dbs.length === 0 ? (
@@ -2569,25 +2580,27 @@ function AccessDialog({
                       </Button>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(isSearch ? [...OPENSEARCH_ROLES, ...rs.map((r) => r.name)] : dbs.map((d) => d.name)).map((value) => {
-                      const key = isSearch ? "roles" : "databases"
-                      const on = (u[key] ?? []).includes(value)
-                      return (
-                        <Button
-                          key={value}
-                          size="sm"
-                          variant={on ? "default" : "outline"}
-                          onClick={() => toggle(u, key, value)}
-                        >
-                          {value}
-                        </Button>
-                      )
-                    })}
-                    {!isSearch && dbs.length === 0 ? (
-                      <span className="text-xs text-muted-foreground">Add a database to grant access.</span>
-                    ) : null}
-                  </div>
+                  {!usersOnly && (
+                    <div className="flex flex-wrap gap-2">
+                      {(isSearch ? [...OPENSEARCH_ROLES, ...rs.map((r) => r.name)] : dbs.map((d) => d.name)).map((value) => {
+                        const key = isSearch ? "roles" : "databases"
+                        const on = (u[key] ?? []).includes(value)
+                        return (
+                          <Button
+                            key={value}
+                            size="sm"
+                            variant={on ? "default" : "outline"}
+                            onClick={() => toggle(u, key, value)}
+                          >
+                            {value}
+                          </Button>
+                        )
+                      })}
+                      {!isSearch && dbs.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">Add a database to grant access.</span>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -2602,8 +2615,9 @@ function AccessDialog({
           ) : null}
 
           <p className="text-xs text-muted-foreground">
-            Removing an entry here removes it on the database — for a database that also drops its
-            data. Passwords are stored only on the database cluster; rotate to get a new one.
+            {usersOnly
+              ? "Removing a user here removes it on the instance. Passwords are stored only on the database cluster; rotate to get a new one."
+              : "Removing an entry here removes it on the database — for a database that also drops its data. Passwords are stored only on the database cluster; rotate to get a new one."}
           </p>
         </div>
 
@@ -2614,12 +2628,13 @@ function AccessDialog({
             onClick={() => {
               setPending(true)
               const payload = {
-                databases: isSearch ? [] : dbs,
+                databases: isSearch || usersOnly ? [] : dbs,
                 roles: isSearch ? rs : [],
                 ...(backupsOn && removesData && backupFirst ? { backupFirst: true } : {}),
                 users: us.map((u) => ({
                   name: u.name,
-                  ...(isSearch ? { roles: u.roles ?? [] } : { databases: u.databases ?? [] }),
+                  // valkey users carry neither grants nor roles — the server rejects both.
+                  ...(usersOnly ? {} : isSearch ? { roles: u.roles ?? [] } : { databases: u.databases ?? [] }),
                 })),
               }
               onSubmit(payload)

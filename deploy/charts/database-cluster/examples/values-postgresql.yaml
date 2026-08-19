@@ -26,6 +26,18 @@ stratos:
   displayName: orders-db
 monitoring:
   enabled: true
+# Customer-managed access (MANAGE_ACCESS). Underscore names on purpose: they are
+# legal SQL identifiers, and CI pins that every derived k8s object name maps
+# '_' -> '-' (Secret <id>-u-keycloak-stag, Database CR <id>-db-keycloak-stag).
+databases:
+  - name: keycloak_stag
+    owner: keycloak_stag
+users:
+  - name: keycloak_stag
+    databases: [keycloak_stag]
+  - name: analytics_ro
+    databases: [keycloak_stag]
+    inRoles: [keycloak_stag]
 postgresql:
   parameters:
     max_connections: "200"

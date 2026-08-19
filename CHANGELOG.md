@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Valkey ACL users** — Managed Valkey databases now show which account authenticates (the
+  operator's `default` ACL user, wired to the stratos-owned auth secret) in the connection
+  panel and its URI, and gain a users-only **Users** tab: customers can declare additional ACL
+  users (`MANAGE_ACCESS`), each rendered onto the ValkeyCluster's own `spec.users` with a
+  stratos-owned password Secret, returned once and rotatable (`RESET_USER_PASSWORD`). Valkey
+  has no logical databases, so database entries and per-user grants are rejected for it, and
+  `default` joins the reserved names.
+
 - **Per-project GPU usage surfaced on both consoles** — the client dashboard's GPU quota tiles now show usage-vs-limit per model, with the `*` wildcard applied only to models that have no exact limit (and a single "Other models" catch-all when every used model is already listed). The admin project **Quota** tab gains a project-wide GPU usage snapshot (devices in use, models, configured limits) beside the editable per-model limits, and the model input accepts the real Nova `pci_passthrough:alias`. GPU model aliases are canonicalized (lowercase, `_`→`-`) at the write boundary and on every read, so pricing, capacity, usage and quota all key on one name. A new admin `GET /admin/project/{id}/gpu-usage` backs the snapshot. The GPU usage read reports `usageAvailable: false` (with a warning) rather than a misleading zero when the cache is missing flavor specs; the create/resize quota gate stays fail-open. Refetching a server (notifications, refresh) now enriches its flavor `extra_specs`, so a rebooted/resized GPU server keeps rating its GPUs and reporting usage instead of dropping to zero until the next full sync.
 
 - **Per-project GPU capacity on the client dashboard (opt-in)** — a new admin toggle (project **Quota** tab, `gpuCapacityVisible`, off by default) controls whether a client project's dashboard shows the region's cluster GPU capacity. When enabled, the dashboard's GPU quota tiles list the **full region GPU catalog** — every model the region offers, not only the ones the project already uses — and a model with no project limit shows the region's **free / total** capacity instead of a bare "Unlimited" (a model with a limit keeps its quota bar plus a region-availability note). Capacity comes from `GET /project/{id}/gpu-capacity`; the read is admin-scoped (Placement is not tenant-readable, so it uses the service admin client, not the tenant client), degrades to a warnings-partial `200` on any cloud failure, and is cached briefly per (service, region) so many dashboard loads don't hammer Placement. Off projects see only their own GPU quota/usage. The admin project **Quota** tab's usage-by-model likewise lists the full region GPU catalog (from `gpu-info`) and shows region **free / total** for models with no configured limit instead of "Unlimited".
@@ -26,6 +34,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The **Logs** tab of a healthy Valkey database showed `internal error` and no log lines: the
+  pod read selected on `app.kubernetes.io/instance=<id>`, but valkey-operator stamps that label
+  per node (`<cluster>-<shard>-<node>`), so no pod ever matched — same gap for OpenSearch
+  (`opensearch.org/opensearch-cluster`) and Kafka (`strimzi.io/cluster`), whose operators also
+  stamp their own cluster label. Log reads now use the per-engine pod label, the same one the
+  chart's NetworkPolicy already selects on. (#170)
+- Creating a database or user whose name contains an underscore (e.g. `keycloak_stag`) via
+  **Databases and users → Manage** failed with `internal error`: `_` is a legal SQL identifier
+  character but illegal in Kubernetes object names, so the derived user Secret and
+  Database/User/Grant/OpensearchUser CR names were rejected by the API server. Object names now
+  map `_` → `-` on both the API side and in the chart templates; the SQL-side identifiers are
+  unchanged. The mapping is injective per name, but a grant pair joined with `-` is not
+  (`a_b`×`c` and `a`×`b_c` would derive one Grant CR name), so `MANAGE_ACCESS` now rejects an
+  access list whose derived grant names collide instead of wedging the ArgoCD sync. (#168)
+- OpenSearch **Index policies** were dead end-to-end: the action handler gated
+  `SET_INDEX_POLICIES` on a capability no engine declared, so every submit returned
+  `engine opensearch does not support SET_INDEX_POLICIES` while the console offered the dialog.
+  The capability is now declared for opensearch and pinned by a test.
 - Docker Compose deployments returned `401` on every authenticated API route even after a successful Keycloak login: the `api` service was never handed the `AUTH_*_OAUTH2_*` config, so it booted with no OIDC realms and rejected every token — the SPAs carry their own issuer config so login itself still worked, masking the gap. The `api` service now reuses the same `STRATOS_*_OAUTH2_ISSUER` / client-id vars the web + admin services read, so one `.env` drives both browser login and API token validation; a new `.env.example` documents them.
 - Confirming a server resize twice returned `500 internal server error`: the first click finalizes the resize (nova → `ACTIVE`), but the confirm panel stayed visible while the cached status lagged, so a second click sent `confirmResize` to an already-confirmed server and nova's `409` surfaced as a raw 500. The client now treats a `409` on confirm/revert-resize as idempotent success, and the UI hides the confirm/revert buttons as soon as one is clicked. (#29)
 - OpenStack notification ingestion (`POST /api/v1/notifications/{provider}/{region}`) rejected every real ceilometer notification with `400 Invalid request body`: oslo.messaging emits a space-separated, timezone-less timestamp (`2026-07-11 10:08:51.622578`) that the `timestamp` field, a plain `*time.Time`, could not decode. The field now parses oslo's format as well as RFC3339 and no longer fails the message on an unrecognized/absent timestamp (falls back to receipt time). Real-time cloud-cache sync via notifications works again; the periodic sync had been the only thing keeping the cache fresh. (#27)

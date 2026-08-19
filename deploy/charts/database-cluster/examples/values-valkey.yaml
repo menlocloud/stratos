@@ -29,3 +29,8 @@ monitoring:
 valkey:
   parameters: {}
 restartedAt: ""
+# Customer-declared ACL users (MANAGE_ACCESS) — rendered onto the
+# ValkeyCluster's spec.users next to `default`; the underscore name pins the
+# '_' -> '-' Secret-name mapping.
+users:
+  - name: cache_writer

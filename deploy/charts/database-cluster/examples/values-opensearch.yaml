@@ -27,7 +27,19 @@ stratos:
   displayName: search-cluster
 monitoring:
   enabled: false
+# Customer-managed logins + a custom role — underscore names pin the '_' -> '-'
+# mapping on the OpensearchUser/OpensearchRole CR names (the CR name IS the
+# login/role name, prefixed with the database id).
+users:
+  - name: log_reader
+    roles: [readall, app_logs]
 opensearch:
+  # Custom role referenced by log_reader above — exercises roles.yaml and the
+  # users.yaml prefix resolution with the same '_' -> '-' mapping.
+  roles:
+    - name: app_logs
+      indexPatterns: ["app-*"]
+      actions: [read, search]
   parameters:
     cluster.routing.allocation.disk.watermark.low: "85%"
   dashboards:
